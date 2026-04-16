@@ -167,7 +167,7 @@ GameConfig.ArenaWallProximityStuds = 1
 -- 单位在场地中的运动高度（Y轴）
 GameConfig.UnitY = 4
 -- 单位移动速度（studs/s）
-GameConfig.UnitSpeed = 28
+GameConfig.UnitSpeed = 40
 -- 水平速度上限（防止连续碰撞后速度失控）
 GameConfig.UnitMaxHorizontalSpeed = 42
 -- 单位自转速度（degrees/s）
@@ -179,23 +179,19 @@ GameConfig.RoundStartCountdown = 5
 -- 战斗阶段持续时长（秒）
 GameConfig.RoundFightDuration = 120
 -- 大厅到传送倒计时
-GameConfig.MatchCountdown = 5
+GameConfig.MatchCountdown = 10
 -- 命中次数上限（达到后死亡）
-GameConfig.MaxHits = 3
+GameConfig.MaxHits = 5
 -- 炮弹飞行速度
-GameConfig.ProjectileSpeed = 200
+GameConfig.ProjectileSpeed = 100
 -- 炮弹存在时间（秒）
 GameConfig.ProjectileLifetime = 5
 -- 炮弹最大飞行距离 (studs)
 GameConfig.MaxProjectileDistance = 500
 -- 开火后坐力速度倍数
-GameConfig.FireRecoilSpeedMultiplier = 1.5
+GameConfig.FireRecoilSpeedMultiplier = 5
 -- 命中击退速度倍数
 GameConfig.BulletHitSpeedMultiplier = 10
--- 载具 BaseDisk 互撞时水平分离冲量系数（与 HitImpulse 同量纲：× 对方/较小质量用于合成 J）
-GameConfig.VehicleBumpImpulse = 55
--- 撞墙反弹脉冲（本地 BaseDisk 撞 ArenaWall 时 ApplyImpulse，系数已乘质量）
-GameConfig.WallBounceImpulse = 220
 -- 撞墙时 BaseDisk 弹性（与模板 CustomPhysicalProperties 合并时覆盖弹性项）
 GameConfig.WallBounceElasticity = 0.42
 -- 旋转输入衰减时间（开火旋转未结束期）

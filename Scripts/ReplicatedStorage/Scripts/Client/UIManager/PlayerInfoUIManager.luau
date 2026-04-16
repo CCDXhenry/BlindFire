@@ -17,6 +17,8 @@ local playerUIMap: { [number]: BillboardGui } = {}
 local connectionMap: { [number]: RBXScriptConnection } = {}
 local isFighting = false
 
+local RemoveUIForPlayer: (number) -> ()
+
 local function GetPlayerHead(player: Player): BasePart?
 	local character = player.Character
 	if character == nil then
@@ -61,8 +63,14 @@ local function UpdateHpUI(playerId: number, hitCount: number, maxHits: number)
 end
 
 local function CreateUIForPlayer(playerId: number)
-	if playerUIMap[playerId] then
+	local existingUI = playerUIMap[playerId]
+	if existingUI and existingUI.Parent ~= nil then
 		return
+	end
+
+	-- If UI was destroyed but still in map, clean up before recreating
+	if existingUI then
+		RemoveUIForPlayer(playerId)
 	end
 
 	local player = players:GetPlayerByUserId(playerId)
@@ -101,7 +109,7 @@ local function CreateUIForPlayer(playerId: number)
 	ui.Enabled = isFighting
 end
 
-local function RemoveUIForPlayer(playerId: number)
+RemoveUIForPlayer = function(playerId: number)
 	local ui = playerUIMap[playerId]
 	if ui then
 		BillboardManager.Untrack(ui)
