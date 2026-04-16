@@ -13,6 +13,8 @@ local NetMsg = require(sharedScripts:FindFirstChild("NetMsg"))
 local clientScripts = scripts:WaitForChild("Client")
 local ClientGameInfo = require(clientScripts:FindFirstChild("ClientGameInfo"))
 local UIManager = require(clientScripts:FindFirstChild("UIManager"))
+local BulletClientManager = require(clientScripts:FindFirstChild("BulletClientManager"))
+local CombatCameraManager = require(clientScripts:FindFirstChild("CombatCameraManager"))
 local players = game:GetService("Players")
 local starterGui: StarterGui = game:GetService("StarterGui")
 
@@ -29,7 +31,8 @@ local function InitUI()
 	--设置窗口容器
 	UIManager.Init(gameScreenGui)
 	--创建游戏主界面
-	UIManager.CreateFrame("GameFrame", "GameFrame", gameScreenGui, 0)
+	--UIManager.CreateFrame("GameFrame", "GameFrame", gameScreenGui, 0)
+	UIManager.CreateFrame("GameTipFrame", "GameTipFrame", gameScreenGui, 0)
 	--UI适配器初始化
 	UIAdapter.Init(DesignScreenSize, gameScreenGui.AbsoluteSize)
 	gameScreenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() 
@@ -47,6 +50,9 @@ local function OnNotifyPlayerInfoInit(localPlayerSaveInfo: GameConfig.ClientLoca
 		SoundTool.SetSoundEffectVolume(localPlayerInfo.settingInfo.soundEffectVolume)
 	end
 	SoundTool.PlayBGM(bgmSound)
+	-- 初始化核心玩法客户端管理器
+	BulletClientManager.Init()
+	CombatCameraManager.Init()
 	--初始化UI
 	task.spawn(function()
 		InitUI()
@@ -66,3 +72,6 @@ end
 NetMsg.ConnectNotifyPlayerInfoInit(OnNotifyPlayerInfoInit)
 NetMsg.ConnectNotifyPlayersOtherPlayerInfoInit(OnNotifyPlayersOtherPlayerInfoInit)
 NetMsg.ConnectNotifyPlayerAcquiredGamePass(OnNotifyPlayerAcquiredGamePass)
+
+BulletClientManager.Init()
+CombatCameraManager.Init()

@@ -8,10 +8,6 @@ local serverScripts = serverStorage:WaitForChild("Scripts")
 local PlayerSaveInfoVersionUpdateTool = require(serverScripts:FindFirstChild("PlayerSaveInfoVersionUpdateTool"))
 local ServerGameInfo = require(serverScripts:FindFirstChild("ServerGameInfo"))
 local AnalyticsTool = require(serverScripts:FindFirstChild("AnalyticsTool"))
-local PlayerStateManager = require(serverScripts:FindFirstChild("PlayerStateManager"))
-local MatchManager = require(serverScripts:FindFirstChild("MatchManager"))
-local CombatManager = require(serverScripts:FindFirstChild("CombatManager"))
-
 local replicatedStorage: ReplicatedStorage = game:GetService("ReplicatedStorage")
 local core = replicatedStorage:WaitForChild("Core")
 local coreScripts = core:WaitForChild("Scripts")
@@ -21,7 +17,6 @@ local DateTimeExtension = require(coreSharedScripts:FindFirstChild("DateTimeExte
 local scripts = replicatedStorage:WaitForChild("Scripts")
 local sharedScripts = scripts:WaitForChild("Shared")
 local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
-
 local dataStoreService: DataStoreService = game:GetService("DataStoreService")
 local playerInfoDataStore: DataStore = dataStoreService:GetDataStore("PlayerInfo")
 local players: Players = game:GetService("Players")
@@ -29,17 +24,12 @@ local localizationService: LocalizationService = game:GetService("LocalizationSe
 local runService: RunService = game:GetService("RunService")
 local configService: ConfigService = game:GetService("ConfigService")
 
-local LOG_PREFIX = "[ServerGameManager]"
-local AutoSavePlayerInfoInterval: number = 30
+local AutoSavePlayerInfoInterval: number = 30 --自动保存玩家信息间隔时间
 
-local autoSaveThreads: { [number]: thread } = {}
+local autoSaveThreads: {[number]: thread} = {}
 
-local function LogInfo(message: string)
-	print(string.format("%s %s", LOG_PREFIX, message))
-end
-
-local function SplitVersion(version: string): { number }
-	local result: { number } = {}
+local function SplitVersion(version: string): {number}
+	local result: {number} = {}
 	for v: string in string.gmatch(version, "%d+") do
 		local v2: number? = tonumber(v)
 		if v2 ~= nil then
@@ -49,9 +39,10 @@ local function SplitVersion(version: string): { number }
 	return result
 end
 
+--版本1是否是版本2后的版本
 local function IsVersionAfter(version1: string, version2: string): boolean
-	local v1: { number } = SplitVersion(version1)
-	local v2: { number } = SplitVersion(version2)
+	local v1: {number} = SplitVersion(version1)
+	local v2: {number} = SplitVersion(version2)
 	local length: number = math.max(#v1, #v2)
 	for i: number = 1, length do
 		local v1i: number = v1[i] or 0
@@ -64,40 +55,29 @@ local function IsVersionAfter(version1: string, version2: string): boolean
 end
 
 local function CheckPlayerLoginDays(player: Player, todayDate: DateTimeExtension.DateTimeTable)
-	local playerInfo: GameConfig.PlayerInfo? = ServerGameInfo.GetPlayerInfo(player)
-	if
-		playerInfo ~= nil
-		and (
-			todayDate.Year > playerInfo.lastOnlineDate.Year
-			or (
-				todayDate.Year == playerInfo.lastOnlineDate.Year
-				and todayDate.Month > playerInfo.lastOnlineDate.Month
-			)
-			or (
-				todayDate.Year == playerInfo.lastOnlineDate.Year
+	local playerInfo: GameConfig.PlayerInfo = ServerGameInfo.GetPlayerInfo(player)
+	if playerInfo ~= nil
+		and (todayDate.Year > playerInfo.lastOnlineDate.Year
+			or (todayDate.Year == playerInfo.lastOnlineDate.Year
+				and todayDate.Month > playerInfo.lastOnlineDate.Month)
+			or (todayDate.Year == playerInfo.lastOnlineDate.Year
 				and todayDate.Month == playerInfo.lastOnlineDate.Month
-				and todayDate.Day > playerInfo.lastOnlineDate.Day
-			)
-		)
-	then
+				and todayDate.Day > playerInfo.lastOnlineDate.Day)) then
+		--登录天数+1
 		ServerGameInfo.ChangePlayerLoginDays(player, playerInfo.loginDays + 1, todayDate)
 	end
 end
 
 local function CheckOwnedGamePasses(player: Player)
-	local playerInfo: GameConfig.PlayerInfo? = ServerGameInfo.GetPlayerInfo(player)
+	local playerInfo: GameConfig.PlayerInfo = ServerGameInfo.GetPlayerInfo(player)
 	if playerInfo ~= nil then
 		task.spawn(function()
-			for _gamePassIdKey: string, gamePassIdValue: number in pairs(GameConfig.GamePassId) do
+			for gamePassIdKey: string, gamePassIdValue: number in pairs(GameConfig.GamePassId) do
 				if playerInfo.ownedGamePassMap[gamePassIdValue] == nil then
 					local success: boolean, result: any = MarketplaceTool.SafeUserOwnsGamePass(player, gamePassIdValue)
 					if success and result then
 						ServerGameInfo.SetPlayerGamePassAcquired(player, gamePassIdValue)
-						AnalyticsTool.AddPassPurchaseEvent(
-							player,
-							gamePassIdValue,
-							GameConfig.GamePassPrice[gamePassIdValue]
-						)
+						AnalyticsTool.AddPassPurchaseEvent(player, gamePassIdValue,  GameConfig.GamePassPrice[gamePassIdValue])
 					end
 				end
 			end
@@ -105,8 +85,9 @@ local function CheckOwnedGamePasses(player: Player)
 	end
 end
 
+--保存玩家信息
 local function SavePlayerInfo(player: Player)
-	local playerInfo: GameConfig.PlayerInfo? = ServerGameInfo.GetPlayerInfo(player)
+	local playerInfo: GameConfig.PlayerInfo = ServerGameInfo.GetPlayerInfo(player)
 	if playerInfo ~= nil and playerInfo.playerInfoChanged then
 		local playerSaveInfo: GameConfig.PlayerSaveInfo = ServerGameInfo.CreatePlayerSaveInfoByPlayerInfo(playerInfo)
 		DataStoreTool.SafeSet(playerInfoDataStore, tostring(player.UserId), playerSaveInfo)
@@ -114,15 +95,16 @@ local function SavePlayerInfo(player: Player)
 	end
 end
 
+--玩家加入事件
 local function OnPlayerAdded(player: Player)
-	LogInfo(string.format("OnPlayerAdded userId=%d", player.UserId))
-
+	--读取玩家存档
 	local success: boolean, result: any = DataStoreTool.SafeGet(playerInfoDataStore, tostring(player.UserId))
+	--如果没有读取成功，将玩家踢出服务器，提示玩家读取存档失败
 	if not success then
 		player:Kick(result)
 		return
 	end
-
+	--初始化玩家信息
 	local playerSaveInfo: GameConfig.PlayerSaveInfo
 	if result ~= nil then
 		PlayerSaveInfoVersionUpdateTool.Update(result)
@@ -130,86 +112,70 @@ local function OnPlayerAdded(player: Player)
 	else
 		playerSaveInfo = GameConfig.CreateDefaultPlayerSaveInfo()
 	end
-
+	--获取玩家国家/地区
 	success, result = RetryAsync(function()
 		return localizationService:GetCountryRegionForPlayerAsync(player)
 	end, 5, 1)
-	local countryRegion: string = if success then result else "unknown"
-
-	local _configSnapshot: any
+	local countryRegion: string = success and result or "unknown"
+	--远程配置
+	local config: ConfigSnapshot
 	if IsVersionAfter(playerSaveInfo.firstEnterVersion, GameConfig.ABTestVersion) then
-		_configSnapshot = configService:GetConfigForPlayerAsync(player)
+		config = configService:GetConfigForPlayerAsync(player)
 	else
-		_configSnapshot = configService:GetConfigAsync()
+		--老玩家不参与AB测试
+		config = configService:GetConfigAsync()
 	end
-
-	local playerConfigInfo: GameConfig.PlayerConfigInfo = {}
+	local playerConfigInfo: GameConfig.PlayerConfigInfo = {
+		
+	}
 	ServerGameInfo.InitPlayerInfo(player, playerSaveInfo, countryRegion, playerConfigInfo)
-
+	--检查登录天数
 	local nowDate: DateTimeExtension.DateTimeTable = DateTimeExtension.GetNowDate()
 	CheckPlayerLoginDays(player, nowDate)
+	--检查拥有的通行证
 	CheckOwnedGamePasses(player)
-
+	--每隔一段时间自动保存玩家数据
 	local autoSaveThread: thread = coroutine.create(function()
 		while true do
 			task.wait(AutoSavePlayerInfoInterval)
+			--保存玩家数据
 			SavePlayerInfo(player)
 		end
 	end)
 	coroutine.resume(autoSaveThread)
 	autoSaveThreads[player.UserId] = autoSaveThread
-
+	--埋点添加玩家
 	AnalyticsTool.AddPlayer(player)
-
-	CombatManager.OnPlayerAdded(player)
-	MatchManager.OnPlayerAdded(player)
 end
 
+--玩家离开事件
 local function OnPlayerRemoving(player: Player)
-	LogInfo(string.format("OnPlayerRemoving userId=%d", player.UserId))
-
-	SavePlayerInfo(player)
+	--埋点移除玩家
 	AnalyticsTool.RemovePlayer(player)
+	--离开前保存玩家数据
+	task.spawn(function()
+		SavePlayerInfo(player)
+	end)
+	--移除玩家数据
 	ServerGameInfo.RemovePlayerInfo(player)
-
+	--停止自动保存玩家数据协程
 	local autoSaveThread = autoSaveThreads[player.UserId]
 	if autoSaveThread ~= nil then
 		coroutine.close(autoSaveThread)
 		autoSaveThreads[player.UserId] = nil
 	end
-
-	CombatManager.OnPlayerRemoving(player)
-	MatchManager.OnPlayerRemoving(player)
 end
 
 local function OnHeartbeat(deltaTime: number)
 	local nowDate: DateTimeExtension.DateTimeTable = DateTimeExtension.GetNowDate()
-	for _, player: Player in players:GetPlayers() do
+	for playerIndex: number, player: Player in players:GetPlayers() do
 		ServerGameInfo.AddPlayerGameTime(player, deltaTime)
 		CheckPlayerLoginDays(player, nowDate)
 	end
 end
 
-local function InitGameSystems()
-	LogInfo("Init begin")
-	PlayerStateManager.Init()
-	CombatManager.Init(MatchManager.OnPlayerDead)
-	MatchManager.Init(CombatManager.StartRound)
-	LogInfo("Init end")
-end
-
-local function BootstrapOnlinePlayers()
-	LogInfo("BootstrapOnlinePlayers begin")
-	for _, player in players:GetPlayers() do
-		OnPlayerAdded(player)
-	end
-	LogInfo("BootstrapOnlinePlayers end")
-end
-
 print("GameVersion", GameConfig.GameVersion)
 AnalyticsTool.Init()
-InitGameSystems()
-BootstrapOnlinePlayers()
 
 players.PlayerAdded:Connect(OnPlayerAdded)
 players.PlayerRemoving:Connect(OnPlayerRemoving)

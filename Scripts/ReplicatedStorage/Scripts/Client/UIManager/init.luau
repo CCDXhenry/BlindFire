@@ -9,6 +9,8 @@ local UserInutExtension = require(coreClientScripts:FindFirstChild("UserInutExte
 local uiOriginsFolder: Folder = replicatedStorage:FindFirstChild("UI") :: Folder
 local scripts = replicatedStorage:WaitForChild("Scripts")
 local clientScripts = scripts:WaitForChild("Client")
+local BillboardManager = require(clientScripts:WaitForChild("BillboardManager"))
+local PlayerInfoUIManager = require(script:WaitForChild("PlayerInfoUIManager"))
 local ClientMsg = require(clientScripts:FindFirstChild("ClientMsg"))
 local tweenService: TweenService = game:GetService("TweenService")
 
@@ -118,6 +120,8 @@ function UIManager.Init(gameScreenGuiNew: ScreenGui)
 			end
 		end
 	end
+	--玩家血条管理
+	PlayerInfoUIManager.Init()
 end
 
 --非窗口方式创建界面
