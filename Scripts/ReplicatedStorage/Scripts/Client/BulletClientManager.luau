@@ -228,17 +228,12 @@ end
 local function FindUnitPart(playerId: number): BasePart?
 	local modelName = VEHICLE_MODEL_NAME_PREFIX .. tostring(playerId)
 
-	local timeout = 5
-	local start = os.clock()
-	while os.clock() - start < timeout do
-		local vehicleModel = workspaceService:FindFirstChild(modelName)
-		if vehicleModel ~= nil and vehicleModel:IsA("Model") then
-			local baseDisk = vehicleModel:FindFirstChild("BaseDisk", true)
-			if baseDisk ~= nil and baseDisk:IsA("BasePart") then
-				return baseDisk :: BasePart
-			end
+	local vehicleModel = workspaceService:WaitForChild(modelName, 3)
+	if vehicleModel ~= nil and vehicleModel:IsA("Model") then
+		local baseDisk = vehicleModel:WaitForChild("BaseDisk", 2)
+		if baseDisk ~= nil and baseDisk:IsA("BasePart") then
+			return baseDisk :: BasePart
 		end
-		task.wait(0.1)
 	end
 
 	return nil
@@ -570,13 +565,13 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 	if unitPart == nil then
 		local retryCount = (unitInitRetryCountMap[playerId] or 0) + 1
 		unitInitRetryCountMap[playerId] = retryCount
-		if retryCount <= 20 then
-			task.delay(0.5, function()
+		if retryCount <= 5 then
+			task.delay(0.2, function()
 				BulletClientManager.OnUnitInit(unitInitInfo)
 			end)
 			return
 		end
-		warn("[BulletClientManager] 找不到玩家单位 Part: " .. tostring(playerId))
+		warn("[BulletClientManager] Failed to find unit part for playerId: " .. tostring(playerId))
 		return
 	end
 	unitInitRetryCountMap[playerId] = nil

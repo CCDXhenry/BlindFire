@@ -165,7 +165,7 @@ GameConfig.MinPlayerToStart = 2
 GameConfig.ArenaHalfSize = 60
 GameConfig.ArenaWallProximityStuds = 1
 -- 单位在场地中的运动高度（Y轴）
-GameConfig.UnitY = 4
+GameConfig.UnitY = 1
 -- 单位移动速度（studs/s）
 GameConfig.UnitSpeed = 40
 -- 水平速度上限（防止连续碰撞后速度失控）

@@ -87,11 +87,19 @@ local function CreateUIForPlayer(playerId: number)
 		local localPlayer = players.LocalPlayer
 		local function SetupAdornee()
 			if not ui or ui.Parent == nil then return end -- Validate UI is not destroyed
-			local currentHead = GetPlayerHead(player)
+			local character = player.Character
+			if not character then return end
+			
+			-- Wait for the head if the character exists but head isn't ready
+			local currentHead = character:WaitForChild("Head", 5) :: BasePart?
 			if currentHead then
 				ui.Adornee = currentHead
-				ui.Parent = localPlayer:WaitForChild("PlayerGui")
-				BillboardManager.Track(ui)
+				local playerGui = localPlayer:WaitForChild("PlayerGui", 5)
+				if playerGui then
+					ui.Parent = playerGui
+					BillboardManager.Track(ui)
+					ui.Enabled = isFighting
+				end
 			end
 		end
 		

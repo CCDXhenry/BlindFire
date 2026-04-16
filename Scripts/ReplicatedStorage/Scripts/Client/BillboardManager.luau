@@ -56,8 +56,8 @@ local function UpdateAllInfoScales()
 
 		local adornee = infoUI.Adornee
 		if adornee == nil or adornee.Parent == nil then
-			RemoveInfoGuiByIndex(index)
-			infoUI:Destroy()
+			infoUI.Enabled = false
+			index += 1
 			continue
 		end
 
