@@ -52,6 +52,10 @@ local GameTipTwinkleTweenInfo2: TweenInfo = TweenInfo.new(
 	0
 )
 
+-- 受击红屏闪烁配置
+local DamageFlashInTweenInfo: TweenInfo = TweenInfo.new(0.05, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local DamageFlashOutTweenInfo: TweenInfo = TweenInfo.new(0.65, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+
 local ShowAddRewardsTipIntervalMin: number = 0.5
 
 local waitingShowAddRewardInfoList: { GameConfig.RewardInfo } = {}
@@ -62,10 +66,10 @@ local gameTipFrame: Frame = script.Parent
 
 -- 常量定义
 local GIFT_CONFIRM_TITLE_COLOR = Color3.fromRGB(0, 255, 0) -- 绿色
-local GIFT_REQUEST_TITLE_COLOR = Color3.fromRGB(0, 0, 255)  -- 蓝色
+local GIFT_REQUEST_TITLE_COLOR = Color3.fromRGB(0, 0, 255) -- 蓝色
 local TOP_TIP_DEFAULT_COLOR = Color3.fromRGB(255, 255, 255) -- 白色
-local TOP_TIP_SUCCESS_COLOR = Color3.fromRGB(0, 255, 0)     -- 绿色
-local TOP_TIP_FAILURE_COLOR = Color3.fromRGB(255, 0, 0)     -- 红色
+local TOP_TIP_SUCCESS_COLOR = Color3.fromRGB(0, 255, 0) -- 绿色
+local TOP_TIP_FAILURE_COLOR = Color3.fromRGB(255, 0, 0) -- 红色
 
 local GIFT_POPUP_COUNTDOWN_TIME = 10
 local GIFT_TOP_TIP_DURATION = 5
@@ -137,6 +141,56 @@ if countdownText == nil and topTipText ~= nil then
 	label.Visible = false
 	label.Parent = gameTipFrame
 	countdownText = label
+end
+
+-- DamageOverlay
+local damageOverlay: Frame? = gameTipFrame:FindFirstChild("DamageOverlay") :: Frame?
+local damageFlashInTween: Tween?
+local damageFlashOutTween: Tween?
+
+if damageOverlay then
+	damageOverlay.Visible = false
+	damageOverlay.BackgroundTransparency = 1
+	damageFlashInTween = tweenService:Create(damageOverlay, DamageFlashInTweenInfo, { BackgroundTransparency = 0.5 }) -- 设置闪烁时的最大透明度
+	damageFlashOutTween = tweenService:Create(damageOverlay, DamageFlashOutTweenInfo, { BackgroundTransparency = 1 })
+
+	damageFlashInTween.Completed:Connect(function()
+		damageFlashOutTween:Play()
+	end)
+
+	damageFlashOutTween.Completed:Connect(function()
+		damageOverlay.Visible = false
+	end)
+end
+
+local function PlayDamageFlash(hitDirection: Vector3?)
+	if not damageOverlay or not damageFlashInTween then
+		return
+	end
+
+	if hitDirection then
+		local camera = workspace.CurrentCamera
+		if camera then
+			-- 攻击来源方向 (从受害者指向攻击者)
+			local sourceDir = -hitDirection.Unit
+			-- 转为相机本地坐标系
+			local relativeDir = camera.CFrame:VectorToObjectSpace(sourceDir)
+			-- 只关心水平面上的角度 (X, Z)
+			-- atan2(X, -Z): 0 是前方, 90 是右方, -90 是左方
+			local angleRad = math.atan2(relativeDir.X, -relativeDir.Z)
+			local angleDeg = math.deg(angleRad)
+
+			local gradient = damageOverlay:FindFirstChildOfClass("UIGradient")
+			if gradient then
+				-- UIGradient.Rotation = 0 时是左右渐变 (左红右透)
+				-- 我们需要把 0度(前方) 映射到 90度(上方为红)
+				gradient.Rotation = angleDeg + 90
+			end
+		end
+	end
+
+	damageOverlay.Visible = true
+	damageFlashInTween:Play()
 end
 local function PlayPopTween(ui: ImageLabel, popTime: number, maxScale: number, hideOnMax: boolean)
 	ui.ImageTransparency = 0
@@ -357,8 +411,10 @@ local function StartPopUpCountdown(targetTimeLabel: TextLabel?, totalSeconds: nu
 	coroutine.resume(newCoroutine)
 end
 
-local function OnShowTopTipText(textSource: string, color: Color3, duration: number, args: {string}?, key: string?)
-	if not topTipText then return end
+local function OnShowTopTipText(textSource: string, color: Color3, duration: number, args: { string }?, key: string?)
+	if not topTipText then
+		return
+	end
 	if topTipFadeTween then
 		topTipFadeTween:Cancel()
 		topTipFadeTween = nil
@@ -375,22 +431,24 @@ local function OnShowTopTipText(textSource: string, color: Color3, duration: num
 	topTipText.Visible = true
 	topTipText.TextColor3 = color
 	topTipText.TextTransparency = 0
-	
+
 	local stroke = topTipText:FindFirstChild("UIStroke") :: UIStroke
-	if stroke then stroke.Transparency = 0 end
+	if stroke then
+		stroke.Transparency = 0
+	end
 
 	TranslationTool.CustomAutoLocalizeTextLabel(topTipText, textSource, key, args)
-	
+
 	local newCoroutine = coroutine.create(function()
 		task.wait(duration)
 		if not topTipText or topTipText.Parent == nil then
 			return
 		end
-		local tween = tweenService:Create(topTipText, TweenInfo.new(TOP_TIP_FADE_DURATION), {TextTransparency = 1})
+		local tween = tweenService:Create(topTipText, TweenInfo.new(TOP_TIP_FADE_DURATION), { TextTransparency = 1 })
 		topTipFadeTween = tween
 		tween:Play()
 		if stroke then
-			local strokeTween = tweenService:Create(stroke, TweenInfo.new(TOP_TIP_FADE_DURATION), {Transparency = 1})
+			local strokeTween = tweenService:Create(stroke, TweenInfo.new(TOP_TIP_FADE_DURATION), { Transparency = 1 })
 			topTipStrokeFadeTween = strokeTween
 			strokeTween:Play()
 		end
@@ -454,55 +512,25 @@ local function OnNotifyDeadForRoundTip(playerId: number)
 	if playerId ~= players.LocalPlayer.UserId then
 		return
 	end
-	ShowGameTip(
-		GameTexts.RoundDefeat.source,
-		ROUND_OUTCOME_GAME_TIP_TWEEN,
-		GameTexts.RoundDefeat.key,
-		nil,
-		TOP_TIP_FAILURE_COLOR
-	)
+	ShowGameTip(GameTexts.RoundDefeat.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundDefeat.key, nil, TOP_TIP_FAILURE_COLOR)
 end
 
 local function OnNotifyRoundOutcome(endReason: GameConfig.RoundEndReason, aliveUserIds: { number })
 	local myId: number = players.LocalPlayer.UserId
 	if endReason == "LastStanding" and #aliveUserIds == 0 then
-		ShowGameTip(
-			GameTexts.RoundNoSurvivors.source,
-			ROUND_OUTCOME_GAME_TIP_TWEEN,
-			GameTexts.RoundNoSurvivors.key,
-			nil,
-			TOP_TIP_DEFAULT_COLOR
-		)
+		ShowGameTip(GameTexts.RoundNoSurvivors.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundNoSurvivors.key, nil, TOP_TIP_DEFAULT_COLOR)
 		return
 	end
 	if not UserIdInList(aliveUserIds, myId) then
 		return
 	end
 	if endReason == "LastStanding" and #aliveUserIds == 1 then
-		ShowGameTip(
-			GameTexts.RoundVictory.source,
-			ROUND_OUTCOME_GAME_TIP_TWEEN,
-			GameTexts.RoundVictory.key,
-			nil,
-			TOP_TIP_SUCCESS_COLOR
-		)
+		ShowGameTip(GameTexts.RoundVictory.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundVictory.key, nil, TOP_TIP_SUCCESS_COLOR)
 	elseif endReason == "TimeExpired" then
 		if #aliveUserIds == 1 then
-			ShowGameTip(
-				GameTexts.RoundVictory.source,
-				ROUND_OUTCOME_GAME_TIP_TWEEN,
-				GameTexts.RoundVictory.key,
-				nil,
-				TOP_TIP_SUCCESS_COLOR
-			)
+			ShowGameTip(GameTexts.RoundVictory.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundVictory.key, nil, TOP_TIP_SUCCESS_COLOR)
 		else
-			ShowGameTip(
-				GameTexts.RoundTimeDraw.source,
-				ROUND_OUTCOME_GAME_TIP_TWEEN,
-				GameTexts.RoundTimeDraw.key,
-				nil,
-				TOP_TIP_DEFAULT_COLOR
-			)
+			ShowGameTip(GameTexts.RoundTimeDraw.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundTimeDraw.key, nil, TOP_TIP_DEFAULT_COLOR)
 		end
 	end
 end
@@ -541,7 +569,6 @@ end
 
 UIAdapter.AddAdaptiveFrame(gameTipFrame, UIAdapter.AdaptiveType.FullScreen)
 
-
 runService:BindToRenderStep("GameTipFrame.RenderStepped", Enum.RenderPriority.Camera.Value + 2, OnRenderStepped)
 
 ClientMsg.ConnectShowGameTip(OnShowGameTip)
@@ -550,3 +577,9 @@ ClientMsg.ConnectShowTopTipText(OnShowTopTipText)
 NetMsg.ConnectNotifyMatchState(OnNotifyMatchState)
 NetMsg.ConnectNotifyRoundOutcome(OnNotifyRoundOutcome)
 NetMsg.ConnectNotifyDead(OnNotifyDeadForRoundTip)
+
+NetMsg.ConnectNotifyHit(function(targetPlayerId, fromPlayerId, hitDirection, hitCount)
+	if targetPlayerId == players.LocalPlayer.UserId then
+		PlayDamageFlash(hitDirection)
+	end
+end)
