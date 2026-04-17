@@ -57,7 +57,7 @@ local function GetArenaSpawnPositionList(): {Vector3}
 	local spawnPositionList: {Vector3} = {}
 	for _, child in arenaSpawnFolder:GetChildren() do
 		if child:IsA("BasePart") then
-			table.insert(spawnPositionList, child.Position + Vector3.new(0, 3, 0))
+			table.insert(spawnPositionList, Vector3.new(child.Position.X, GameConfig.UnitY, child.Position.Z))
 		end
 	end
 	return spawnPositionList
@@ -66,12 +66,12 @@ end
 local function GetRandomArenaPosition(excludedPositions: { Vector3 }?): Vector3
 	local halfSize = GameConfig.ArenaHalfSize - GameConfig.ArenaSpawnMargin
 	local maxAttempts = 20
-	local bestPos = Vector3.new(0, GameConfig.UnitY + 1, 0)
+	local bestPos = Vector3.new(0, GameConfig.UnitY, 0)
 
 	for i = 1, maxAttempts do
 		local randomX = math.random() * (halfSize * 2) - halfSize
 		local randomZ = math.random() * (halfSize * 2) - halfSize
-		local pos = Vector3.new(randomX, GameConfig.UnitY + 1, randomZ)
+		local pos = Vector3.new(randomX, GameConfig.UnitY, randomZ)
 
 		local tooClose = false
 		if excludedPositions then

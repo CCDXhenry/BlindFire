@@ -185,13 +185,8 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 					if tm ~= nil then
 						if tm.Name == "LocalProjectile" then
 							shouldPass = true
-						elseif GetPlayerIdByVehicleModelName(tm.Name) ~= nil then
-							if inst.Name ~= "HitRange" then
-								shouldPass = true
-							end
-						elseif players:GetPlayerFromCharacter(tm) ~= nil then
-							shouldPass = true
 						end
+						-- Anything else inside a VehicleModel or a Player Character will be registered as a valid hit (shouldPass = false)
 					end
 				end
 			end
@@ -212,6 +207,12 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 				local tm = inst:FindFirstAncestorOfClass("Model")
 				if tm ~= nil then
 					targetId = GetPlayerIdByVehicleModelName(tm.Name)
+					if targetId == nil then
+						local characterPlayer = players:GetPlayerFromCharacter(tm)
+						if characterPlayer ~= nil then
+							targetId = characterPlayer.UserId
+						end
+					end
 				end
 			end
 
@@ -237,7 +238,8 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 					if character ~= nil then
 						table.insert(newList, character)
 					end
-					rayParams.FilterDescendantsInstances = newList
+					excludeList = newList
+					rayParams.FilterDescendantsInstances = excludeList
 				end
 
 				local n = hitResult.Normal
