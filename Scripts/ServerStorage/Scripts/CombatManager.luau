@@ -281,7 +281,7 @@ end
 local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, hitDirection: Vector3)
 	hitDirection = ToHorizontalDirection(hitDirection)
 
-	if targetPlayerId == shooterId then
+	if targetPlayerId == shooterId and not GameConfig.CanHitSelf then
 		LogInfo(string.format("ProjectileHit ignored shooterId=%d targetId=%d", shooterId, targetPlayerId))
 		return
 	end
@@ -350,6 +350,17 @@ end
 
 function CombatManager.OnPlayerRemoving(player: Player)
 	LogInfo(string.format("OnPlayerRemoving userId=%d", player.UserId))
+	
+	local roundInfoMap = PlayerStateManager.GetAllPlayerRoundInfoMap()
+	local roundInfo = roundInfoMap[player.UserId]
+	if roundInfo ~= nil and roundInfo.isParticipant and roundInfo.isAlive then
+		roundInfo.isAlive = false
+		NetMsg.FireNotifyDead(player.UserId)
+		if playerDeadCallback ~= nil then
+			playerDeadCallback(player)
+		end
+	end
+
 	unseatPlayerFromOwnedVehicle(player)
 	DestroyUnitForPlayer(player.UserId)
 	PlayerStateManager.RemovePlayerRoundInfo(player.UserId)

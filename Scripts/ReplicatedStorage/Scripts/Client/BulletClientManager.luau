@@ -60,6 +60,27 @@ local function GetModelsFolder(): Folder
 	return replicatedStorage:WaitForChild("Models") :: Folder
 end
 
+local cachedProjectileRadius: number? = nil
+local function GetProjectileRadius(): number
+	if cachedProjectileRadius ~= nil then
+		return cachedProjectileRadius
+	end
+	local defaultRadius = 1.5
+	local modelsFolder = GetModelsFolder()
+	local projectileTemplate = modelsFolder:FindFirstChild("ProjectileModel")
+	if projectileTemplate ~= nil and projectileTemplate:IsA("Model") then
+		local core = projectileTemplate:FindFirstChild("Core")
+		if core ~= nil and core:IsA("BasePart") then
+			local radius = core.Size.X / 2
+			if radius >= 0.5 then
+				defaultRadius = radius
+			end
+		end
+	end
+	cachedProjectileRadius = defaultRadius
+	return defaultRadius
+end
+
 local function GetPlayerIdByVehicleModelName(modelName: string): number?
 	if not modelName:match("^" .. VEHICLE_MODEL_NAME_PREFIX) then
 		return nil
@@ -95,6 +116,14 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 		end
 	end
 
+	if ownerId == localPlayerId then
+		for _, d in projectileModel:GetDescendants() do
+			if d:IsA("BasePart") then
+				d.Color = Color3.new(0, 1, 0)
+			end
+		end
+	end
+
 	local spawnCFrame = CFrame.lookAt(spawnPos, spawnPos + shotDir)
 	projectileModel:PivotTo(spawnCFrame)
 
@@ -105,13 +134,14 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 	if character ~= nil then
 		table.insert(excludeList, character)
 	end
-	local localState = unitStateMap[localPlayerId]
-	if localState ~= nil and localState.model ~= nil then
-		table.insert(excludeList, localState.model)
+	local ownerState = unitStateMap[ownerId]
+	if ownerState ~= nil and ownerState.model ~= nil then
+		table.insert(excludeList, ownerState.model)
 	end
 	rayParams.FilterDescendantsInstances = excludeList
 
 	local spawnTime = os.clock()
+	local bouncesLeft = GameConfig.ProjectileMaxBounces or 0
 	local hbConn: RBXScriptConnection?
 	hbConn = runService.Heartbeat:Connect(function(dt)
 		if projectileModel.Parent == nil then
@@ -135,10 +165,7 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 		local remaining = stepDist + GameConfig.ProjectileStepMargin
 		local hitResult: RaycastResult? = nil
 
-		local radius = projectileRoot.Size.X / 2
-		if radius < 0.5 then
-			radius = 1.5
-		end
+		local radius = GetProjectileRadius()
 
 		for _ = 1, 10 do
 			if remaining < 1e-4 then
@@ -180,18 +207,62 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 
 		if hitResult ~= nil then
 			local inst = hitResult.Instance
-			if ownerId == localPlayerId then
-				if inst:IsA("BasePart") then
-					local tm = inst:FindFirstAncestorOfClass("Model")
-					local targetId: number? = nil
-					if tm ~= nil then
-						targetId = GetPlayerIdByVehicleModelName(tm.Name)
-					end
-					if targetId ~= nil and targetId ~= localPlayerId then
+			local targetId: number? = nil
+			if inst:IsA("BasePart") then
+				local tm = inst:FindFirstAncestorOfClass("Model")
+				if tm ~= nil then
+					targetId = GetPlayerIdByVehicleModelName(tm.Name)
+				end
+			end
+
+			if targetId ~= nil then
+				if ownerId == localPlayerId then
+					if targetId ~= localPlayerId or GameConfig.CanHitSelf then
 						NetMsg.FireRequestHit(targetId, shotDir)
 					end
 				end
+				projectileModel:Destroy()
+				if hbConn ~= nil then
+					hbConn:Disconnect()
+				end
+				return
 			end
+
+			if bouncesLeft > 0 then
+				bouncesLeft -= 1
+
+				if GameConfig.CanHitSelf then
+					local newList: { Instance } = { projectileModel }
+					local character = players.LocalPlayer.Character
+					if character ~= nil then
+						table.insert(newList, character)
+					end
+					rayParams.FilterDescendantsInstances = newList
+				end
+
+				local n = hitResult.Normal
+				local nFlat = Vector3.new(n.X, 0, n.Z)
+				if nFlat.Magnitude > 0.01 then
+					nFlat = nFlat.Unit
+				else
+					nFlat = -shotDir
+				end
+
+				local impactCenter = origin + shotDir * hitResult.Distance
+
+				shotDir = shotDir - 2 * shotDir:Dot(nFlat) * nFlat
+				local flatDir = Vector3.new(shotDir.X, 0, shotDir.Z)
+				if flatDir.Magnitude > 0.01 then
+					shotDir = flatDir.Unit
+				end
+
+				local distanceRemaining = math.max(0, stepDist - hitResult.Distance)
+				local newPos = impactCenter + shotDir * distanceRemaining
+
+				projectileModel:PivotTo(CFrame.lookAt(newPos, newPos + shotDir))
+				return
+			end
+
 			projectileModel:Destroy()
 			if hbConn ~= nil then
 				hbConn:Disconnect()
@@ -793,6 +864,51 @@ function BulletClientManager.FireShot()
 			local flat = Vector3.new(unitPart.CFrame.LookVector.X, 0, unitPart.CFrame.LookVector.Z)
 			if flat.Magnitude > 0.001 then
 				shotDir = flat.Unit
+			end
+		end
+
+		local rayOrigin = unitPart.Position + Vector3.new(0, 1.2, 0)
+		local toSpawn = spawnPos - rayOrigin
+		if toSpawn.Magnitude > 0.01 then
+			local rayParams = RaycastParams.new()
+			rayParams.FilterType = Enum.RaycastFilterType.Exclude
+			local excludeList: { Instance } = { localState.model }
+			local character = players.LocalPlayer.Character
+			if character ~= nil then
+				table.insert(excludeList, character)
+			end
+			rayParams.FilterDescendantsInstances = excludeList
+
+			local dist = toSpawn.Magnitude
+			local dir = toSpawn.Unit
+
+			local hitPoint = nil
+			local curOrigin = rayOrigin
+			local remaining = dist
+			for _ = 1, 10 do
+				if remaining < 1e-4 then
+					break
+				end
+				local res = workspaceService:Raycast(curOrigin, dir * remaining, rayParams)
+				if res == nil then
+					break
+				end
+
+				if res.Instance.Name == "ArenaFloor" then
+					table.insert(excludeList, res.Instance)
+					rayParams.FilterDescendantsInstances = excludeList
+					curOrigin = res.Position + dir * 0.01
+					remaining = remaining - res.Distance - 0.01
+					continue
+				end
+				hitPoint = res.Position
+				break
+			end
+
+			if hitPoint ~= nil then
+				local projRadius = GetProjectileRadius()
+				local safeDist = math.max(0, (hitPoint - rayOrigin).Magnitude - (projRadius * 2 + 0.1))
+				spawnPos = rayOrigin + (dir * safeDist)
 			end
 		end
 	end

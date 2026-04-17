@@ -198,8 +198,12 @@ GameConfig.ProjectileLifetime = 5
 GameConfig.ProjectileStepMargin = 0.45
 -- 炮弹最大飞行距离 (studs)
 GameConfig.MaxProjectileDistance = 500
+-- 子弹最大反弹次数
+GameConfig.ProjectileMaxBounces = 1
 -- 开火后坐力速度倍数
 GameConfig.FireRecoilSpeedMultiplier = 5
+-- 自己的子弹是否可以命中自己
+GameConfig.CanHitSelf = true
 -- 命中击退速度倍数
 GameConfig.BulletHitSpeedMultiplier = 6
 -- 撞墙时 BaseDisk 弹性（与模板 CustomPhysicalProperties 合并时覆盖弹性项）
@@ -266,16 +270,16 @@ GameConfig.VisibleParameters = {
 	{ key = "MaxHits", alias = "生命值(命中上限)" },
 	{ key = "ProjectileSpeed", alias = "子弹飞行速度" },
 	{ key = "ProjectileLifetime", alias = "子弹生存时间" },
+	{ key = "ProjectileMaxBounces", alias = "子弹最大反弹次数" },
+	{ key = "CanHitSelf", alias = "能否击中自己" },
 	{ key = "FireCooldown", alias = "射击冷却时间" },
 	{ key = "WallBounceSpeedMultiplier", alias = "撞墙反弹速度倍数" },
 	{ key = "BulletHitSpeedMultiplier", alias = "命中击退速度倍数" },
 	{ key = "FireRecoilSpeedMultiplier", alias = "开火后坐力速度倍数" },
 	{ key = "DriveHorizontalForceGain", alias = "驱动水平力增益" },
-	{ key = "WallBounceCooldown", alias = "撞墙冷却时间" },
 	{ key = "MatchCountdown", alias = "备战倒计时" },
 	{ key = "RoundStartCountdown", alias = "开局倒计时" },
 	{ key = "RoundFightDuration", alias = "战斗持续时间" },
-	{ key = "ArenaSeatPrepareDelay", alias = "入场延迟" },
 }
 
 return GameConfig

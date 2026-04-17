@@ -15,6 +15,7 @@ local ClientGameInfo = require(clientScripts:FindFirstChild("ClientGameInfo"))
 local UIManager = require(clientScripts:FindFirstChild("UIManager"))
 local BulletClientManager = require(clientScripts:FindFirstChild("BulletClientManager"))
 local CombatCameraManager = require(clientScripts:FindFirstChild("CombatCameraManager"))
+local MatchActionManager = require(clientScripts:FindFirstChild("MatchActionManager"))
 local players = game:GetService("Players")
 local starterGui: StarterGui = game:GetService("StarterGui")
 
@@ -53,6 +54,7 @@ local function OnNotifyPlayerInfoInit(localPlayerSaveInfo: GameConfig.ClientLoca
 	-- 初始化核心玩法客户端管理器
 	BulletClientManager.Init()
 	CombatCameraManager.Init()
+	MatchActionManager.Init()
 	--初始化UI
 	task.spawn(function()
 		InitUI()
