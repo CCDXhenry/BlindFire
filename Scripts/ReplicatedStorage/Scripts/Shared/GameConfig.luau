@@ -167,13 +167,13 @@ GameConfig.ArenaExtraHalfSizePerPlayer = 10
 -- 场地边长一半（初始值，由 ArenaManager 动态修改）
 GameConfig.ArenaHalfSize = 60
 GameConfig.ArenaMinHalfSize = 30
-GameConfig.ArenaShrinkSpeed = 0.5
+GameConfig.ArenaShrinkSpeed = 1
 GameConfig.ArenaShrinkStartDelay = 10
 GameConfig.ArenaWallProximityStuds = 2
 -- 单位在场地中的运动高度（Y轴）
 GameConfig.UnitY = 1
 -- 单位移动速度（studs/s）
-GameConfig.UnitSpeed = 20
+GameConfig.UnitSpeed = 30
 -- 水平速度上限（防止连续碰撞后速度失控）
 GameConfig.UnitMaxHorizontalSpeed = 60
 -- 单位自转速度（degrees/s）
@@ -197,9 +197,9 @@ GameConfig.MaxForceSitRetry = 20
 -- 命中次数上限（达到后死亡）
 GameConfig.MaxHits = 3
 -- 炮弹飞行速度
-GameConfig.ProjectileSpeed = 100
+GameConfig.ProjectileSpeed = 60
 -- 炮弹存在时间（秒）
-GameConfig.ProjectileLifetime = 5
+GameConfig.ProjectileLifetime = 3
 -- 炮弹步进余量 (studs)
 GameConfig.ProjectileStepMargin = 0.45
 -- 炮弹最大飞行距离 (studs)
@@ -235,7 +235,7 @@ GameConfig.WallStuckAngleThreshold = -0.02
 -- 旋转输入衰减时间（开火旋转未结束期）
 GameConfig.SpinDampingDuration = 0.8
 -- 驱动水平力增益 单位质量的驱动水平力（牛顿）
-GameConfig.DriveHorizontalForceGain = 14
+GameConfig.DriveHorizontalForceGain = 3
 -- 撞墙反弹速度倍数
 GameConfig.WallBounceSpeedMultiplier = 1
 -- Arena 中随机出生安全边距
