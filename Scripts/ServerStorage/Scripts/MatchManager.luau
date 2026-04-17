@@ -12,19 +12,20 @@ local sharedScripts = scripts:WaitForChild("Shared")
 local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
 local NetMsg = require(sharedScripts:FindFirstChild("NetMsg"))
 local PlayerStateManager = require(serverScripts:WaitForChild("PlayerStateManager"))
+local ConfigManager = require(serverScripts:WaitForChild("ConfigManager"))
 
-type OnRoundStartCallback = () -> ()
+type OnRoundStartCallback = (participantIds: { number }) -> ()
 
-local MIN_PLAYER_TO_START = GameConfig.MinPlayerToStart
+-- local MIN_PLAYER_TO_START = GameConfig.MinPlayerToStart
 local LOBBY_SPAWN_NAME = "LobbySpawnArea"
 local ARENA_SPAWN_FOLDER_NAME = "ArenaSpawnPoints"
 local LOG_PREFIX = "[MatchManager]"
 local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
-local MAX_SEAT_RETRY = 30
-local SEAT_RETRY_INTERVAL = 0.2
-local MAX_FORCE_SIT_RETRY = 20
-local RETURN_TO_LOBBY_UNSEAT_WAIT_SEC = 0.1
-local ARENA_SEAT_PREPARE_DELAY_SEC = 0.22
+-- local MAX_SEAT_RETRY = 30
+-- local SEAT_RETRY_INTERVAL = 0.2
+-- local MAX_FORCE_SIT_RETRY = 20
+-- local RETURN_TO_LOBBY_UNSEAT_WAIT_SEC = 0.1
+-- local ARENA_SEAT_PREPARE_DELAY_SEC = 0.22
 
 local seatRetryCountMap: {[number]: number} = {}
 local arenaTargetPositionMap: {[number]: Vector3} = {}
@@ -32,6 +33,7 @@ local arenaTargetPositionMap: {[number]: Vector3} = {}
 local currentMatchState: GameConfig.MatchState = "InLobby"
 local roundWorkerThread: thread? = nil
 local roundStartCallback: OnRoundStartCallback? = nil
+local isStopRequested: boolean = false
 
 local function LogInfo(message: string)
 	print(string.format("%s %s", LOG_PREFIX, message))
@@ -61,11 +63,38 @@ local function GetArenaSpawnPositionList(): {Vector3}
 	return spawnPositionList
 end
 
-local function GetRandomArenaPosition(): Vector3
+local function GetRandomArenaPosition(excludedPositions: { Vector3 }?): Vector3
 	local halfSize = GameConfig.ArenaHalfSize - GameConfig.ArenaSpawnMargin
-	local randomX = math.random() * (halfSize * 2) - halfSize
-	local randomZ = math.random() * (halfSize * 2) - halfSize
-	return Vector3.new(randomX, GameConfig.UnitY + 1, randomZ)
+	local maxAttempts = 20
+	local bestPos = Vector3.new(0, GameConfig.UnitY + 1, 0)
+
+	for i = 1, maxAttempts do
+		local randomX = math.random() * (halfSize * 2) - halfSize
+		local randomZ = math.random() * (halfSize * 2) - halfSize
+		local pos = Vector3.new(randomX, GameConfig.UnitY + 1, randomZ)
+
+		local tooClose = false
+		if excludedPositions then
+			for _, otherPos in excludedPositions do
+				local dist = (otherPos * Vector3.new(1, 0, 1) - pos * Vector3.new(1, 0, 1)).Magnitude
+				if dist < GameConfig.MinSpawnSeparation then
+					tooClose = true
+					break
+				end
+			end
+		end
+
+		if not tooClose then
+			return pos
+		end
+		bestPos = pos
+		if i == maxAttempts then
+			LogInfo(
+				string.format("GetRandomArenaPosition warning: could not find separated position after %d attempts", maxAttempts)
+			)
+		end
+	end
+	return bestPos
 end
 
 local function TeleportPlayerToPosition(player: Player, targetPosition: Vector3)
@@ -93,8 +122,8 @@ local function SeatPlayerOnVehicle(player: Player, targetPosition: Vector3)
 	if vehicleModel == nil or not vehicleModel:IsA("Model") then
 		local retryCount = (seatRetryCountMap[player.UserId] or 0) + 1
 		seatRetryCountMap[player.UserId] = retryCount
-		if retryCount <= MAX_SEAT_RETRY then
-			task.delay(SEAT_RETRY_INTERVAL, function()
+		if retryCount <= GameConfig.MaxSeatRetry then
+			task.delay(GameConfig.SeatRetryInterval, function()
 				SeatPlayerOnVehicle(player, targetPosition)
 			end)
 			return
@@ -141,7 +170,7 @@ local function SeatPlayerOnVehicle(player: Player, targetPosition: Vector3)
 	end
 
 	local function TryForceSeat(tryIndex: number)
-		if tryIndex > MAX_FORCE_SIT_RETRY then
+		if tryIndex > GameConfig.MaxForceSitRetry then
 			LogInfo(string.format("Skip SeatPlayerOnVehicle userId=%d reason=force_sit_retry_exhausted", player.UserId))
 			return
 		end
@@ -166,12 +195,51 @@ end
 
 local function TeleportAllPlayersToArena(participantPlayers: { Player })
 	local spawnPositionList = GetArenaSpawnPositionList()
-	LogInfo(string.format("TeleportAllPlayersToArena playerCount=%d spawnPointCount=%d", #participantPlayers, #spawnPositionList))
+	-- Shuffle the predefined spawn points to ensure variety
+	for i = #spawnPositionList, 2, -1 do
+		local j = math.random(1, i)
+		spawnPositionList[i], spawnPositionList[j] = spawnPositionList[j], spawnPositionList[i]
+	end
+
+	local chosenPositions: { Vector3 } = {}
+	LogInfo(
+		string.format(
+			"TeleportAllPlayersToArena playerCount=%d spawnPointCount=%d",
+			#participantPlayers,
+			#spawnPositionList
+		)
+	)
 	for index, player in ipairs(participantPlayers) do
-		local targetPosition = spawnPositionList[index]
-		if targetPosition == nil then
-			targetPosition = GetRandomArenaPosition()
+		local initialTarget = spawnPositionList[index]
+		local targetPosition: Vector3? = nil
+
+		if initialTarget then
+			-- Ensure predefined point doesn't conflict with already chosen ones
+			local conflict = false
+			for _, otherPos in chosenPositions do
+				local dist = (otherPos * Vector3.new(1, 0, 1) - initialTarget * Vector3.new(1, 0, 1)).Magnitude
+				if dist < GameConfig.MinSpawnSeparation then
+					conflict = true
+					break
+				end
+			end
+			if not conflict then
+				targetPosition = initialTarget
+			else
+				LogInfo(
+					string.format(
+						"TeleportAllPlayersToArena: Predefined point index %d conflicts, falling back to random",
+						index
+					)
+				)
+			end
 		end
+
+		if targetPosition == nil then
+			targetPosition = GetRandomArenaPosition(chosenPositions)
+		end
+
+		table.insert(chosenPositions, targetPosition)
 		arenaTargetPositionMap[player.UserId] = targetPosition
 		SeatPlayerOnVehicle(player, targetPosition)
 	end
@@ -192,7 +260,13 @@ local function TeleportPlayerToLobby(player: Player, reloadCharacter: boolean?)
 		LogInfo("Skip TeleportPlayerToLobby reason=LobbySpawnArea_missing")
 		return
 	end
-	local targetPosition = lobbySpawnPart.Position + Vector3.new(0, 4, 0)
+
+	-- Randomize within the lobby spawn area bounds
+	local size = lobbySpawnPart.Size
+	local randomX = (math.random() - 0.5) * size.X * 0.8
+	local randomZ = (math.random() - 0.5) * size.Z * 0.8
+	local targetPosition = lobbySpawnPart.Position + Vector3.new(randomX, 4, randomZ)
+
 	if reloadCharacter == true then
 		player.CharacterAdded:Once(function()
 			TeleportPlayerToPosition(player, targetPosition)
@@ -204,9 +278,9 @@ local function TeleportPlayerToLobby(player: Player, reloadCharacter: boolean?)
 end
 
 local function TeleportAllPlayersToLobby()
+	CombatManager.ResetAllUnitsToUnderground()
 	for _, player in players:GetPlayers() do
 		arenaTargetPositionMap[player.UserId] = nil
-		CombatManager.SetVehicleAnchoredForPlayer(player.UserId, true)
 		TeleportPlayerToLobby(player, true)
 	end
 end
@@ -220,9 +294,13 @@ end
 local function RunMatchLoop()
 	LogInfo("RunMatchLoop started")
 	while true do
+		-- 每局开始前，重置停止请求，应用并同步参数配置
+		isStopRequested = false
+		ConfigManager.ApplyAndSync()
+
 		local playerCount = #players:GetPlayers()
-		if playerCount < MIN_PLAYER_TO_START then
-			LogInfo(string.format("WaitingPlayers current=%d required=%d", playerCount, MIN_PLAYER_TO_START))
+		if playerCount < GameConfig.MinPlayerToStart then
+			LogInfo(string.format("WaitingPlayers current=%d required=%d", playerCount, GameConfig.MinPlayerToStart))
 			CombatManager.SetAllVehiclesAnchored(true)
 			BroadcastMatchState("InLobby", 0)
 			task.wait(1)
@@ -239,7 +317,7 @@ local function RunMatchLoop()
 		local roundParticipantPlayers = players:GetPlayers()
 		LogInfo(string.format("ArenaSeatPrepare participants=%d", #roundParticipantPlayers))
 		NetMsg.FireNotifyArenaSeatPrepare(roundParticipantPlayers)
-		task.wait(ARENA_SEAT_PREPARE_DELAY_SEC)
+		task.wait(GameConfig.ArenaSeatPrepareDelay)
 		TeleportAllPlayersToArena(roundParticipantPlayers)
 		-- 入场后只稳定一次，避免每秒 Stabilize 反复 Sit / 挪车导致角色反复「落地」
 		task.wait(0.35)
@@ -255,12 +333,21 @@ local function RunMatchLoop()
 		BroadcastMatchState("Fighting", 0)
 		if roundStartCallback ~= nil then
 			LogInfo("Invoke roundStartCallback")
-			roundStartCallback()
+			local participantIds = {}
+			for _, p in ipairs(roundParticipantPlayers) do
+				table.insert(participantIds, p.UserId)
+			end
+			roundStartCallback(participantIds)
 		end
 		LogInfo(string.format("FightPhase start seconds=%d", GameConfig.RoundFightDuration))
 		-- 与 MatchCountdown / GameStartCountdown 一致：先广播再 wait，避免首秒无数字、客户端慢约 1s
 		local fightEndedEarly = false
 		for remain = GameConfig.RoundFightDuration, 1, -1 do
+			if isStopRequested then
+				fightEndedEarly = true
+				LogInfo("Fighting phase ended early: stop requested via command.")
+				break
+			end
 			if PlayerStateManager.GetAlivePlayerCount() <= 1 then
 				fightEndedEarly = true
 				LogInfo("Fighting phase ended early: at most one player remains alive.")
@@ -279,7 +366,7 @@ local function RunMatchLoop()
 		for _, player in players:GetPlayers() do
 			CombatManager.UnseatPlayerFromOwnedVehicle(player)
 		end
-		task.wait(RETURN_TO_LOBBY_UNSEAT_WAIT_SEC)
+		task.wait(GameConfig.ReturnToLobbyWait)
 		TeleportAllPlayersToLobby()
 	end
 end
@@ -309,7 +396,7 @@ function MatchManager.OnPlayerDead(player: Player)
 	LogInfo(string.format("OnPlayerDead userId=%d", player.UserId))
 	arenaTargetPositionMap[player.UserId] = nil
 	CombatManager.UnseatPlayerFromOwnedVehicle(player)
-	CombatManager.SetVehicleAnchoredForPlayer(player.UserId, true)
+	CombatManager.ResetUnitToUnderground(player.UserId)
 	TeleportPlayerToLobby(player, true)
 end
 
@@ -322,6 +409,16 @@ function MatchManager.ForceResetToLobby()
 	LogInfo("ForceResetToLobby invoked")
 	BroadcastMatchState("InLobby", 0)
 	TeleportAllPlayersToLobby()
+end
+
+-- 请求强制结束当前场次
+function MatchManager.RequestStopMatch()
+	if currentMatchState == "Fighting" then
+		isStopRequested = true
+		LogInfo("RequestStopMatch registered")
+	else
+		warn(string.format("%s RequestStopMatch ignored, current state is %s", LOG_PREFIX, currentMatchState))
+	end
 end
 
 return MatchManager

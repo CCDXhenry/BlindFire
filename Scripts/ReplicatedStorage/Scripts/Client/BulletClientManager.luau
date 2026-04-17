@@ -34,24 +34,23 @@ type ClientUnitState = {
 }
 
 local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
-local UNIT_SPEED: number = GameConfig.UnitSpeed
-local UNIT_MAX_HORIZONTAL_SPEED: number = GameConfig.UnitMaxHorizontalSpeed
-local FIRE_COOLDOWN: number = GameConfig.FireCooldown
-local SPIN_DAMPING_DURATION: number = GameConfig.SpinDampingDuration
-local DRIVE_HORIZONTAL_FORCE_GAIN: number = 14
-local WALL_BOUNCE_COOLDOWN_SEC: number = 0.22
--- 放宽阈值：低速贴墙时仍能触发反弹并翻转 targetVel
-local WALL_BOUNCE_VEL_INTO_WALL: number = -0.35
-local WALL_STUCK_SPEED_MAX: number = 10
-local WALL_STUCK_DESIRED_DOT: number = -0.02
+-- local UNIT_SPEED: number = GameConfig.UnitSpeed
+-- local UNIT_MAX_HORIZONTAL_SPEED: number = GameConfig.UnitMaxHorizontalSpeed
+-- local FIRE_COOLDOWN: number = GameConfig.FireCooldown
+-- local SPIN_DAMPING_DURATION: number = GameConfig.SpinDampingDuration
+-- local DRIVE_HORIZONTAL_FORCE_GAIN: number = 14
+-- local WALL_BOUNCE_COOLDOWN_SEC: number = 0.22
+-- local WALL_BOUNCE_VEL_INTO_WALL: number = -0.35
+-- local WALL_STUCK_SPEED_MAX: number = 10
+-- local WALL_STUCK_DESIRED_DOT: number = -0.02
 
 local BASE_DISK_MESH_OFFSET = CFrame.Angles(0, 0, 0)
 
 local matchState: GameConfig.MatchState = "InLobby"
 
 local localPlayerId: number = 0
-local unitStateMap: {[number]: ClientUnitState} = {}
-local unitInitRetryCountMap: {[number]: number} = {}
+local unitStateMap: { [number]: ClientUnitState } = {}
+local unitInitRetryCountMap: { [number]: number } = {}
 local lastFireTime: number = -math.huge
 local _heartbeatConnection: RBXScriptConnection? = nil
 local isInitialized: boolean = false
@@ -75,17 +74,17 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 	if projectileTemplate == nil or not projectileTemplate:IsA("Model") then
 		return
 	end
-	
+
 	local projectileModel = projectileTemplate:Clone()
 	projectileModel.Name = "LocalProjectile"
 	projectileModel.Parent = workspaceService
-	
+
 	local projectileRoot = projectileModel:FindFirstChild("Core")
 	if projectileRoot == nil or not projectileRoot:IsA("BasePart") then
 		projectileModel:Destroy()
 		return
 	end
-	
+
 	projectileModel.PrimaryPart = projectileRoot
 	projectileRoot.CanCollide = false
 	for _, d in projectileModel:GetDescendants() do
@@ -95,13 +94,13 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 			d.AssemblyAngularVelocity = Vector3.zero
 		end
 	end
-	
+
 	local spawnCFrame = CFrame.lookAt(spawnPos, spawnPos + shotDir)
 	projectileModel:PivotTo(spawnCFrame)
-	
+
 	local rayParams = RaycastParams.new()
 	rayParams.FilterType = Enum.RaycastFilterType.Exclude
-	local excludeList: {Instance} = {projectileModel}
+	local excludeList: { Instance } = { projectileModel }
 	local character = players.LocalPlayer.Character
 	if character ~= nil then
 		table.insert(excludeList, character)
@@ -111,34 +110,44 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 		table.insert(excludeList, localState.model)
 	end
 	rayParams.FilterDescendantsInstances = excludeList
-	
+
 	local spawnTime = os.clock()
 	local hbConn: RBXScriptConnection?
 	hbConn = runService.Heartbeat:Connect(function(dt)
 		if projectileModel.Parent == nil then
-			if hbConn ~= nil then hbConn:Disconnect() end
+			if hbConn ~= nil then
+				hbConn:Disconnect()
+			end
 			return
 		end
 		dt = math.min(dt, 0.05)
 		if os.clock() - spawnTime > GameConfig.ProjectileLifetime then
 			projectileModel:Destroy()
-			if hbConn ~= nil then hbConn:Disconnect() end
+			if hbConn ~= nil then
+				hbConn:Disconnect()
+			end
 			return
 		end
-		
+
 		local stepDist = GameConfig.ProjectileSpeed * dt
 		local pivot = projectileModel:GetPivot()
 		local origin = pivot.Position
-		local remaining = stepDist + 0.45
+		local remaining = stepDist + GameConfig.ProjectileStepMargin
 		local hitResult: RaycastResult? = nil
-		
+
 		local radius = projectileRoot.Size.X / 2
-		if radius < 0.5 then radius = 1.5 end
-		
+		if radius < 0.5 then
+			radius = 1.5
+		end
+
 		for _ = 1, 10 do
-			if remaining < 1e-4 then break end
+			if remaining < 1e-4 then
+				break
+			end
 			local res = workspaceService:Spherecast(origin, radius, shotDir * remaining, rayParams)
-			if res == nil then break end
+			if res == nil then
+				break
+			end
 			local inst = res.Instance
 			local shouldPass = false
 			if inst:IsA("BasePart") then
@@ -159,7 +168,7 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 					end
 				end
 			end
-			
+
 			if shouldPass then
 				table.insert(excludeList, inst)
 				rayParams.FilterDescendantsInstances = excludeList
@@ -168,7 +177,7 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 			hitResult = res
 			break
 		end
-		
+
 		if hitResult ~= nil then
 			local inst = hitResult.Instance
 			if ownerId == localPlayerId then
@@ -184,10 +193,12 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 				end
 			end
 			projectileModel:Destroy()
-			if hbConn ~= nil then hbConn:Disconnect() end
+			if hbConn ~= nil then
+				hbConn:Disconnect()
+			end
 			return
 		end
-		
+
 		local newPos = pivot.Position + shotDir * stepDist
 		projectileModel:PivotTo(CFrame.lookAt(newPos, newPos + shotDir))
 	end)
@@ -222,7 +233,7 @@ end
 
 local function AngleToVelocityXZ(angleDeg: number): (number, number)
 	local rad = Deg2Rad(angleDeg)
-	return math.cos(rad) * UNIT_SPEED, math.sin(rad) * UNIT_SPEED
+	return math.cos(rad) * GameConfig.UnitSpeed, math.sin(rad) * GameConfig.UnitSpeed
 end
 
 local function FindUnitPart(playerId: number): BasePart?
@@ -295,35 +306,47 @@ local function ZeroHorizontalVelocity(part: BasePart)
 end
 
 local function OnLocalVehicleTouched(hitPart: BasePart)
-	if not hitPart:IsA("BasePart") then return end
+	if not hitPart:IsA("BasePart") then
+		return
+	end
 	local otherModel = hitPart:FindFirstAncestorOfClass("Model")
-	if otherModel == nil then return end
+	if otherModel == nil then
+		return
+	end
 	local otherPlayerId = GetPlayerIdByVehicleModelName(otherModel.Name)
-	if otherPlayerId == nil or otherPlayerId == localPlayerId then return end
-	
+	if otherPlayerId == nil or otherPlayerId == localPlayerId then
+		return
+	end
+
 	local selfState = unitStateMap[localPlayerId]
 	local otherState = unitStateMap[otherPlayerId]
-	if selfState == nil or otherState == nil then return end
-	
+	if selfState == nil or otherState == nil then
+		return
+	end
+
 	local now = os.clock()
-	if now - (selfState.lastVehicleBumpClock or 0) < 0.2 then return end
-	
+	if now - (selfState.lastVehicleBumpClock or 0) < 0.2 then
+		return
+	end
+
 	local delta = selfState.unitPart.Position - otherState.unitPart.Position
 	local flat = Vector3.new(delta.X, 0, delta.Z)
-	if flat.Magnitude < 0.05 then return end
-	
+	if flat.Magnitude < 0.05 then
+		return
+	end
+
 	selfState.lastVehicleBumpClock = now
 	local bumpDir = flat.Unit
-	local newSpeed = UNIT_SPEED * 1.2
+	local newSpeed = GameConfig.UnitSpeed * GameConfig.WallBounceSpeedMultiplier
 	selfState.unitPart.AssemblyLinearVelocity = bumpDir * newSpeed
-	
+
 	local currentTarget = Vector3.new(selfState.targetVelX, 0, selfState.targetVelZ)
 	if currentTarget.Magnitude > 0.01 then
 		local du = currentTarget.Unit
 		local reflected = du - 2 * bumpDir:Dot(du) * bumpDir
 		local rFlat = Vector3.new(reflected.X, 0, reflected.Z)
 		if rFlat.Magnitude > 0.01 then
-			local r = rFlat.Unit * UNIT_SPEED
+			local r = rFlat.Unit * GameConfig.UnitSpeed
 			selfState.targetVelX = r.X
 			selfState.targetVelZ = r.Z
 		end
@@ -454,14 +477,14 @@ local function UpdateBaseDiskLocomotion(state: ClientUnitState, _dt: number, app
 	if targetDir.Magnitude < 1e-4 then
 		drive.Force = Vector3.zero
 	else
-		local desired = targetDir.Unit * UNIT_SPEED
+		local desired = targetDir.Unit * GameConfig.UnitSpeed
 		local err = desired - curXZ
-		drive.Force = Vector3.new(err.X, 0, err.Z) * (DRIVE_HORIZONTAL_FORCE_GAIN * mass)
+		drive.Force = Vector3.new(err.X, 0, err.Z) * (GameConfig.DriveHorizontalForceGain * mass)
 	end
 
 	local speed = curXZ.Magnitude
-	if speed > UNIT_MAX_HORIZONTAL_SPEED then
-		local damp = (speed - UNIT_MAX_HORIZONTAL_SPEED) * mass * 2
+	if speed > GameConfig.UnitMaxHorizontalSpeed then
+		local damp = (speed - GameConfig.UnitMaxHorizontalSpeed) * mass * 2
 		drive.Force -= curXZ.Unit * damp
 	end
 
@@ -476,24 +499,24 @@ local function UpdateBaseDiskLocomotion(state: ClientUnitState, _dt: number, app
 		end
 
 		local now = os.clock()
-		if now - state.lastWallBounceClock >= WALL_BOUNCE_COOLDOWN_SEC then
+		if now - state.lastWallBounceClock >= GameConfig.WallBounceCooldown then
 			local velInto = curXZ:Dot(inward)
 			local desiredDot = 0
 			if targetDir.Magnitude >= 1e-4 then
 				desiredDot = targetDir.Unit:Dot(inward)
 			end
-			local shouldBounce = (velInto < WALL_BOUNCE_VEL_INTO_WALL)
-				or (curXZ.Magnitude < WALL_STUCK_SPEED_MAX and desiredDot < WALL_STUCK_DESIRED_DOT)
+			local shouldBounce = (velInto < GameConfig.WallBounceVelThreshold)
+				or (curXZ.Magnitude < GameConfig.WallStuckSpeedThreshold and desiredDot < GameConfig.WallStuckAngleThreshold)
 			if shouldBounce then
 				state.lastWallBounceClock = now
-				local newSpeed = UNIT_SPEED * 1.2
+				local newSpeed = GameConfig.UnitSpeed * GameConfig.WallBounceSpeedMultiplier
 				root.AssemblyLinearVelocity = inward * newSpeed
 				if targetDir.Magnitude >= 1e-4 then
 					local du = targetDir.Unit
 					local reflected = du - 2 * inward:Dot(du) * inward
 					local rFlat = Vector3.new(reflected.X, 0, reflected.Z)
 					if rFlat.Magnitude > 1e-4 then
-						local r = rFlat.Unit * UNIT_SPEED
+						local r = rFlat.Unit * GameConfig.UnitSpeed
 						state.targetVelX = r.X
 						state.targetVelZ = r.Z
 					end
@@ -596,7 +619,7 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 	if isLocal then
 		local vf = EnsureVehicleDriveConstraints(unitPart)
 		driveVectorForce = vf
-		
+
 		unitPart.Touched:Connect(function(hitPart)
 			OnLocalVehicleTouched(hitPart)
 		end)
@@ -646,7 +669,7 @@ function BulletClientManager.OnFireAccepted(playerId: number, _fireTime: number,
 	if state == nil then
 		return
 	end
-	state.spinDampingUntil = os.clock() + SPIN_DAMPING_DURATION
+	state.spinDampingUntil = os.clock() + GameConfig.SpinDampingDuration
 	-- 开火水平推力仅由服务端沿射击反向的 Recoil 冲量提供，此处不改 targetVel
 	if playerId == localPlayerId then
 		state.spinImpulseRadPerSec += GameConfig.TurretSpinImpulseOnFireRadPerSec * state.spinDir
@@ -665,14 +688,14 @@ function BulletClientManager.OnHit(targetPlayerId: number, _fromPlayerId: number
 	state.spinDir = (math.random(0, 1) == 0) and 1 or -1
 	local sign = (math.random(0, 1) == 0) and 1 or -1
 	state.spinImpulseRadPerSec += GameConfig.TurretSpinImpulseOnHitRadPerSec * sign
-	
+
 	if targetPlayerId == localPlayerId then
 		local flatDir = Vector3.new(_hitDirection.X, 0, _hitDirection.Z)
 		if flatDir.Magnitude > 0.001 then
 			local knockbackDir = flatDir.Unit
-			state.unitPart.AssemblyLinearVelocity = knockbackDir * (UNIT_SPEED * GameConfig.BulletHitSpeedMultiplier)
-			state.targetVelX = knockbackDir.X * UNIT_SPEED
-			state.targetVelZ = knockbackDir.Z * UNIT_SPEED
+			state.unitPart.AssemblyLinearVelocity = knockbackDir * (GameConfig.UnitSpeed * GameConfig.BulletHitSpeedMultiplier)
+			state.targetVelX = knockbackDir.X * GameConfig.UnitSpeed
+			state.targetVelZ = knockbackDir.Z * GameConfig.UnitSpeed
 		end
 	end
 end
@@ -736,7 +759,7 @@ function BulletClientManager.FireShot()
 		return
 	end
 	local now: number = tick()
-	if now - lastFireTime < FIRE_COOLDOWN then
+	if now - lastFireTime < GameConfig.FireCooldown then
 		return
 	end
 	lastFireTime = now
@@ -747,8 +770,8 @@ function BulletClientManager.FireShot()
 	local localState: ClientUnitState? = unitStateMap[localPlayerId]
 	if localState ~= nil then
 		-- spinDir 由服务端 NotifyDirectionFlip 统一翻转，避免与 FireShot 本地预测双翻
-		localState.spinDampingUntil = os.clock() + SPIN_DAMPING_DURATION
-		
+		localState.spinDampingUntil = os.clock() + GameConfig.SpinDampingDuration
+
 		local unitPart = localState.unitPart
 		local muzzleAttachment: Attachment? = nil
 		if localState.model ~= nil then
@@ -757,7 +780,7 @@ function BulletClientManager.FireShot()
 				muzzleAttachment = barrel:FindFirstChild("MuzzleAttachment") :: Attachment
 			end
 		end
-		
+
 		if muzzleAttachment ~= nil then
 			spawnPos = muzzleAttachment.WorldCFrame.Position
 			local flat = Vector3.new(muzzleAttachment.WorldCFrame.LookVector.X, 0, muzzleAttachment.WorldCFrame.LookVector.Z)
@@ -774,12 +797,12 @@ function BulletClientManager.FireShot()
 		end
 	end
 	SpawnLocalVisualProjectile(spawnPos, shotDir, localPlayerId)
-	
+
 	if localState ~= nil then
 		local recoilDir = -shotDir
-		localState.unitPart.AssemblyLinearVelocity = recoilDir * (UNIT_SPEED * GameConfig.FireRecoilSpeedMultiplier)
-		localState.targetVelX = recoilDir.X * UNIT_SPEED
-		localState.targetVelZ = recoilDir.Z * UNIT_SPEED
+		localState.unitPart.AssemblyLinearVelocity = recoilDir * (GameConfig.UnitSpeed * GameConfig.FireRecoilSpeedMultiplier)
+		localState.targetVelX = recoilDir.X * GameConfig.UnitSpeed * GameConfig.FireRecoilSpeedMultiplier
+		localState.targetVelZ = recoilDir.Z * GameConfig.UnitSpeed * GameConfig.FireRecoilSpeedMultiplier
 	end
 
 	NetMsg.FireRequestFire(spawnPos, shotDir)
@@ -794,7 +817,7 @@ function BulletClientManager.GetLocalHpInfo(): (number, number)
 end
 
 function BulletClientManager.GetLocalFireCooldownLeft(): number
-	local cooldownLeft = FIRE_COOLDOWN - (tick() - lastFireTime)
+	local cooldownLeft = GameConfig.FireCooldown - (tick() - lastFireTime)
 	if cooldownLeft < 0 then
 		return 0
 	end

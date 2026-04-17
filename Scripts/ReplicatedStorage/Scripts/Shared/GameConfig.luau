@@ -167,9 +167,9 @@ GameConfig.ArenaWallProximityStuds = 1
 -- 单位在场地中的运动高度（Y轴）
 GameConfig.UnitY = 1
 -- 单位移动速度（studs/s）
-GameConfig.UnitSpeed = 40
+GameConfig.UnitSpeed = 20
 -- 水平速度上限（防止连续碰撞后速度失控）
-GameConfig.UnitMaxHorizontalSpeed = 42
+GameConfig.UnitMaxHorizontalSpeed = 60
 -- 单位自转速度（degrees/s）
 GameConfig.UnitRotationSpeed = 120
 -- 开火冷却时间（秒），防连击
@@ -180,24 +180,48 @@ GameConfig.RoundStartCountdown = 5
 GameConfig.RoundFightDuration = 120
 -- 大厅到传送倒计时
 GameConfig.MatchCountdown = 10
+-- 准备入座延迟
+GameConfig.ArenaSeatPrepareDelay = 0.22
+-- 返回大厅解座等待
+GameConfig.ReturnToLobbyWait = 0.1
+-- 入座重试参数
+GameConfig.MaxSeatRetry = 30
+GameConfig.SeatRetryInterval = 0.2
+GameConfig.MaxForceSitRetry = 20
 -- 命中次数上限（达到后死亡）
-GameConfig.MaxHits = 5
+GameConfig.MaxHits = 3
 -- 炮弹飞行速度
 GameConfig.ProjectileSpeed = 100
 -- 炮弹存在时间（秒）
 GameConfig.ProjectileLifetime = 5
+-- 炮弹步进余量 (studs)
+GameConfig.ProjectileStepMargin = 0.45
 -- 炮弹最大飞行距离 (studs)
 GameConfig.MaxProjectileDistance = 500
 -- 开火后坐力速度倍数
 GameConfig.FireRecoilSpeedMultiplier = 5
 -- 命中击退速度倍数
-GameConfig.BulletHitSpeedMultiplier = 10
+GameConfig.BulletHitSpeedMultiplier = 6
 -- 撞墙时 BaseDisk 弹性（与模板 CustomPhysicalProperties 合并时覆盖弹性项）
 GameConfig.WallBounceElasticity = 0.42
+-- 撞墙反弹冷却
+GameConfig.WallBounceCooldown = 0.22
+-- 触发反弹的进入速度阈值 (负数)
+GameConfig.WallBounceVelThreshold = -0.35
+-- 判定卡墙的最大速度
+GameConfig.WallStuckSpeedThreshold = 10
+-- 判定卡墙的角度阈值
+GameConfig.WallStuckAngleThreshold = -0.02
 -- 旋转输入衰减时间（开火旋转未结束期）
 GameConfig.SpinDampingDuration = 0.8
+-- 驱动水平力增益 单位质量的驱动水平力（牛顿）
+GameConfig.DriveHorizontalForceGain = 14
+-- 撞墙反弹速度倍数
+GameConfig.WallBounceSpeedMultiplier = 1
 -- Arena 中随机出生安全边距
 GameConfig.ArenaSpawnMargin = 8
+-- 随机出生时单位间的最小间隔（Studs）
+GameConfig.MinSpawnSeparation = 20
 -- 开火导致的镜头旋转角度（每次射击改变顺逆时针）
 GameConfig.CameraRecoilAngleRad = math.rad(720)
 -- 镜头后坐力平滑系数（越大抵达顶峰越快）
@@ -233,6 +257,25 @@ export type UnitInitInfo = {
 	spawnPosition: Vector3,
 	-- 初始生命（命中上限）
 	maxHits: number,
+}
+
+GameConfig.VisibleParameters = {
+	{ key = "UnitSpeed", alias = "单位移动速度" },
+	{ key = "UnitMaxHorizontalSpeed", alias = "水平速度上限" },
+	{ key = "UnitRotationSpeed", alias = "单位旋转速度" },
+	{ key = "MaxHits", alias = "生命值(命中上限)" },
+	{ key = "ProjectileSpeed", alias = "子弹飞行速度" },
+	{ key = "ProjectileLifetime", alias = "子弹生存时间" },
+	{ key = "FireCooldown", alias = "射击冷却时间" },
+	{ key = "WallBounceSpeedMultiplier", alias = "撞墙反弹速度倍数" },
+	{ key = "BulletHitSpeedMultiplier", alias = "命中击退速度倍数" },
+	{ key = "FireRecoilSpeedMultiplier", alias = "开火后坐力速度倍数" },
+	{ key = "DriveHorizontalForceGain", alias = "驱动水平力增益" },
+	{ key = "WallBounceCooldown", alias = "撞墙冷却时间" },
+	{ key = "MatchCountdown", alias = "备战倒计时" },
+	{ key = "RoundStartCountdown", alias = "开局倒计时" },
+	{ key = "RoundFightDuration", alias = "战斗持续时间" },
+	{ key = "ArenaSeatPrepareDelay", alias = "入场延迟" },
 }
 
 return GameConfig

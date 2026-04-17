@@ -11,6 +11,7 @@ local AnalyticsTool = require(serverScripts:FindFirstChild("AnalyticsTool"))
 local PlayerStateManager = require(serverScripts:FindFirstChild("PlayerStateManager"))
 local MatchManager = require(serverScripts:FindFirstChild("MatchManager"))
 local CombatManager = require(serverScripts:FindFirstChild("CombatManager"))
+local ConfigCommandManager = require(script:FindFirstChild("ConfigCommandManager"))
 
 local replicatedStorage: ReplicatedStorage = game:GetService("ReplicatedStorage")
 local core = replicatedStorage:WaitForChild("Core")
@@ -195,6 +196,7 @@ local function InitGameSystems()
 	PlayerStateManager.Init()
 	CombatManager.Init(MatchManager.OnPlayerDead)
 	MatchManager.Init(CombatManager.StartRound)
+	ConfigCommandManager.Init()
 	LogInfo("Init end")
 end
 

@@ -28,6 +28,7 @@ local heartbeatConnection: RBXScriptConnection? = nil
 
 local LOG_PREFIX = "[CombatManager]"
 local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
+local UNDERGROUND_Y = -100
 
 local unitInfoMap: { [number]: ServerUnitInfo } = {}
 local playerDeadCallback: OnPlayerDeadCallback? = nil
@@ -76,9 +77,33 @@ end
 
 local function GetSpawnPosition(): Vector3
 	local halfSize = GameConfig.ArenaHalfSize - GameConfig.ArenaSpawnMargin
-	local randomX = math.random() * (halfSize * 2) - halfSize
-	local randomZ = math.random() * (halfSize * 2) - halfSize
-	return Vector3.new(randomX, GameConfig.UnitY, randomZ)
+	local maxAttempts = 20
+	local bestPos = Vector3.zero
+
+	for i = 1, maxAttempts do
+		local randomX = math.random() * (halfSize * 2) - halfSize
+		local randomZ = math.random() * (halfSize * 2) - halfSize
+		local pos = Vector3.new(randomX, GameConfig.UnitY, randomZ)
+
+		local tooClose = false
+		for _, unitInfo in unitInfoMap do
+			local dist = (unitInfo.rootPart.Position * Vector3.new(1, 0, 1) - pos * Vector3.new(1, 0, 1)).Magnitude
+			if dist < GameConfig.MinSpawnSeparation then
+				tooClose = true
+				break
+			end
+		end
+
+		if not tooClose then
+			return pos
+		end
+		bestPos = pos
+		if i == maxAttempts then
+			LogInfo(string.format("GetSpawnPosition warning: could not find separated position after %d attempts", maxAttempts))
+		end
+	end
+
+	return bestPos
 end
 
 local function GetMuzzleAttachment(unitModel: Model): Attachment?
@@ -142,9 +167,10 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 		end
 	end
 	rootPart.Anchored = true
-
+ 
 	local spawnPosition = GetSpawnPosition()
-	MoveModelKeepRotation(unitModel, spawnPosition)
+	local undergroundPosition = Vector3.new(spawnPosition.X, UNDERGROUND_Y, spawnPosition.Z)
+	MoveModelKeepRotation(unitModel, undergroundPosition)
 
 	local moveAngle = GetRandomMoveAngle()
 	local spinDir = GetRandomSpinDir()
@@ -192,7 +218,7 @@ local function unseatPlayerFromOwnedVehicle(player: Player)
 	end
 end
 
-local function DestroyUnitForPlayer(playerId: number)
+function CombatManager.DestroyUnitForPlayer(playerId: number)
 	local unitInfo = unitInfoMap[playerId]
 	if unitInfo == nil then
 		LogInfo(string.format("DestroyUnit skip userId=%d reason=unit_not_found", playerId))
@@ -203,6 +229,31 @@ local function DestroyUnitForPlayer(playerId: number)
 	end
 	unitInfoMap[playerId] = nil
 	LogInfo(string.format("DestroyUnit userId=%d", playerId))
+end
+
+local function ResetUnitToUnderground(playerId: number)
+	local unitInfo = unitInfoMap[playerId]
+	if unitInfo == nil then
+		return
+	end
+	local root = unitInfo.rootPart
+	root.Anchored = true
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+
+	local pos = root.Position
+	MoveModelKeepRotation(unitInfo.unitModel, Vector3.new(pos.X, UNDERGROUND_Y, pos.Z))
+	LogInfo(string.format("ResetUnitToUnderground userId=%d", playerId))
+end
+
+function CombatManager.ResetUnitToUnderground(playerId: number)
+	ResetUnitToUnderground(playerId)
+end
+
+function CombatManager.ResetAllUnitsToUnderground()
+	for playerId in unitInfoMap do
+		ResetUnitToUnderground(playerId)
+	end
 end
 
 local function BroadcastUnitInit(unitInfo: ServerUnitInfo)
@@ -326,10 +377,14 @@ function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDire
 	NetMsg.FireNotifyFireAccepted(player.UserId, nowTime, spawnPos, shotDirection, serverTime)
 end
 
-function CombatManager.StartRound()
+function CombatManager.StartRound(participantIds: { number })
 	LogInfo("StartRound begin")
-	PlayerStateManager.ResetAllPlayerRoundInfo()
-	for playerId, unitInfo in unitInfoMap do
+	PlayerStateManager.ResetAllPlayerRoundInfo(participantIds)
+	for _, playerId in participantIds do
+		local unitInfo = unitInfoMap[playerId]
+		if unitInfo == nil then
+			continue
+		end
 		unitInfo.moveAngle = GetRandomMoveAngle()
 		unitInfo.spinDir = GetRandomSpinDir()
 		NetMsg.FireNotifyUnitInitToAll({

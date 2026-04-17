@@ -10,6 +10,7 @@ local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
 export type PlayerRoundInfo = {
 	userId: number,
 	isAlive: boolean,
+	isParticipant: boolean,
 	hitCount: number,
 	lastFireTime: number,
 }
@@ -22,6 +23,7 @@ local function CreateDefaultPlayerRoundInfo(player: Player): PlayerRoundInfo
 	return {
 		userId = player.UserId,
 		isAlive = true,
+		isParticipant = false,
 		hitCount = 0,
 		lastFireTime = DEFAULT_LAST_FIRE_TIME,
 	}
@@ -44,9 +46,18 @@ function PlayerStateManager.RemovePlayerRoundInfo(playerId: number)
 	playerRoundInfoMap[playerId] = nil
 end
 
-function PlayerStateManager.ResetAllPlayerRoundInfo()
-	for _, playerRoundInfo in playerRoundInfoMap do
-		playerRoundInfo.isAlive = true
+function PlayerStateManager.ResetAllPlayerRoundInfo(participantIds: { number }?)
+	local idMap = {}
+	if participantIds then
+		for _, id in participantIds do
+			idMap[id] = true
+		end
+	end
+
+	for playerId, playerRoundInfo in playerRoundInfoMap do
+		local isParticipant = if participantIds then (idMap[playerId] == true) else true
+		playerRoundInfo.isParticipant = isParticipant
+		playerRoundInfo.isAlive = isParticipant
 		playerRoundInfo.hitCount = 0
 		playerRoundInfo.lastFireTime = DEFAULT_LAST_FIRE_TIME
 	end
@@ -99,7 +110,7 @@ end
 function PlayerStateManager.GetAlivePlayerCount(): number
 	local aliveCount = 0
 	for _, playerRoundInfo in playerRoundInfoMap do
-		if playerRoundInfo.isAlive then
+		if playerRoundInfo.isParticipant and playerRoundInfo.isAlive then
 			aliveCount += 1
 		end
 	end
@@ -109,7 +120,7 @@ end
 function PlayerStateManager.GetAliveUserIdList(): { number }
 	local list: { number } = {}
 	for _, playerRoundInfo in playerRoundInfoMap do
-		if playerRoundInfo.isAlive then
+		if playerRoundInfo.isParticipant and playerRoundInfo.isAlive then
 			table.insert(list, playerRoundInfo.userId)
 		end
 	end

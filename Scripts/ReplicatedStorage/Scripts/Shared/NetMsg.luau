@@ -26,6 +26,8 @@ local notifyMatchStateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("No
 local notifyTeleportEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyTeleport") :: RemoteEvent
 local notifyArenaSeatPrepareEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyArenaSeatPrepare") :: RemoteEvent
 local requestHitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestHit") :: RemoteEvent
+local notifyGameConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyGameConfigSync") :: RemoteEvent
+local notifyPendingConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPendingConfigSync") :: RemoteEvent
 
 --客户端请求设置背景音乐音量
 function NetMsg.FireRequestSetBGMVolume(volume: number)
@@ -207,6 +209,22 @@ end
 
 function NetMsg.ConnectNotifyTeleport(callback: (playerId: number, targetPosition: Vector3) -> ())
 	notifyTeleportEvent.OnClientEvent:Connect(callback)
+end
+
+function NetMsg.FireNotifyGameConfigSync(overrides: { [string]: any })
+	notifyGameConfigSyncEvent:FireAllClients(overrides)
+end
+
+function NetMsg.ConnectNotifyGameConfigSync(callback: (overrides: { [string]: any }) -> ())
+	notifyGameConfigSyncEvent.OnClientEvent:Connect(callback)
+end
+
+function NetMsg.FireNotifyPendingConfigSync(overrides: { [string]: any })
+	notifyPendingConfigSyncEvent:FireAllClients(overrides)
+end
+
+function NetMsg.ConnectNotifyPendingConfigSync(callback: (overrides: { [string]: any }) -> ())
+	notifyPendingConfigSyncEvent.OnClientEvent:Connect(callback)
 end
 
 return NetMsg

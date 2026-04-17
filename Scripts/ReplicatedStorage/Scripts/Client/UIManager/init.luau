@@ -11,6 +11,7 @@ local scripts = replicatedStorage:WaitForChild("Scripts")
 local clientScripts = scripts:WaitForChild("Client")
 local BillboardManager = require(clientScripts:WaitForChild("BillboardManager"))
 local PlayerInfoUIManager = require(script:WaitForChild("PlayerInfoUIManager"))
+local ConfigUIManager = require(script:WaitForChild("ConfigUIManager"))
 local ClientMsg = require(clientScripts:FindFirstChild("ClientMsg"))
 local tweenService: TweenService = game:GetService("TweenService")
 
@@ -122,6 +123,8 @@ function UIManager.Init(gameScreenGuiNew: ScreenGui)
 	end
 	--玩家血条管理
 	PlayerInfoUIManager.Init()
+	--参数配置 UI 管理
+	ConfigUIManager.Init()
 end
 
 --非窗口方式创建界面
