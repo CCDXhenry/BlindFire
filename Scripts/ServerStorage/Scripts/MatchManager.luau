@@ -13,6 +13,7 @@ local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
 local NetMsg = require(sharedScripts:FindFirstChild("NetMsg"))
 local PlayerStateManager = require(serverScripts:WaitForChild("PlayerStateManager"))
 local ConfigManager = require(serverScripts:WaitForChild("ConfigManager"))
+local ArenaManager = require(serverScripts:WaitForChild("ArenaManager"))
 
 type OnRoundStartCallback = (participantIds: { number }) -> ()
 
@@ -50,8 +51,9 @@ local function MoveModelKeepRotation(model: Model, targetPosition: Vector3)
 end
 
 local function GetArenaSpawnPositionList(): {Vector3}
-	local arenaSpawnFolder = workspace:FindFirstChild(ARENA_SPAWN_FOLDER_NAME)
-	if arenaSpawnFolder == nil or not arenaSpawnFolder:IsA("Folder") then
+	local arenaSpawnFolder = workspace:FindFirstChild(ARENA_SPAWN_FOLDER_NAME, true)
+	if arenaSpawnFolder == nil or not arenaSpawnFolder:IsA("Instance") then
+		LogInfo("ArenaSpawnPoints folder not found recursively")
 		return {}
 	end
 	local spawnPositionList: {Vector3} = {}
@@ -64,14 +66,15 @@ local function GetArenaSpawnPositionList(): {Vector3}
 end
 
 local function GetRandomArenaPosition(excludedPositions: { Vector3 }?): Vector3
-	local halfSize = GameConfig.ArenaHalfSize - GameConfig.ArenaSpawnMargin
+	local arenaCenter, arenaSize = ArenaManager.GetArenaFloorInfo()
+	local halfSize = (arenaSize.X / 2) - GameConfig.ArenaSpawnMargin
 	local maxAttempts = 20
-	local bestPos = Vector3.new(0, GameConfig.UnitY, 0)
+	local bestPos = arenaCenter
 
 	for i = 1, maxAttempts do
-		local randomX = math.random() * (halfSize * 2) - halfSize
-		local randomZ = math.random() * (halfSize * 2) - halfSize
-		local pos = Vector3.new(randomX, GameConfig.UnitY, randomZ)
+		local randomX = (math.random() * 2 - 1) * halfSize
+		local randomZ = (math.random() * 2 - 1) * halfSize
+		local pos = arenaCenter + Vector3.new(randomX, GameConfig.UnitY - arenaCenter.Y, randomZ)
 
 		local tooClose = false
 		if excludedPositions then
@@ -194,7 +197,12 @@ local function SeatPlayerOnVehicle(player: Player, targetPosition: Vector3)
 end
 
 local function TeleportAllPlayersToArena(participantPlayers: { Player })
+	local arenaCenter, arenaSize = ArenaManager.GetArenaFloorInfo()
+	LogInfo(string.format("TeleportAllPlayersToArena: Current Arena Center=%s HalfSize=%.1f", tostring(arenaCenter), arenaSize.X/2))
+	
 	local spawnPositionList = GetArenaSpawnPositionList()
+	LogInfo(string.format("Found %d spawn points after scaling", #spawnPositionList))
+	
 	-- Shuffle the predefined spawn points to ensure variety
 	for i = #spawnPositionList, 2, -1 do
 		local j = math.random(1, i)
@@ -317,6 +325,7 @@ local function RunMatchLoop()
 		local roundParticipantPlayers = players:GetPlayers()
 		LogInfo(string.format("ArenaSeatPrepare participants=%d", #roundParticipantPlayers))
 		NetMsg.FireNotifyArenaSeatPrepare(roundParticipantPlayers)
+		ArenaManager.PrepareArena(#roundParticipantPlayers)
 		task.wait(GameConfig.ArenaSeatPrepareDelay)
 		TeleportAllPlayersToArena(roundParticipantPlayers)
 		-- 入场后只稳定一次，避免每秒 Stabilize 反复 Sit / 挪车导致角色反复「落地」
@@ -339,6 +348,7 @@ local function RunMatchLoop()
 			end
 			roundStartCallback(participantIds)
 		end
+		ArenaManager.StartShrinking(GameConfig.RoundFightDuration)
 		LogInfo(string.format("FightPhase start seconds=%d", GameConfig.RoundFightDuration))
 		-- 与 MatchCountdown / GameStartCountdown 一致：先广播再 wait，避免首秒无数字、客户端慢约 1s
 		local fightEndedEarly = false
@@ -361,6 +371,7 @@ local function RunMatchLoop()
 		local aliveUserIds: { number } = PlayerStateManager.GetAliveUserIdList()
 		NetMsg.FireNotifyRoundOutcome(endReason, aliveUserIds)
 
+		ArenaManager.ResetArena()
 		LogInfo("FightPhase ended returning players to lobby")
 		BroadcastMatchState("InLobby", 0)
 		for _, player in players:GetPlayers() do
@@ -373,6 +384,7 @@ end
 
 function MatchManager.Init(onRoundStart: OnRoundStartCallback)
 	roundStartCallback = onRoundStart
+	ArenaManager.Init()
 	if roundWorkerThread ~= nil then
 		LogInfo("Init skipped reason=already_initialized")
 		return

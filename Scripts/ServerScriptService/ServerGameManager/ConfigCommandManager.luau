@@ -45,10 +45,10 @@ end
 
 local function OnConfigCommandTriggered(originTextSource: TextSource, unfilteredText: string)
 	local userId = originTextSource.UserId
-	if not GMConfig.IsGMPlayer(userId) then
-		warn(string.format("%s Unauthorized user %d tried to use /config", LOG_PREFIX, userId))
-		return
-	end
+	--if not GMConfig.IsGMPlayer(userId) then
+	--	warn(string.format("%s Unauthorized user %d tried to use /config", LOG_PREFIX, userId))
+	--	return
+	--end
 
 	-- 解析指令格式: /config <subcommand> [key] [value]
 	local args = string.split(unfilteredText, " ")

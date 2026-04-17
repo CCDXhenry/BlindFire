@@ -56,6 +56,10 @@ local _heartbeatConnection: RBXScriptConnection? = nil
 local isInitialized: boolean = false
 local hasWarnedMissingTurretActuator: boolean = false
 
+-- 调试可视化
+local wallDebugPartMap: { [BasePart]: Part } = {}
+local isDebugVisualsEnabled: boolean = false -- 关闭调试层
+
 local function GetModelsFolder(): Folder
 	return replicatedStorage:WaitForChild("Models") :: Folder
 end
@@ -398,7 +402,7 @@ local function OnLocalVehicleTouched(hitPart: BasePart)
 	end
 
 	local now = os.clock()
-	if now - (selfState.lastVehicleBumpClock or 0) < 0.2 then
+	if now - (selfState.lastVehicleBumpClock or 0) < GameConfig.VehicleBumpCooldown then
 		return
 	end
 
@@ -410,18 +414,21 @@ local function OnLocalVehicleTouched(hitPart: BasePart)
 
 	selfState.lastVehicleBumpClock = now
 	local bumpDir = flat.Unit
-	local newSpeed = GameConfig.UnitSpeed * GameConfig.WallBounceSpeedMultiplier
+	local newSpeed = GameConfig.UnitSpeed * GameConfig.VehicleBumpSpeedMultiplier
 	selfState.unitPart.AssemblyLinearVelocity = bumpDir * newSpeed
 
 	local currentTarget = Vector3.new(selfState.targetVelX, 0, selfState.targetVelZ)
 	if currentTarget.Magnitude > 0.01 then
 		local du = currentTarget.Unit
-		local reflected = du - 2 * bumpDir:Dot(du) * bumpDir
-		local rFlat = Vector3.new(reflected.X, 0, reflected.Z)
-		if rFlat.Magnitude > 0.01 then
-			local r = rFlat.Unit * GameConfig.UnitSpeed
-			selfState.targetVelX = r.X
-			selfState.targetVelZ = r.Z
+		-- 仅在向对方移动（点积为负）时才反射目标速度，防止同向挤压时的反向“吸附”
+		if bumpDir:Dot(du) < GameConfig.VehicleBumpDotThreshold then
+			local reflected = du - 2 * bumpDir:Dot(du) * bumpDir
+			local rFlat = Vector3.new(reflected.X, 0, reflected.Z)
+			if rFlat.Magnitude > 0.01 then
+				local r = rFlat.Unit * GameConfig.UnitSpeed
+				selfState.targetVelX = r.X
+				selfState.targetVelZ = r.Z
+			end
 		end
 	end
 end
@@ -487,63 +494,211 @@ local function IsLikelyArenaWallPart(part: BasePart): boolean
 	if part.Name == "ArenaWall" then
 		return true
 	end
-	local arenaFolder = workspaceService:FindFirstChild("Arena")
-	if arenaFolder ~= nil and part:IsDescendantOf(arenaFolder) then
-		local lower = string.lower(part.Name)
-		if string.find(lower, "wall", 1, true) ~= nil then
-			return true
-		end
+	local lower = string.lower(part.Name)
+	if string.find(lower, "wall", 1, true) ~= nil then
+		return true
 	end
 	return false
 end
 
--- 与 BulletManager 轴对齐墙一致：内侧面约在 x=±ArenaHalfSize、z=±ArenaHalfSize；仅当 BaseDisk 中心距该面很近时返回法线（避免远处误触发）
-local function ComputeInwardNormalFromInnerWallProximity(pos: Vector3): Vector3?
-	local half = GameConfig.ArenaHalfSize
-	local tol = GameConfig.ArenaWallProximityStuds
-	local n = Vector3.zero
-	local dEast = half - pos.X
-	if dEast > 0 and dEast < tol then
-		n += Vector3.new(-1, 0, 0)
+local function GetArenaWalls(): { BasePart }
+	local walls = {}
+	local arena = workspaceService:FindFirstChild("Arena")
+	if arena then
+		for _, child in arena:GetDescendants() do
+			if child:IsA("BasePart") and IsLikelyArenaWallPart(child) then
+				table.insert(walls, child)
+			end
+		end
 	end
-	local dWest = pos.X + half
-	if dWest > 0 and dWest < tol then
-		n += Vector3.new(1, 0, 0)
+	return walls
+end
+
+local function GetArenaCenter(): Vector3
+	local arena = workspaceService:FindFirstChild("Arena")
+	local floor = if arena then arena:FindFirstChild("ArenaFloor", true) else nil
+	if floor and floor:IsA("BasePart") then
+		return floor.Position
 	end
-	local dNorth = half - pos.Z
-	if dNorth > 0 and dNorth < tol then
-		n += Vector3.new(0, 0, -1)
+	return Vector3.zero
+end
+
+local function UpdateWallDebugVisuals(wall: BasePart, innerFaceCFrame: CFrame, innerSize: Vector2)
+	local debugPart = wallDebugPartMap[wall]
+	if not isDebugVisualsEnabled then
+		if debugPart then
+			debugPart:Destroy()
+			wallDebugPartMap[wall] = nil
+		end
+		return
 	end
-	local dSouth = pos.Z + half
-	if dSouth > 0 and dSouth < tol then
-		n += Vector3.new(0, 0, 1)
+
+	if not debugPart then
+		debugPart = Instance.new("Part")
+		debugPart.Name = "WallBoundaryDebug"
+		debugPart.Anchored = true
+		debugPart.CanCollide = false
+		debugPart.CanTouch = false
+		debugPart.CanQuery = false
+		debugPart.Transparency = 0.5
+		debugPart.Color = Color3.fromRGB(0, 255, 0) -- 绿色显示
+		debugPart.Material = Enum.Material.ForceField
+		debugPart.Parent = workspace
+		wallDebugPartMap[wall] = debugPart
 	end
-	if n.Magnitude < 0.01 then
+
+	debugPart.Size = Vector3.new(innerSize.X, 20, 0.2)
+	debugPart.CFrame = innerFaceCFrame
+end
+
+local function GetArenaFloorPart(): BasePart?
+	local arena = workspaceService:FindFirstChild("Arena")
+	if not arena then
 		return nil
 	end
-	return n.Unit
+
+	local floor = arena:FindFirstChild("ArenaFloor", true)
+	if floor and floor:IsA("BasePart") then
+		return floor
+	end
+
+	-- Fallback to searching for anything containing "floor"
+	for _, child in arena:GetDescendants() do
+		if child:IsA("BasePart") and string.find(child.Name:lower(), "floor", 1, true) then
+			return child
+		end
+	end
+
+	return nil
+end
+
+local function GetWallInwardNormal(wall: BasePart, worldPos: Vector3): (Vector3, number, CFrame, Vector2)
+	local wallCF = wall.CFrame
+	local wallSize = wall.Size
+
+	-- 优先使用服务器预定义的局部法线，解决极小圈下的识别失效问题
+	local mainAxisAttr = wall:GetAttribute("LocalInwardNormal")
+	local mainAxis: Vector3
+
+	if typeof(mainAxisAttr) == "vector" or typeof(mainAxisAttr) == "Vector3" then
+		mainAxis = mainAxisAttr
+	else
+		-- 兜底逻辑：计算墙壁指向中心的方向
+		local arenaCenter = GetArenaCenter()
+		local toCenterLocal = wallCF:VectorToObjectSpace((arenaCenter - wall.Position).Unit)
+		if math.abs(toCenterLocal.X) > math.abs(toCenterLocal.Z) then
+			mainAxis = Vector3.new(math.sign(toCenterLocal.X), 0, 0)
+		else
+			mainAxis = Vector3.new(0, 0, math.sign(toCenterLocal.Z))
+		end
+	end
+
+	local thickness = 0
+	local extentX = wallSize.X
+
+	if mainAxis.X ~= 0 then
+		thickness = wallSize.X
+		extentX = wallSize.Z
+	else
+		thickness = wallSize.Z
+		extentX = wallSize.X
+	end
+
+	local inwardNormalWorld = wallCF:VectorToWorldSpace(mainAxis).Unit
+	local innerFaceCF = wallCF * CFrame.new(mainAxis * (thickness / 2)) * CFrame.Angles(0, if mainAxis.X ~= 0 then math.pi / 2 else 0, 0)
+
+	return inwardNormalWorld, thickness, innerFaceCF, Vector2.new(extentX, wallSize.Y)
+end
+
+-- 与 BulletManager 轴对齐墙一致：当 BaseDisk 中心距边界很近时返回向内的法线
+-- 多加一些缓冲区应对高速缩圈
+local function ComputeInwardNormalFromInnerWallProximity(worldPos: Vector3, unitRadius: number?): Vector3?
+	local walls = GetArenaWalls()
+	if #walls == 0 then
+		return nil
+	end
+
+	local radius = unitRadius or (2.5) -- 假定半径，后续动态读取
+	-- 判定距离 (tol)：在半径边缘之外的额外缓冲区
+	local tol = GameConfig.ArenaWallProximityStuds
+	local combinedNormal = Vector3.zero
+	local found = false
+
+	for _, wall in walls do
+		local inwardNormalWorld, thickness, innerFaceCF, extent = GetWallInwardNormal(wall, worldPos)
+
+		-- 计算载具中心距离内侧表面的相对深度
+		-- distToSurface = 0 (在面上), > 0 (在墙内), < 0 (在安全区)
+		local distToCenter = (worldPos - wall.Position):Dot(inwardNormalWorld)
+		local distToSurface = (thickness / 2) - distToCenter
+
+		-- 调试可视化
+		UpdateWallDebugVisuals(wall, innerFaceCF, extent)
+
+		-- 计算载具边缘的深度
+		local edgeDepth = distToSurface + radius
+
+		-- 正确的判定逻辑：
+		-- 1. 边缘深度 > -tol (载具边缘已接近或越过内表面)
+		-- 2. 边缘深度 < thickness + 10 (载具还在墙体厚度范围内，防止判定到竞技场另一侧)
+		if edgeDepth > -tol and edgeDepth < thickness + 10 then
+			combinedNormal += inwardNormalWorld
+			found = true
+		end
+	end
+
+	if not found then
+		return nil
+	end
+	return combinedNormal.Unit
 end
 
 -- 从 BaseDisk 指向场地内侧的水平单位法线：优先物理接触；否则用距内墙近距离（不依赖墙 Part 命名）
 local function ComputeAggregatedWallInwardNormal(root: BasePart): Vector3?
 	local sum = Vector3.zero
 	local count = 0
+	local pos = root.Position
+	local radius = root.Size.X / 2
+
 	for _, part in root:GetTouchingParts() do
 		if part:IsA("BasePart") and IsLikelyArenaWallPart(part) then
-			local flat = Vector3.new(root.Position.X - part.Position.X, 0, root.Position.Z - part.Position.Z)
-			if flat.Magnitude > 0.05 then
-				sum += flat.Unit
-				count += 1
-			end
+			-- 使用平面法线而不是简单的向量差，确保反弹方向正确
+			local inwardNormal = GetWallInwardNormal(part, pos)
+			sum += inwardNormal
+			count += 1
 		end
 	end
+
 	if count > 0 then
 		local agg = Vector3.new(sum.X, 0, sum.Z)
 		if agg.Magnitude > 0.05 then
 			return agg.Unit
 		end
 	end
-	return ComputeInwardNormalFromInnerWallProximity(root.Position)
+	return ComputeInwardNormalFromInnerWallProximity(pos, radius)
+end
+
+-- 解决载具重叠的被动解围逻辑 (针对 Touched 事件失效的情况)
+local function ResolveVehicleOverlaps(state: ClientUnitState, dt: number)
+	local root = state.unitPart
+	local pos = root.Position
+	local radius = GameConfig.VehicleCollisionRadius
+	
+	for playerId, otherState in unitStateMap do
+		if playerId == localPlayerId then continue end
+		if otherState.unitPart == nil or otherState.unitPart.Parent == nil then continue end
+		
+		local otherPos = otherState.unitPart.Position
+		local delta = pos - otherPos
+		local flatDelta = Vector3.new(delta.X, 0, delta.Z)
+		if flatDelta.Magnitude < radius and flatDelta.Magnitude > 0.1 then
+			local pushDir = flatDelta.Unit
+			local overlapDepth = radius - flatDelta.Magnitude
+			-- 施加一个与重叠深度成正比的排斥初速度
+			local pushVel = pushDir * (overlapDepth * GameConfig.VehicleOverlapResolutionSpeed)
+			root.AssemblyLinearVelocity += pushVel * dt * 60 -- 归一化强度
+		end
+	end
 end
 
 -- BaseDisk：水平驱动力 + 仅速度 yaw 的直立对齐（与瞄准解耦）
@@ -554,6 +709,8 @@ local function UpdateBaseDiskLocomotion(state: ClientUnitState, _dt: number, app
 	end
 
 	local root = state.unitPart
+	-- 恢复旋转逻辑：仅更新旋转部分以保持竖直且根据 spinAngleRad 自转
+	-- 同时保持当前位置，不对 Position 做任何干预以消除“异常拉力”
 	root.CFrame = CFrame.new(root.Position) * UprightGoalCFrame(state.spinAngleRad)
 
 	if not applyHorizontalDrive then
@@ -594,10 +751,11 @@ local function UpdateBaseDiskLocomotion(state: ClientUnitState, _dt: number, app
 		local now = os.clock()
 		if now - state.lastWallBounceClock >= GameConfig.WallBounceCooldown then
 			local velInto = curXZ:Dot(inward)
-			local desiredDot = 0
-			if targetDir.Magnitude >= 1e-4 then
-				desiredDot = targetDir.Unit:Dot(inward)
-			end
+			local targetDir = Vector3.new(state.targetVelX, 0, state.targetVelZ)
+			-- 安全获取目标方向，防止零向量导致 NaN
+			local targetDirUnit = if targetDir.Magnitude > 0.001 then targetDir.Unit else Vector3.zero
+			local desiredDot = targetDirUnit:Dot(inward)
+
 			local shouldBounce = (velInto < GameConfig.WallBounceVelThreshold)
 				or (curXZ.Magnitude < GameConfig.WallStuckSpeedThreshold and desiredDot < GameConfig.WallStuckAngleThreshold)
 			if shouldBounce then
@@ -620,13 +778,15 @@ local function UpdateBaseDiskLocomotion(state: ClientUnitState, _dt: number, app
 end
 
 local function UpdateLocalDrive(state: ClientUnitState, dt: number)
-	state.spinAngleRad = state.spinAngleRad + math.rad(GameConfig.UnitRotationSpeed) * dt * state.spinDir
+	-- 旋转角度已在全局循环中更新
+	
 	local drive = state.driveVectorForce
 	if drive == nil then
 		return
 	end
 
 	UpdateBaseDiskLocomotion(state, dt, true)
+	ResolveVehicleOverlaps(state, dt)
 end
 
 function BulletClientManager.Init()
@@ -638,26 +798,35 @@ function BulletClientManager.Init()
 	localPlayerId = players.LocalPlayer.UserId
 
 	local function OnHeartbeat(dt: number)
-		local localState: ClientUnitState? = unitStateMap[localPlayerId]
-		if localState == nil or not localState.isLocal then
-			return
-		end
-		if IsGameStartObservePhase() then
-			if localState.driveVectorForce ~= nil then
-				localState.driveVectorForce.Force = Vector3.zero
+		-- 全局更新所有单位的旋转和解围表现
+		for _, state in unitStateMap do
+			if state.unitPart == nil or state.unitPart.Parent == nil then
+				continue
 			end
-			ZeroHorizontalVelocity(localState.unitPart)
-			localState.unitPart.AssemblyAngularVelocity = Vector3.zero
-			localState.spinAngleRad = BaseDiskDriveYawRadFromState(localState)
-			UpdateBaseDiskLocomotion(localState, dt, false)
-			return
-		end
-		if localState.driveVectorForce ~= nil and not IsFightingDriveActive() then
-			localState.driveVectorForce.Force = Vector3.zero
-			return
-		end
-		if IsFightingDriveActive() then
-			UpdateLocalDrive(localState, dt)
+			
+			-- 只有 Fighting 阶段才持续更新自转角度
+			if matchState == "Fighting" then
+				state.spinAngleRad = (state.spinAngleRad + math.rad(GameConfig.UnitRotationSpeed) * dt * state.spinDir) % (math.pi * 2)
+			end
+			
+			-- 更新基础表现 (CFrame 旋转)
+			if state.isLocal then
+				-- 本地单位只在非观察阶段更新驱动和解围
+				if IsGameStartObservePhase() then
+					ZeroHorizontalVelocity(state.unitPart)
+					state.unitPart.AssemblyAngularVelocity = Vector3.zero
+					state.spinAngleRad = BaseDiskDriveYawRadFromState(state)
+					UpdateBaseDiskLocomotion(state, dt, false)
+				elseif IsFightingDriveActive() then
+					UpdateLocalDrive(state, dt)
+				else
+					-- 其它非战斗阶段也需要保持自转视觉效果
+					UpdateBaseDiskLocomotion(state, dt, false)
+				end
+			else
+				-- 远程单位仅更新旋转表现
+				UpdateBaseDiskLocomotion(state, dt, false)
+			end
 		end
 	end
 	_heartbeatConnection = runService.Heartbeat:Connect(OnHeartbeat)
@@ -737,6 +906,7 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 		spinImpulseRadPerSec = 0,
 		spinOffsetRad = 0,
 		lastWallBounceClock = 0,
+		lastVehicleBumpClock = 0,
 	}
 	unitStateMap[playerId] = state
 
@@ -747,7 +917,6 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 		end)
 	end
 end
-
 
 function BulletClientManager.OnDirectionFlip(playerId: number)
 	local state: ClientUnitState? = unitStateMap[playerId]

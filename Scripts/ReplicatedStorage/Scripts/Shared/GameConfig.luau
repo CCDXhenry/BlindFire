@@ -161,9 +161,15 @@ export type ClientOtherPlayerInfo = ClientOtherPlayerSyncInfo & {}
 -- ============================================================
 
 GameConfig.MinPlayerToStart = 2
--- 场地边长一半（方形场地在 XZ 平面，从 -ArenaHalfSize 到 +ArenaHalfSize）
+-- 竞技场控制
+GameConfig.ArenaBaseHalfSize = 40
+GameConfig.ArenaExtraHalfSizePerPlayer = 10
+-- 场地边长一半（初始值，由 ArenaManager 动态修改）
 GameConfig.ArenaHalfSize = 60
-GameConfig.ArenaWallProximityStuds = 1
+GameConfig.ArenaMinHalfSize = 30
+GameConfig.ArenaShrinkSpeed = 0.5
+GameConfig.ArenaShrinkStartDelay = 10
+GameConfig.ArenaWallProximityStuds = 2
 -- 单位在场地中的运动高度（Y轴）
 GameConfig.UnitY = 1
 -- 单位移动速度（studs/s）
@@ -210,6 +216,16 @@ GameConfig.BulletHitSpeedMultiplier = 6
 GameConfig.WallBounceElasticity = 0.42
 -- 撞墙反弹冷却
 GameConfig.WallBounceCooldown = 0.22
+-- 玩家碰撞反弹冷却
+GameConfig.VehicleBumpCooldown = 0.5
+-- 玩家碰撞反弹速度倍数
+GameConfig.VehicleBumpSpeedMultiplier = 1.2
+-- 玩家碰撞判定半径 (两个载具中心距离)
+GameConfig.VehicleCollisionRadius = 5.0
+-- 玩家重叠主动解围速度
+GameConfig.VehicleOverlapResolutionSpeed = 15
+-- 玩家碰撞方向判定阈值 (点积 < 此值则反射)
+GameConfig.VehicleBumpDotThreshold = -0.2
 -- 触发反弹的进入速度阈值 (负数)
 GameConfig.WallBounceVelThreshold = -0.35
 -- 判定卡墙的最大速度
@@ -282,7 +298,15 @@ GameConfig.VisibleParameters = {
 	{ key = "MatchCountdown", alias = "备战倒计时" },
 	{ key = "RoundStartCountdown", alias = "开局倒计时" },
 	{ key = "RoundFightDuration", alias = "战斗持续时间" },
+	{ key = "ArenaBaseHalfSize", alias = "竞技场基础半长" },
+	{ key = "ArenaExtraHalfSizePerPlayer", alias = "每人额外增加半长" },
+	{ key = "ArenaShrinkSpeed", alias = "缩圈速度" },
+	{ key = "ArenaMinHalfSize", alias = "最小圈半径" },
 	{ key = "InvincibilityDuration", alias = "受伤无敌时间" },
+	{ key = "VehicleBumpCooldown", alias = "载具碰撞冷却" },
+	{ key = "VehicleBumpSpeedMultiplier", alias = "载具碰撞反弹倍率" },
+	{ key = "VehicleCollisionRadius", alias = "载具碰撞半径" },
+	{ key = "VehicleOverlapResolutionSpeed", alias = "重叠解围速度" },
 }
 
 return GameConfig

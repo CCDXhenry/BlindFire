@@ -13,6 +13,7 @@ local NetMsg = require(sharedScripts:FindFirstChild("NetMsg"))
 local serverStorage: ServerStorage = game:GetService("ServerStorage")
 local serverScripts = serverStorage:WaitForChild("Scripts")
 local PlayerStateManager = require(serverScripts:FindFirstChild("PlayerStateManager"))
+local ArenaManager = require(serverScripts:FindFirstChild("ArenaManager"))
 
 type OnPlayerDeadCallback = (player: Player) -> ()
 
@@ -78,14 +79,15 @@ local function GetRandomSpinDir(): number
 end
 
 local function GetSpawnPosition(): Vector3
-	local halfSize = GameConfig.ArenaHalfSize - GameConfig.ArenaSpawnMargin
+	local arenaCenter, arenaSize = ArenaManager.GetArenaFloorInfo()
+	local halfSize = (arenaSize.X / 2) - GameConfig.ArenaSpawnMargin
 	local maxAttempts = 20
-	local bestPos = Vector3.zero
+	local bestPos = arenaCenter
 
 	for i = 1, maxAttempts do
-		local randomX = math.random() * (halfSize * 2) - halfSize
-		local randomZ = math.random() * (halfSize * 2) - halfSize
-		local pos = Vector3.new(randomX, GameConfig.UnitY, randomZ)
+		local randomX = (math.random() * 2 - 1) * halfSize
+		local randomZ = (math.random() * 2 - 1) * halfSize
+		local pos = arenaCenter + Vector3.new(randomX, GameConfig.UnitY - arenaCenter.Y, randomZ)
 
 		local tooClose = false
 		for _, unitInfo in unitInfoMap do
