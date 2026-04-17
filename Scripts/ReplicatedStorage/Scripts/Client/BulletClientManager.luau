@@ -426,7 +426,27 @@ local function OnLocalVehicleTouched(hitPart: BasePart)
 	end
 end
 
+local function UpdateInvincibilityEffect(model: Model, isInvincible: boolean)
+	local highlight = model:FindFirstChild("InvincibilityHighlight")
+	if isInvincible then
+		if not highlight then
+			highlight = Instance.new("Highlight")
+			highlight.Name = "InvincibilityHighlight"
+			highlight.FillColor = Color3.fromRGB(255, 255, 0)
+			highlight.OutlineColor = Color3.fromRGB(255, 255, 0)
+			highlight.FillTransparency = 0.5
+			highlight.Parent = model
+		end
+		highlight.Enabled = true
+	else
+		if highlight then
+			highlight.Enabled = false
+		end
+	end
+end
+
 -- BaseDisk 水平移动朝向（速度 / 目标速度），不混入瞄准角
+
 local function BaseDiskDriveYawRadFromState(state: ClientUnitState): number
 	local root = state.unitPart
 	local vel = root.AssemblyLinearVelocity
@@ -719,7 +739,15 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 		lastWallBounceClock = 0,
 	}
 	unitStateMap[playerId] = state
+
+	if unitModel ~= nil then
+		UpdateInvincibilityEffect(unitModel, unitModel:GetAttribute("IsInvincible") == true)
+		unitModel:GetAttributeChangedSignal("IsInvincible"):Connect(function()
+			UpdateInvincibilityEffect(unitModel, unitModel:GetAttribute("IsInvincible") == true)
+		end)
+	end
 end
+
 
 function BulletClientManager.OnDirectionFlip(playerId: number)
 	local state: ClientUnitState? = unitStateMap[playerId]

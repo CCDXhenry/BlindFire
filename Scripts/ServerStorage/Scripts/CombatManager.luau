@@ -22,7 +22,9 @@ type ServerUnitInfo = {
 	rootPart: BasePart,
 	spinDir: number,
 	moveAngle: number,
+	invincibleUntil: number,
 }
+
 local heartbeatConnection: RBXScriptConnection? = nil
 
 
@@ -180,7 +182,9 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 		rootPart = rootPart,
 		spinDir = spinDir,
 		moveAngle = moveAngle,
+		invincibleUntil = 0,
 	}
+
 	unitInfoMap[player.UserId] = unitInfo
 	LogInfo(string.format("CreateUnit userId=%d spawn=%s moveAngle=%d spinDir=%d", player.UserId, FormatVector3(spawnPosition), moveAngle, spinDir))
 	return unitInfo
@@ -287,12 +291,41 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 	end
 
 	local targetUnitInfo = unitInfoMap[targetPlayerId]
+	local isProtected = false
 	if targetUnitInfo ~= nil then
+		local now = os.clock()
+		if now < targetUnitInfo.invincibleUntil then
+			isProtected = true
+			LogInfo(string.format("ProjectileHit damage ignored targetId=%d reason=invincible", targetPlayerId))
+		else
+			targetUnitInfo.invincibleUntil = now + GameConfig.InvincibilityDuration
+		end
+
+
 		targetUnitInfo.spinDir = GetRandomSpinDir()
 		NetMsg.FireNotifyDirectionFlipToAll(targetPlayerId)
 	end
 
-	local hitCount, isDead = PlayerStateManager.AddPlayerHit(targetPlayerId)
+	local hitCount: number = 0
+	local isDead: boolean = false
+	if isProtected then
+		hitCount = PlayerStateManager.GetPlayerHitCount(targetPlayerId)
+		isDead = false
+	else
+		hitCount, isDead = PlayerStateManager.AddPlayerHit(targetPlayerId)
+	end
+
+	-- 仅在受到伤害且未死亡的情况下开启无敌特效
+	if not isProtected and not isDead and targetUnitInfo ~= nil then
+		targetUnitInfo.unitModel:SetAttribute("IsInvincible", true)
+		task.delay(GameConfig.InvincibilityDuration, function()
+			if targetUnitInfo.unitModel.Parent ~= nil then
+				targetUnitInfo.unitModel:SetAttribute("IsInvincible", false)
+			end
+		end)
+	end
+
+
 	LogInfo(
 		string.format(
 			"HitResolved shooterId=%d targetId=%d hitCount=%d isDead=%s direction=%s",

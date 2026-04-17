@@ -244,6 +244,8 @@ GameConfig.TurretSpinVelocityDecayPerSec = 5.5
 GameConfig.TurretSpinOffsetDecayPerSec = 2.8
 -- 底盘用速度对齐朝向时的水平速度阈值（studs/s）
 GameConfig.HullYawVelocityEpsilonStudsPerSec = 1.5
+-- 受击后无敌时间（秒）
+GameConfig.InvincibilityDuration = 2
 
 export type MatchState = "InLobby" | "MatchCountdown" | "GameStartCountdown" | "Fighting"
 
@@ -280,6 +282,7 @@ GameConfig.VisibleParameters = {
 	{ key = "MatchCountdown", alias = "备战倒计时" },
 	{ key = "RoundStartCountdown", alias = "开局倒计时" },
 	{ key = "RoundFightDuration", alias = "战斗持续时间" },
+	{ key = "InvincibilityDuration", alias = "受伤无敌时间" },
 }
 
 return GameConfig
