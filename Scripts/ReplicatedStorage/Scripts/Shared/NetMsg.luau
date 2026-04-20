@@ -14,6 +14,7 @@ local notifyPlayersOtherPlayerInfoInitEvent: RemoteEvent = remoteEventsFolder:Fi
 local notifyPlayerAcquiredGamePassEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPlayerAcquiredGamePass") :: RemoteEvent
 -- Demo 玩法
 local requestFireEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestFire") :: RemoteEvent
+local requestHitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestHit") :: RemoteEvent
 local notifyUnitInitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyUnitInit") :: RemoteEvent
 local notifyDirectionFlipEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyDirectionFlip") :: RemoteEvent
 local notifyUnitRemoveEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyUnitRemove") :: RemoteEvent
@@ -25,7 +26,6 @@ local notifyRoundOutcomeEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("
 local notifyMatchStateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyMatchState") :: RemoteEvent
 local notifyTeleportEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyTeleport") :: RemoteEvent
 local notifyArenaSeatPrepareEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyArenaSeatPrepare") :: RemoteEvent
-local requestHitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestHit") :: RemoteEvent
 local notifyGameConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyGameConfigSync") :: RemoteEvent
 local notifyPendingConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPendingConfigSync") :: RemoteEvent
 
@@ -97,12 +97,21 @@ end
 -- ============================================================
 
 --客户端请求开火
-function NetMsg.FireRequestFire(spawnPos: Vector3, shotDir: Vector3)
-	requestFireEvent:FireServer(spawnPos, shotDir)
+function NetMsg.FireRequestFire(spawnPos: Vector3, shotDir: Vector3, clientTimestamp: number, bulletId: string)
+	requestFireEvent:FireServer(spawnPos, shotDir, clientTimestamp, bulletId)
 end
 
-function NetMsg.ConnectRequestFire(callback: (player: Player, spawnPos: Vector3, shotDir: Vector3) -> ())
+function NetMsg.ConnectRequestFire(callback: (player: Player, spawnPos: Vector3, shotDir: Vector3, clientTimestamp: number, bulletId: string) -> ())
 	requestFireEvent.OnServerEvent:Connect(callback)
+end
+
+-- 客户端请求命中某个玩家
+function NetMsg.FireRequestHit(targetPlayerId: number, hitDir: Vector3, bulletId: string)
+	requestHitEvent:FireServer(targetPlayerId, hitDir, bulletId)
+end
+
+function NetMsg.ConnectRequestHit(callback: (player: Player, targetPlayerId: number, hitDir: Vector3, bulletId: string) -> ())
+	requestHitEvent.OnServerEvent:Connect(callback)
 end
 
 --通知所有客户端某玩家单位初始化信息
@@ -136,27 +145,19 @@ function NetMsg.ConnectNotifyUnitRemove(callback: (playerId: number) -> ())
 	notifyUnitRemoveEvent.OnClientEvent:Connect(callback)
 end
 
-function NetMsg.FireNotifyFireAccepted(playerId: number, fireTime: number, spawnPos: Vector3, shotDir: Vector3, serverTime: number)
-	notifyFireAcceptedEvent:FireAllClients(playerId, fireTime, spawnPos, shotDir, serverTime)
+function NetMsg.FireNotifyFireAccepted(playerId: number, fireTime: number, spawnPos: Vector3, shotDir: Vector3, serverTime: number, bulletId: string)
+	notifyFireAcceptedEvent:FireAllClients(playerId, fireTime, spawnPos, shotDir, serverTime, bulletId)
 end
 
-function NetMsg.ConnectNotifyFireAccepted(callback: (playerId: number, fireTime: number, spawnPos: Vector3, shotDir: Vector3, serverTime: number) -> ())
+function NetMsg.ConnectNotifyFireAccepted(callback: (playerId: number, fireTime: number, spawnPos: Vector3, shotDir: Vector3, serverTime: number, bulletId: string) -> ())
 	notifyFireAcceptedEvent.OnClientEvent:Connect(callback)
 end
 
-function NetMsg.FireRequestHit(targetPlayerId: number, hitDirection: Vector3)
-	requestHitEvent:FireServer(targetPlayerId, hitDirection)
+function NetMsg.FireNotifyHit(targetPlayerId: number, fromPlayerId: number, hitDirection: Vector3, hitCount: number, bulletId: string, hitPosition: Vector3)
+	notifyHitEvent:FireAllClients(targetPlayerId, fromPlayerId, hitDirection, hitCount, bulletId, hitPosition)
 end
 
-function NetMsg.ConnectRequestHit(callback: (player: Player, targetPlayerId: number, hitDirection: Vector3) -> ())
-	requestHitEvent.OnServerEvent:Connect(callback)
-end
-
-function NetMsg.FireNotifyHit(targetPlayerId: number, fromPlayerId: number, hitDirection: Vector3, hitCount: number)
-	notifyHitEvent:FireAllClients(targetPlayerId, fromPlayerId, hitDirection, hitCount)
-end
-
-function NetMsg.ConnectNotifyHit(callback: (targetPlayerId: number, fromPlayerId: number, hitDirection: Vector3, hitCount: number) -> ())
+function NetMsg.ConnectNotifyHit(callback: (targetPlayerId: number, fromPlayerId: number, hitDirection: Vector3, hitCount: number, bulletId: string, hitPosition: Vector3) -> ())
 	notifyHitEvent.OnClientEvent:Connect(callback)
 end
 

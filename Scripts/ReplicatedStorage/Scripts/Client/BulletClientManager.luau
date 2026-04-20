@@ -60,6 +60,10 @@ local hasWarnedMissingTurretActuator: boolean = false
 local wallDebugPartMap: { [BasePart]: Part } = {}
 local isDebugVisualsEnabled: boolean = false -- 关闭调试层
 
+local HttpService = game:GetService("HttpService")
+local activeVisualProjectiles: { [Model]: {ownerId: number, bulletId: string} } = {}
+setmetatable(activeVisualProjectiles, {__mode = "k"})
+
 local function GetModelsFolder(): Folder
 	return replicatedStorage:WaitForChild("Models") :: Folder
 end
@@ -93,7 +97,7 @@ local function GetPlayerIdByVehicleModelName(modelName: string): number?
 	return tonumber(userIdText)
 end
 
-local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, ownerId: number)
+local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, ownerId: number, bulletId: string)
 	local modelsFolder = GetModelsFolder()
 	local projectileTemplate = modelsFolder:FindFirstChild("ProjectileModel")
 	if projectileTemplate == nil or not projectileTemplate:IsA("Model") then
@@ -109,6 +113,8 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 		projectileModel:Destroy()
 		return
 	end
+	
+	activeVisualProjectiles[projectileModel] = {ownerId = ownerId, bulletId = bulletId}
 
 	projectileModel.PrimaryPart = projectileRoot
 	projectileRoot.CanCollide = false
@@ -149,6 +155,7 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 	local hbConn: RBXScriptConnection?
 	hbConn = runService.Heartbeat:Connect(function(dt)
 		if projectileModel.Parent == nil then
+			activeVisualProjectiles[projectileModel] = nil
 			if hbConn ~= nil then
 				hbConn:Disconnect()
 			end
@@ -156,6 +163,7 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 		end
 		dt = math.min(dt, 0.05)
 		if os.clock() - spawnTime > GameConfig.ProjectileLifetime then
+			activeVisualProjectiles[projectileModel] = nil
 			projectileModel:Destroy()
 			if hbConn ~= nil then
 				hbConn:Disconnect()
@@ -189,8 +197,19 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 					if tm ~= nil then
 						if tm.Name == "LocalProjectile" then
 							shouldPass = true
+						else
+							local testTargetId = GetPlayerIdByVehicleModelName(tm.Name)
+							if testTargetId == nil then
+								local charPlayer = players:GetPlayerFromCharacter(tm)
+								if charPlayer then testTargetId = charPlayer.UserId end
+							end
+							-- Note: Only the shooter's own client gets to instantly collide with players.
+							-- For all observers (and the victim themselves), fake bullets pass straight through players
+							-- to prevent fake visual hits. The server's NotifyHit will intercept these bullets and explode them.
+							if testTargetId ~= nil and ownerId ~= localPlayerId then
+								shouldPass = true
+							end
 						end
-						-- Anything else inside a VehicleModel or a Player Character will be registered as a valid hit (shouldPass = false)
 					end
 				end
 			end
@@ -221,11 +240,17 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 			end
 
 			if targetId ~= nil then
-				if ownerId == localPlayerId then
-					if targetId ~= localPlayerId or GameConfig.CanHitSelf then
-						NetMsg.FireRequestHit(targetId, shotDir)
-					end
-				end
+				local explosion = Instance.new("Explosion")
+				explosion.Position = hitResult.Position
+				explosion.BlastRadius = 0
+				explosion.DestroyJointRadiusPercent = 0
+				explosion.Visible = true
+				explosion.Parent = workspaceService
+				
+				-- 完全服务端权威：客户端仅播放预测爆炸，不发送 RequestHit
+				-- 等待服务端 NotifyHit 做最终确认并强制对齐
+				
+				activeVisualProjectiles[projectileModel] = nil
 				projectileModel:Destroy()
 				if hbConn ~= nil then
 					hbConn:Disconnect()
@@ -268,12 +293,41 @@ local function SpawnLocalVisualProjectile(spawnPos: Vector3, shotDir: Vector3, o
 				projectileModel:PivotTo(CFrame.lookAt(newPos, newPos + shotDir))
 				return
 			end
-
+			
+			activeVisualProjectiles[projectileModel] = nil
 			projectileModel:Destroy()
 			if hbConn ~= nil then
 				hbConn:Disconnect()
 			end
 			return
+		end
+
+		-- Magnetism / Visual Homing
+		local closestDist = GameConfig.BulletMagnetismRadius
+		local bestTargetDir = nil
+		for otherId, otherState in unitStateMap do
+			if otherId == ownerId then continue end
+			if otherState.unitPart ~= nil and otherState.unitPart.Parent ~= nil then
+				local toTarget = otherState.unitPart.Position - origin
+				local dist = toTarget.Magnitude
+				if dist < closestDist then
+					local dirToTarget = toTarget.Unit
+					local angle = math.acos(math.clamp(shotDir:Dot(dirToTarget), -1, 1))
+					if angle < GameConfig.BulletMagnetismAngleRad then
+						closestDist = dist
+						bestTargetDir = dirToTarget
+					end
+				end
+			end
+		end
+		
+		if bestTargetDir ~= nil then
+			-- Lerp shotDir towards best target
+			local newDir = shotDir:Lerp(bestTargetDir, 0.2).Unit
+			local flatNewDir = Vector3.new(newDir.X, 0, newDir.Z)
+			if flatNewDir.Magnitude > 0.01 then
+				shotDir = flatNewDir.Unit
+			end
 		end
 
 		local newPos = pivot.Position + shotDir * stepDist
@@ -933,40 +987,101 @@ function BulletClientManager.OnUnitRemove(playerId: number)
 	end
 	unitStateMap[playerId] = nil
 end
-
-function BulletClientManager.OnFireAccepted(playerId: number, _fireTime: number, spawnPos: Vector3, shotDir: Vector3, serverTime: number)
-	local state = unitStateMap[playerId]
-	if state == nil then
+function BulletClientManager.OnFireAccepted(playerId: number, fireTime: number, spawnPos: Vector3, shotDir: Vector3, serverTime: number, bulletId: string)
+	if playerId == localPlayerId then
 		return
 	end
-	state.spinDampingUntil = os.clock() + GameConfig.SpinDampingDuration
-	-- 开火水平推力仅由服务端沿射击反向的 Recoil 冲量提供，此处不改 targetVel
-	if playerId == localPlayerId then
+
+	local state = unitStateMap[playerId]
+	if state ~= nil then
+		state.spinDir = -state.spinDir
+		state.spinDampingUntil = os.clock() + GameConfig.SpinDampingDuration
 		state.spinImpulseRadPerSec += GameConfig.TurretSpinImpulseOnFireRadPerSec * state.spinDir
-	else
 		local latency = workspaceService:GetServerTimeNow() - serverTime
-		local adjustedSpawnPos = spawnPos + (shotDir * GameConfig.ProjectileSpeed * latency)
-		SpawnLocalVisualProjectile(adjustedSpawnPos, shotDir, playerId)
+		-- The expected launch time from server's perspective:
+		local expectedLaunchTime = fireTime + GameConfig.FireCastTime
+		local currentServerTime = workspaceService:GetServerTimeNow()
+		
+		if currentServerTime >= expectedLaunchTime then
+			-- Already launched, extrapolate
+			local flightTime = currentServerTime - expectedLaunchTime
+			local adjustedSpawnPos = spawnPos + (shotDir * GameConfig.ProjectileSpeed * flightTime)
+			SpawnLocalVisualProjectile(adjustedSpawnPos, shotDir, playerId, bulletId)
+		else
+			-- Not launched yet, wait the remaining time
+			task.delay(expectedLaunchTime - currentServerTime, function()
+				SpawnLocalVisualProjectile(spawnPos, shotDir, playerId, bulletId)
+			end)
+		end
 	end
 end
 
-function BulletClientManager.OnHit(targetPlayerId: number, _fromPlayerId: number, _hitDirection: Vector3, _hitCount: number)
-	local state = unitStateMap[targetPlayerId]
-	if state == nil then
+function BulletClientManager.OnHit(targetPlayerId: number, fromPlayerId: number, _hitDirection: Vector3, _hitCount: number, bulletId: string, hitPosition: Vector3)
+	local targetState = unitStateMap[targetPlayerId]
+	if targetState == nil then
 		return
 	end
-	state.spinDir = (math.random(0, 1) == 0) and 1 or -1
+	targetState.spinDir = (math.random(0, 1) == 0) and 1 or -1
 	local sign = (math.random(0, 1) == 0) and 1 or -1
-	state.spinImpulseRadPerSec += GameConfig.TurretSpinImpulseOnHitRadPerSec * sign
+	targetState.spinImpulseRadPerSec += GameConfig.TurretSpinImpulseOnHitRadPerSec * sign
 
 	if targetPlayerId == localPlayerId then
 		local flatDir = Vector3.new(_hitDirection.X, 0, _hitDirection.Z)
 		if flatDir.Magnitude > 0.001 then
 			local knockbackDir = flatDir.Unit
-			state.unitPart.AssemblyLinearVelocity = knockbackDir * (GameConfig.UnitSpeed * GameConfig.BulletHitSpeedMultiplier)
-			state.targetVelX = knockbackDir.X * GameConfig.UnitSpeed
-			state.targetVelZ = knockbackDir.Z * GameConfig.UnitSpeed
+			targetState.unitPart.AssemblyLinearVelocity = knockbackDir * (GameConfig.UnitSpeed * GameConfig.BulletHitSpeedMultiplier)
+			targetState.targetVelX = knockbackDir.X * GameConfig.UnitSpeed
+			targetState.targetVelZ = knockbackDir.Z * GameConfig.UnitSpeed
 		end
+	end
+	
+	-- Destroy the matching visual projectile
+	local targetProj = nil
+	for projModel, info in activeVisualProjectiles do
+		if info.bulletId == bulletId then
+			targetProj = projModel
+			break
+		end
+	end
+	
+	-- Fallback to distance based only if bulletId is unknown (rare)
+	if targetProj == nil and (bulletId == "" or bulletId == nil) then
+		local bestDist = math.huge
+		for projModel, info in activeVisualProjectiles do
+			if info.ownerId == fromPlayerId then
+				local dist = (projModel:GetPivot().Position - targetState.unitPart.Position).Magnitude
+				if dist < bestDist then
+					bestDist = dist
+					targetProj = projModel
+				end
+			end
+		end
+	end
+	
+	local finalExplosionPos = hitPosition
+	-- If I am the victim, the hit should always feel like it hit MY vehicle precisely
+	if targetPlayerId == localPlayerId and targetState.unitPart ~= nil then
+		finalExplosionPos = targetState.unitPart.Position
+	end
+	
+	if targetProj ~= nil then
+		local explosion = Instance.new("Explosion")
+		explosion.Position = finalExplosionPos
+		explosion.BlastRadius = 0
+		explosion.DestroyJointRadiusPercent = 0
+		explosion.Visible = true
+		explosion.Parent = workspaceService
+		
+		activeVisualProjectiles[targetProj] = nil
+		targetProj:Destroy()
+	else
+		-- If bullet already exploded or was never there, still show an explosion at the target's current position to signify a hit
+		local explosion = Instance.new("Explosion")
+		explosion.Position = finalExplosionPos
+		explosion.BlastRadius = 0
+		explosion.DestroyJointRadiusPercent = 0
+		explosion.Visible = true
+		explosion.Parent = workspaceService
 	end
 end
 
@@ -1111,16 +1226,20 @@ function BulletClientManager.FireShot()
 			end
 		end
 	end
-	SpawnLocalVisualProjectile(spawnPos, shotDir, localPlayerId)
-
 	if localState ~= nil then
 		local recoilDir = -shotDir
 		localState.unitPart.AssemblyLinearVelocity = recoilDir * (GameConfig.UnitSpeed * GameConfig.FireRecoilSpeedMultiplier)
 		localState.targetVelX = recoilDir.X * GameConfig.UnitSpeed * GameConfig.FireRecoilSpeedMultiplier
 		localState.targetVelZ = recoilDir.Z * GameConfig.UnitSpeed * GameConfig.FireRecoilSpeedMultiplier
+		localState.spinImpulseRadPerSec += GameConfig.TurretSpinImpulseOnFireRadPerSec * localState.spinDir
 	end
 
-	NetMsg.FireRequestFire(spawnPos, shotDir)
+	local bulletId = HttpService:GenerateGUID(false)
+	NetMsg.FireRequestFire(spawnPos, shotDir, workspaceService:GetServerTimeNow(), bulletId)
+	
+	task.delay(GameConfig.FireCastTime, function()
+		SpawnLocalVisualProjectile(spawnPos, shotDir, localPlayerId, bulletId)
+	end)
 end
 
 function BulletClientManager.GetLocalHpInfo(): (number, number)

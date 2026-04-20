@@ -210,6 +210,19 @@ GameConfig.MaxProjectileDistance = 500
 GameConfig.ProjectileMaxBounces = 1
 -- 开火后坐力速度倍数
 GameConfig.FireRecoilSpeedMultiplier = 5
+-- 开火前摇时长（秒）
+GameConfig.FireCastTime = 0.2
+-- 假子弹视觉追踪触发半径
+GameConfig.BulletMagnetismRadius = 15
+-- 假子弹视觉追踪最大视锥角度（弧度）
+GameConfig.BulletMagnetismAngleRad = math.rad(10)
+
+-- 服务端权威模式参数（OnRequestFire 中用于估算子弹发射时刻的延迟窗口）
+GameConfig.HitValidationClientTimestampMinDelta = -0.2
+GameConfig.HitValidationClientTimestampMaxDelta = 0.6
+-- 磁力寻迹早退半径倍数（超过 BulletMagnetismRadius 的此倍数则跳过该目标）
+GameConfig.BulletMagnetismEarlyExitMultiplier = 2.0
+
 -- 自己的子弹是否可以命中自己
 GameConfig.CanHitSelf = true
 -- 命中击退速度倍数
@@ -300,6 +313,7 @@ GameConfig.VisibleParameters = {
 	{ key = "MatchCountdown", alias = "备战倒计时" },
 	{ key = "RoundStartCountdown", alias = "开局倒计时" },
 	{ key = "RoundFightDuration", alias = "战斗持续时间" },
+	{ key = "FireCastTime", alias = "开火前摇" },
 	{ key = "ArenaBaseHalfSize", alias = "竞技场基础半长" },
 	{ key = "ArenaExtraHalfSizePerPlayer", alias = "每人额外增加半长" },
 	{ key = "ArenaShrinkSpeed", alias = "基础缩圈速度" },

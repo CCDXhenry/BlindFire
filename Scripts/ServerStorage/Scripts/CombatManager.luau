@@ -26,7 +26,18 @@ type ServerUnitInfo = {
 	invincibleUntil: number,
 }
 
+type ServerBullet = {
+	shooterId: number,
+	spawnPos: Vector3,
+	shotDir: Vector3,
+	activeTime: number,
+	bouncesLeft: number,
+	currentPos: Vector3,
+	estimatedRtt: number,
+}
+
 local heartbeatConnection: RBXScriptConnection? = nil
+local activeServerBullets: {[string]: ServerBullet} = {}
 
 
 local LOG_PREFIX = "[CombatManager]"
@@ -283,8 +294,13 @@ local function BroadcastUnitInit(unitInfo: ServerUnitInfo)
 	)
 end
 
+local function GetProjectileRadius(): number
+	-- Defaulting to 1.5, matching client
+	return 1.5
+end
 
-local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, hitDirection: Vector3)
+
+local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, hitDirection: Vector3, bulletId: string, hitPosition: Vector3)
 	hitDirection = ToHorizontalDirection(hitDirection)
 
 	if targetPlayerId == shooterId and not GameConfig.CanHitSelf then
@@ -338,7 +354,7 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 			FormatVector3(hitDirection)
 		)
 	)
-	NetMsg.FireNotifyHit(targetPlayerId, shooterId, hitDirection, hitCount)
+	NetMsg.FireNotifyHit(targetPlayerId, shooterId, hitDirection, hitCount, bulletId, hitPosition)
 	NetMsg.FireNotifyHpChanged(targetPlayerId, hitCount, GameConfig.MaxHits)
 	if isDead then
 		NetMsg.FireNotifyDead(targetPlayerId)
@@ -352,25 +368,170 @@ end
 
 
 
+function CombatManager.OnHeartbeat(dt: number)
+	local currentServerTime = workspace:GetServerTimeNow()
+	
+	for bulletId, bullet in activeServerBullets do
+		if currentServerTime < bullet.activeTime then
+			continue
+		end
+		
+		if (currentServerTime - bullet.activeTime) > GameConfig.ProjectileLifetime then
+			activeServerBullets[bulletId] = nil
+			continue
+		end
+		
+		local stepDist = GameConfig.ProjectileSpeed * dt
+		local origin = bullet.currentPos
+		local shotDir = bullet.shotDir
+		local remaining = stepDist + GameConfig.ProjectileStepMargin
+		
+		local rayParams = RaycastParams.new()
+		rayParams.FilterType = Enum.RaycastFilterType.Exclude
+		local excludeList: {Instance} = {}
+		
+		local shooterUnitInfo = unitInfoMap[bullet.shooterId]
+		if shooterUnitInfo and shooterUnitInfo.unitModel then
+			table.insert(excludeList, shooterUnitInfo.unitModel)
+		end
+		local shooterPlayer = players:GetPlayerByUserId(bullet.shooterId)
+		if shooterPlayer and shooterPlayer.Character then
+			table.insert(excludeList, shooterPlayer.Character)
+		end
+		
+		-- Allow hitting self if configured and bounces ran out (simulating that the bullet already bounced so self is exposed)
+		-- Or if not configured, we keep self in exclude list.
+		if GameConfig.CanHitSelf and bullet.bouncesLeft < (GameConfig.ProjectileMaxBounces or 0) then
+			-- It bounced at least once, can hit self, so don't exclude self.
+			excludeList = {}
+		end
+		
+		rayParams.FilterDescendantsInstances = excludeList
+		
+		-- Server Magnetism / Homing (Identical to client visual magnetism)
+		local closestDist = GameConfig.BulletMagnetismRadius
+		local bestTargetDir = nil
+		local magnetismEarlyExitRadius = GameConfig.BulletMagnetismRadius * (GameConfig.BulletMagnetismEarlyExitMultiplier or 2.0)
+		for otherId, otherState in unitInfoMap do
+			if otherId == bullet.shooterId then continue end
+			if otherState.rootPart ~= nil and otherState.rootPart.Parent ~= nil then
+				local toTarget = otherState.rootPart.Position - origin
+				local dist = toTarget.Magnitude
+				-- 早退：远超可磁吸范围的目标跳过，避免每帧无效计算平方根
+				if dist > magnetismEarlyExitRadius then continue end
+				if dist < closestDist then
+					local dirToTarget = toTarget.Unit
+					local angle = math.acos(math.clamp(shotDir:Dot(dirToTarget), -1, 1))
+					if angle < GameConfig.BulletMagnetismAngleRad then
+						closestDist = dist
+						bestTargetDir = dirToTarget
+					end
+				end
+			end
+		end
+		
+		if bestTargetDir ~= nil then
+			local newDir = shotDir:Lerp(bestTargetDir, 0.2).Unit
+			local flatNewDir = Vector3.new(newDir.X, 0, newDir.Z)
+			if flatNewDir.Magnitude > 0.01 then
+				shotDir = flatNewDir.Unit
+				bullet.shotDir = shotDir
+			end
+		end
+		
+		local hitResult: RaycastResult? = nil
+		-- Added a slight 1.25 multiplier to serve as ping/lag compensation leeway
+		local radius = GetProjectileRadius() * 1.25
+
+		for _ = 1, 10 do
+			if remaining < 1e-4 then break end
+			local res = workspace:Spherecast(origin, radius, shotDir * remaining, rayParams)
+			if res == nil then break end
+			
+			local inst = res.Instance
+			local shouldPass = false
+			if inst:IsA("BasePart") then
+				if inst.Name == "ArenaFloor" then
+					shouldPass = true
+				else
+					local tm = inst:FindFirstAncestorOfClass("Model")
+					if tm ~= nil and tm.Name == "LocalProjectile" then
+						shouldPass = true
+					end
+				end
+			end
+			
+			if shouldPass then
+				table.insert(excludeList, inst)
+				rayParams.FilterDescendantsInstances = excludeList
+				continue
+			end
+			hitResult = res
+			break
+		end
+		
+		if hitResult ~= nil then
+			local inst = hitResult.Instance
+			local targetId: number? = nil
+			local tm = inst:FindFirstAncestorOfClass("Model")
+			if tm ~= nil then
+				targetId = GetPlayerIdByVehicleModelName(tm.Name)
+				if targetId == nil then
+					local charPlayer = players:GetPlayerFromCharacter(tm)
+					if charPlayer then targetId = charPlayer.UserId end
+				end
+			end
+			
+			if targetId ~= nil then
+				if targetId ~= bullet.shooterId or GameConfig.CanHitSelf then
+					ResolveProjectileHit(bullet.shooterId, targetId, shotDir, bulletId, hitResult.Position)
+				end
+				activeServerBullets[bulletId] = nil
+				continue
+			end
+			
+			if bullet.bouncesLeft > 0 then
+				bullet.bouncesLeft -= 1
+				
+				local n = hitResult.Normal
+				local nFlat = Vector3.new(n.X, 0, n.Z)
+				if nFlat.Magnitude > 0.01 then nFlat = nFlat.Unit else nFlat = -shotDir end
+				local impactCenter = origin + shotDir * hitResult.Distance
+				
+				shotDir = shotDir - 2 * shotDir:Dot(nFlat) * nFlat
+				local flatDir = Vector3.new(shotDir.X, 0, shotDir.Z)
+				if flatDir.Magnitude > 0.01 then shotDir = flatDir.Unit end
+				
+				bullet.shotDir = shotDir
+				-- 反弹后继续对剩余路径做子步骤检测，防止高速子弹穿模
+				local distanceRemaining = math.max(0, stepDist - hitResult.Distance)
+				origin = impactCenter
+				remaining = distanceRemaining
+				bullet.currentPos = impactCenter
+				continue
+			end
+			
+			activeServerBullets[bulletId] = nil
+			continue
+		end
+		
+		bullet.currentPos = origin + shotDir * stepDist
+	end
+end
+
 function CombatManager.Init(onPlayerDead: OnPlayerDeadCallback)
 	playerDeadCallback = onPlayerDead
 	NetMsg.ConnectRequestFire(CombatManager.OnRequestFire)
-	NetMsg.ConnectRequestHit(CombatManager.OnRequestHit)
-	LogInfo("Init success")
-end
-
-function CombatManager.OnRequestHit(player: Player, targetPlayerId: number, hitDirection: Vector3)
-	local shooterId = player.UserId
+	-- 完全服务端权威模式：不再监听 RequestHit，所有命中由 OnHeartbeat 物理轨迹决定
 	
-	-- 检测发射者是否已被登记、是否存活（简单的安全校验）
-	local shooterUnit = unitInfoMap[shooterId]
-	if shooterUnit == nil then
-		LogInfo(string.format("HitRejected shooterId=%d targetId=%d reason=shooter_not_found", shooterId, targetPlayerId))
-		return
+	if heartbeatConnection == nil then
+		heartbeatConnection = runService.Heartbeat:Connect(CombatManager.OnHeartbeat)
 	end
 	
-	ResolveProjectileHit(shooterId, targetPlayerId, hitDirection)
+	LogInfo("Init success [server-authoritative mode]")
 end
+
+-- OnRequestHit 已在服务端权威模式下移除；命中判定完全由 OnHeartbeat 物理轨迹负责
 
 function CombatManager.OnPlayerAdded(player: Player)
 	PlayerStateManager.EnsurePlayerRoundInfo(player)
@@ -402,7 +563,7 @@ function CombatManager.OnPlayerRemoving(player: Player)
 	NetMsg.FireNotifyUnitRemoveToAll(player.UserId)
 end
 
-function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDirection: Vector3)
+function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDirection: Vector3, clientTimestamp: number, bulletId: string)
 	-- Normalize and ensure height is roughly correct to prevent weird angle exploits, or trust the client for now
 	shotDirection = ToHorizontalDirection(shotDirection)
 	local nowTime = os.clock()
@@ -411,16 +572,46 @@ function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDire
 		LogInfo(string.format("FireRejected userId=%d reason=cooldown_or_dead now=%.2f", player.UserId, nowTime))
 		return
 	end
+	
+	local count = 0
+	for _, b in activeServerBullets do
+		if b.shooterId == player.UserId then count += 1 end
+	end
+	if count >= 3 then
+		LogInfo(string.format("FireRejected userId=%d reason=bullet_spam_limit", player.UserId))
+		return
+	end
+	
 	PlayerStateManager.SetLastFireTime(player.UserId, nowTime)
 
 	local unitInfo = unitInfoMap[player.UserId]
 	if unitInfo ~= nil then
 		unitInfo.spinDir = -unitInfo.spinDir
+		local flatSpawn = Vector3.new(spawnPos.X, 0, spawnPos.Z)
+		local flatUnit = Vector3.new(unitInfo.rootPart.Position.X, 0, unitInfo.rootPart.Position.Z)
+		if (flatSpawn - flatUnit).Magnitude > 20 then
+			LogInfo(string.format("FireRejected userId=%d reason=spawn_too_far", player.UserId))
+			return
+		end
 	end
-	LogInfo(string.format("FireAccepted userId=%d fireTime=%.2f", player.UserId, nowTime))
-	NetMsg.FireNotifyDirectionFlipToAll(player.UserId)
+	
 	local serverTime = workspace:GetServerTimeNow()
-	NetMsg.FireNotifyFireAccepted(player.UserId, nowTime, spawnPos, shotDirection, serverTime)
+	local estimatedRtt = math.clamp(serverTime - clientTimestamp, GameConfig.HitValidationClientTimestampMinDelta or -0.2, GameConfig.HitValidationClientTimestampMaxDelta or 0.6)
+	local bulletLaunchTime = clientTimestamp + GameConfig.FireCastTime
+	
+	activeServerBullets[bulletId] = {
+		shooterId = player.UserId,
+		spawnPos = spawnPos,
+		shotDir = shotDirection,
+		activeTime = bulletLaunchTime,
+		bouncesLeft = GameConfig.ProjectileMaxBounces or 0,
+		currentPos = spawnPos,
+		estimatedRtt = math.max(0, estimatedRtt),
+	}
+	
+	LogInfo(string.format("FireAccepted userId=%d bulletId=%s", player.UserId, bulletId))
+	NetMsg.FireNotifyDirectionFlipToAll(player.UserId)
+	NetMsg.FireNotifyFireAccepted(player.UserId, clientTimestamp, spawnPos, shotDirection, serverTime, bulletId)
 end
 
 function CombatManager.StartRound(participantIds: { number })
