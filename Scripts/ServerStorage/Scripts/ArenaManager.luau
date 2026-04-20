@@ -7,6 +7,7 @@ local runService = game:GetService("RunService")
 local scripts = replicatedStorage:WaitForChild("Scripts")
 local sharedScripts = scripts:WaitForChild("Shared")
 local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
+local PlayerStateManager = require(script.Parent:FindFirstChild("PlayerStateManager"))
 
 local LOG_PREFIX = "[ArenaManager]"
 local ARENA_MODEL_NAME = "Arena"
@@ -104,10 +105,26 @@ function ArenaManager.PrepareArena(playerCount: number)
 	ArenaManager.SetArenaHalfSize(initialHalfSize)
 end
 
+local function CalculateDynamicShrinkSpeed(initialCount: number, currentCount: number, currentSize: number): number
+	local baseSpeed = GameConfig.ArenaShrinkSpeed
+	
+	-- 人数越少，速度快：(初始人数 / 当前人数)
+	local peopleRatio = if currentCount > 0 then (initialCount / currentCount) else 1
+	local peopleFactor = math.pow(peopleRatio, GameConfig.ArenaShrinkPeoplePower)
+	
+	-- 半径越大，速度快：(当前半径 / 最小半径)
+	local minSize = GameConfig.ArenaMinHalfSize
+	local sizeRatio = if minSize > 0 then (currentSize / minSize) else 1
+	local sizeFactor = math.pow(sizeRatio, GameConfig.ArenaShrinkSizePower)
+	
+	return baseSpeed * peopleFactor * sizeFactor
+end
+
 function ArenaManager.StartShrinking(maxDuration: number)
 	ArenaManager.StopShrinking()
 	
 	shrinkThread = task.spawn(function()
+		local initialCount = PlayerStateManager.GetAlivePlayerCount()
 		local startTime = os.clock()
 		local durationSoFar = 0
 		
@@ -116,7 +133,14 @@ function ArenaManager.StartShrinking(maxDuration: number)
 			durationSoFar = os.clock() - startTime
 			
 			if durationSoFar > GameConfig.ArenaShrinkStartDelay then
-				local shrinkStep = GameConfig.ArenaShrinkSpeed * dt
+				local aliveCount = PlayerStateManager.GetAlivePlayerCount()
+				local currentSpeed = CalculateDynamicShrinkSpeed(initialCount, aliveCount, currentHalfSize)
+				
+				if math.floor(durationSoFar) % 5 == 0 and dt > 0 then
+					LogInfo(string.format("Shrinking: Speed=%.2f, Alive=%d/%d, Size=%.1f", currentSpeed, aliveCount, initialCount, currentHalfSize))
+				end
+				
+				local shrinkStep = currentSpeed * dt
 				local newSize = math.max(GameConfig.ArenaMinHalfSize, currentHalfSize - shrinkStep)
 				if newSize ~= currentHalfSize then
 					ArenaManager.SetArenaHalfSize(newSize)

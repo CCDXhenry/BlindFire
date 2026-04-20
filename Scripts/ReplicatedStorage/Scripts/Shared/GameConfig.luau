@@ -168,6 +168,8 @@ GameConfig.ArenaExtraHalfSizePerPlayer = 10
 GameConfig.ArenaHalfSize = 60
 GameConfig.ArenaMinHalfSize = 30
 GameConfig.ArenaShrinkSpeed = 1
+GameConfig.ArenaShrinkPeoplePower = 1
+GameConfig.ArenaShrinkSizePower = 0.5
 GameConfig.ArenaShrinkStartDelay = 10
 GameConfig.ArenaWallProximityStuds = 2
 -- 单位在场地中的运动高度（Y轴）
@@ -300,7 +302,9 @@ GameConfig.VisibleParameters = {
 	{ key = "RoundFightDuration", alias = "战斗持续时间" },
 	{ key = "ArenaBaseHalfSize", alias = "竞技场基础半长" },
 	{ key = "ArenaExtraHalfSizePerPlayer", alias = "每人额外增加半长" },
-	{ key = "ArenaShrinkSpeed", alias = "缩圈速度" },
+	{ key = "ArenaShrinkSpeed", alias = "基础缩圈速度" },
+	{ key = "ArenaShrinkPeoplePower", alias = "人数速度权重" },
+	{ key = "ArenaShrinkSizePower", alias = "半径速度权重" },
 	{ key = "ArenaMinHalfSize", alias = "最小圈半径" },
 	{ key = "InvincibilityDuration", alias = "受伤无敌时间" },
 	{ key = "VehicleBumpCooldown", alias = "载具碰撞冷却" },
