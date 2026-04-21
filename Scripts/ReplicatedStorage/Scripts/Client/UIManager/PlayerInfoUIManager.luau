@@ -9,7 +9,8 @@ local clientScripts = scripts:WaitForChild("Client")
 local NetMsg = require(sharedScripts:WaitForChild("NetMsg"))
 local GameConfig = require(sharedScripts:WaitForChild("GameConfig"))
 local BillboardManager = require(clientScripts:WaitForChild("BillboardManager"))
-local PlayerInfoUI_Template = require(replicatedStorage:WaitForChild("UI"):WaitForChild("PlayerInfoUI"))
+
+local playerInfoUITemplate = replicatedStorage:WaitForChild("UI"):WaitForChild("PlayerInfoUI") :: BillboardGui
 
 local PlayerInfoUIManager = {}
 
@@ -48,9 +49,9 @@ local function UpdateHpUI(playerId: number, hitCount: number, maxHits: number)
 	if scaleFrame then
 		scaleFrame.Size = UDim2.new(ratio, 0, 1, 0)
 		-- Optional: Change color based on HP
-		if ratio > 0.6 then
+		if ratio > 0.67 then
 			scaleFrame.BackgroundColor3 = Color3.fromRGB(0, 255, 100)
-		elseif ratio > 0.3 then
+		elseif ratio > 0.34 then
 			scaleFrame.BackgroundColor3 = Color3.fromRGB(255, 200, 0)
 		else
 			scaleFrame.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
@@ -80,7 +81,7 @@ local function CreateUIForPlayer(playerId: number)
 	-- But usually we mount to the head or the vehicle. 
 	-- Given "挂载到每个玩家身上", head is the standard choice.
 	
-	local ui = PlayerInfoUI_Template.Create()
+	local ui = playerInfoUITemplate:Clone()
 	ui.Parent = replicatedStorage -- Just a holder until we can adonree
 	
 	if player then

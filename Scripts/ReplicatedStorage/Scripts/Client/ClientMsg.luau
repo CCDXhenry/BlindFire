@@ -14,6 +14,8 @@ local localPlayerAcquiredGamePassEvent: BindableEvent = bindableEventsFolder:Fin
 local showTopTipTextEvent: BindableEvent = bindableEventsFolder:FindFirstChild("ShowTopTipText") :: BindableEvent
 local showGameTipEvent: BindableEvent = bindableEventsFolder:FindFirstChild("ShowGameTip") :: BindableEvent
 local showAddRewardsTipEvent: BindableEvent = bindableEventsFolder:FindFirstChild("ShowAddRewardsTip") :: BindableEvent
+local localPlayerCurrencyUpdateEvent: BindableEvent = bindableEventsFolder:FindFirstChild("LocalPlayerCurrencyUpdate") :: BindableEvent
+local currentGuideTypeChangedEvent: BindableEvent = bindableEventsFolder:FindFirstChild("CurrentGuideTypeChanged") :: BindableEvent
 --关闭窗口事件
 function ClientMsg.FireCloseWindow(windowName: string)
 	closeWindowEvent:Fire(windowName)
@@ -77,4 +79,23 @@ end
 function ClientMsg.ConnectShowTopTipText(callback: (textSource: string, color: Color3, duration: number, args: {string}?, key: string?) -> ())
 	showTopTipTextEvent.Event:Connect(callback)
 end
+
+--本地玩家货币更新事件
+function ClientMsg.FireLocalPlayerCurrencyUpdate()
+	localPlayerCurrencyUpdateEvent:Fire()
+end
+
+function ClientMsg.ConnectLocalPlayerCurrencyUpdate(callback: () -> ())
+	localPlayerCurrencyUpdateEvent.Event:Connect(callback)
+end
+
+--当前指引类型改变事件
+function ClientMsg.FireCurrentGuideTypeChanged()
+	currentGuideTypeChangedEvent:Fire()
+end
+
+function ClientMsg.ConnectCurrentGuideTypeChanged(callback: () -> ())
+	currentGuideTypeChangedEvent.Event:Connect(callback)
+end
+
 return ClientMsg

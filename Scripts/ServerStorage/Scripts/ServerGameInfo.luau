@@ -35,6 +35,8 @@ function ServerGameInfo.InitPlayerInfo(player: Player, playerSaveInfo: GameConfi
 		lastOnlineDate = DateTimeExtension.GetDate(DateTime.fromUnixTimestamp(playerSaveInfo.lastOnlineDateUTC)),
 		ownedGamePassMap = {},
 		playerConfigInfo = playerConfigInfo,
+		currencies = playerSaveInfo.currencies or {},
+		currentGuideType = GameConfig.GuideType.None,
 	}
 	for ownedGamePassIndex: number, ownedGamePassId: number in playerInfo.ownedGamePassList do
 		playerInfo.ownedGamePassMap[ownedGamePassId] = true
@@ -44,6 +46,7 @@ function ServerGameInfo.InitPlayerInfo(player: Player, playerSaveInfo: GameConfi
 	local clientLocalPlayerSaveInfo: GameConfig.ClientLocalPlayerSaveInfo = {
 		settingInfo = playerInfo.settingInfo,
 		ownedGamePassList = playerInfo.ownedGamePassList,
+		currencies = playerInfo.currencies,
 	}
 	local clientOtherPlayerSaveInfo: GameConfig.ClientOtherPlayerSyncInfo = {
 		
@@ -88,6 +91,7 @@ function ServerGameInfo.CreatePlayerSaveInfoByPlayerInfo(playerInfo: GameConfig.
 		lastOnlineDate = playerInfo.lastOnlineDate,
 		ownedGamePassList = playerInfo.ownedGamePassList,
 		settingInfo = playerInfo.settingInfo,
+		currencies = playerInfo.currencies,
 	}
 end
 
@@ -123,6 +127,27 @@ function ServerGameInfo.SetPlayerGamePassAcquired(player: Player, gamePassId: nu
 	playerInfo.ownedGamePassMap[gamePassId] = true
 	playerInfo.playerInfoChanged = true
 	NetMsg.FireNotifyPlayerAcquiredGamePass(player, gamePassId)
+end
+
+--更新玩家货币
+function ServerGameInfo.UpdatePlayerCurrency(player: Player, currencyType: number, changeAmount: number, reason: number)
+	local playerInfo: GameConfig.PlayerInfo = playerInfoMap[player.UserId]
+	if playerInfo == nil then
+		return
+	end
+
+	local currencyKey: string = tostring(currencyType)
+	local currentAmount: number = playerInfo.currencies[currencyKey] or 0
+	local totalAmount: number = currentAmount + changeAmount
+	if totalAmount < 0 then
+		totalAmount = 0
+	end
+
+	playerInfo.currencies[currencyKey] = totalAmount
+	playerInfo.playerInfoChanged = true
+
+	--通知客户端
+	NetMsg.FireNotifyPlayerCurrencyUpdate(player, currencyType, totalAmount, changeAmount, reason)
 end
 
 return ServerGameInfo

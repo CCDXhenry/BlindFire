@@ -56,6 +56,28 @@ GameConfig.CurrencyType = {
 	Coin = 1, --金币
 }
 
+--物品数量改变原因
+GameConfig.ItemCountChangeReason = {
+	--获得
+	GainFromGMCommand = 1001, --GM命令获得
+	GainFromPurchase = 1002, --内购获得
+	GainFromBattle = 1003, --战斗获得
+	GainFromHit = 1004, --击中获得
+	GainFromKill = 1005, --击杀获得
+	--消耗
+	SpendOnUpgrade = 2001, --升级消耗
+}
+
+-- 指引类型
+GameConfig.GuideType = {
+	None = 0,
+	TutorialBasic = 1,
+}
+
+GameConfig.GuideTextKeyMap = {
+	[GameConfig.GuideType.TutorialBasic] = "GuideTutorialBasic",
+}
+
 GameConfig.CoinIconImage = "rbxassetid://138756794615498"
 
 --通行证id
@@ -92,6 +114,8 @@ export type PlayerSaveInfo = {
 	settingInfo: SettingInfo,
 	--已拥有的通行证列表
 	ownedGamePassList: { number },
+	--货币信息
+	currencies: { [string]: number },
 }
 export type PlayerInfo = PlayerSaveInfo & {
 	--玩家信息是否发生变化
@@ -106,6 +130,8 @@ export type PlayerInfo = PlayerSaveInfo & {
 	ownedGamePassMap: { [number]: boolean },
 	--玩家配置信息
 	playerConfigInfo: PlayerConfigInfo,
+	--当前指引类型
+	currentGuideType: number,
 }
 
 --内购订单信息
@@ -134,6 +160,9 @@ function GameConfig.CreateDefaultPlayerSaveInfo(): PlayerSaveInfo
 			vibrationOn = true,
 		},
 		ownedGamePassList = {},
+		currencies = {
+			[tostring(GameConfig.CurrencyType.Coin)] = 0,
+		},
 	}
 end
 
@@ -143,12 +172,16 @@ export type ClientLocalPlayerSaveInfo = {
 	settingInfo: SettingInfo,
 	--已拥有的通行证列表
 	ownedGamePassList: { number },
+	--货币信息
+	currencies: { [string]: number },
 }
 export type ClientLocalPlayerInfo = ClientLocalPlayerSaveInfo & {
 	--已拥有的通行证映射
 	ownedGamePassMap: { [number]: boolean },
 	--玩家配置信息
 	playerConfigInfo: PlayerConfigInfo,
+	--当前指引类型
+	currentGuideType: number,
 }
 
 --客户端其他玩家信息

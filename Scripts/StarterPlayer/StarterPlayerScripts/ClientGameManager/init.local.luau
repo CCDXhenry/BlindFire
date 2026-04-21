@@ -71,9 +71,14 @@ local function OnNotifyPlayerAcquiredGamePass(gamePassId: number)
 	ClientGameInfo.SetLocalPlayerGamePassAcquired(gamePassId)
 end
 
+local function OnNotifyPlayerCurrencyUpdate(currencyType: number, totalAmount: number, lastChange: number, reason: number)
+	ClientGameInfo.UpdateCurrency(currencyType, totalAmount, lastChange, reason)
+end
+
 NetMsg.ConnectNotifyPlayerInfoInit(OnNotifyPlayerInfoInit)
 NetMsg.ConnectNotifyPlayersOtherPlayerInfoInit(OnNotifyPlayersOtherPlayerInfoInit)
 NetMsg.ConnectNotifyPlayerAcquiredGamePass(OnNotifyPlayerAcquiredGamePass)
+NetMsg.ConnectNotifyPlayerCurrencyUpdate(OnNotifyPlayerCurrencyUpdate)
 
 BulletClientManager.Init()
 CombatCameraManager.Init()

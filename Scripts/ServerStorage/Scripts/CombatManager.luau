@@ -14,6 +14,7 @@ local serverStorage: ServerStorage = game:GetService("ServerStorage")
 local serverScripts = serverStorage:WaitForChild("Scripts")
 local PlayerStateManager = require(serverScripts:FindFirstChild("PlayerStateManager"))
 local ArenaManager = require(serverScripts:FindFirstChild("ArenaManager"))
+local ServerGameInfo = require(serverScripts:FindFirstChild("ServerGameInfo"))
 local VehicleLocomotionTool = require(sharedScripts:FindFirstChild("VehicleLocomotionTool"))
 
 type OnPlayerDeadCallback = (player: Player, isDisconnect: boolean?) -> ()
@@ -525,6 +526,21 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 	)
 	NetMsg.FireNotifyHit(targetPlayerId, shooterId, hitDirection, hitCount, bulletId, hitPosition)
 	NetMsg.FireNotifyHpChanged(targetPlayerId, hitCount, GameConfig.MaxHits)
+
+	--增加金币奖励
+	if shooterId ~= targetPlayerId then
+		local shooterPlayer = players:GetPlayerByUserId(shooterId)
+		if shooterPlayer ~= nil then
+			if isDead then
+				--击杀奖励
+				ServerGameInfo.UpdatePlayerCurrency(shooterPlayer, GameConfig.CurrencyType.Coin, 2, GameConfig.ItemCountChangeReason.GainFromKill)
+			else
+				--命中奖励
+				ServerGameInfo.UpdatePlayerCurrency(shooterPlayer, GameConfig.CurrencyType.Coin, 1, GameConfig.ItemCountChangeReason.GainFromHit)
+			end
+		end
+	end
+
 	if isDead then
 		NetMsg.FireNotifyDead(targetPlayerId)
 		local targetPlayer = players:GetPlayerByUserId(targetPlayerId)

@@ -20,6 +20,8 @@ function ClientGameInfo.InitPlayerInfo(localPlayerSaveInfo: GameConfig.ClientLoc
 		ownedGamePassList = localPlayerSaveInfo.ownedGamePassList,
 		ownedGamePassMap = {},
 		playerConfigInfo = playerConfigInfo,
+		currencies = localPlayerSaveInfo.currencies,
+		currentGuideType = GameConfig.GuideType.None,
 	}
 	if localPlayerInfo == nil then
 		return
@@ -72,6 +74,48 @@ function ClientGameInfo.SetLocalPlayerGamePassAcquired(gamePassId: number)
 	table.insert(localPlayerInfo.ownedGamePassList, gamePassId)
 	localPlayerInfo.ownedGamePassMap[gamePassId] = true
 	ClientMsg.FireLocalPlayerAcquiredGamePass(gamePassId)
+end
+
+--更新货币数量
+function ClientGameInfo.UpdateCurrency(currencyType: number, totalAmount: number, lastChange: number, reason: number)
+	if localPlayerInfo == nil then
+		return
+	end
+
+	local currencyKey: string = tostring(currencyType)
+	localPlayerInfo.currencies[currencyKey] = totalAmount
+
+	--如果是增加且金额大于0，弹出获得提示
+	if lastChange > 0 then
+		local rewardInfo: GameConfig.RewardInfo = {
+			rewardType = GameConfig.RewardType.Currency,
+			rewardId = currencyType,
+			rewardCount = lastChange,
+			rewardSource = reason,
+		}
+		ClientMsg.FireShowAddRewardsTip({ rewardInfo })
+	end
+
+	--通知界面刷新
+	ClientMsg.FireLocalPlayerCurrencyUpdate()
+end
+
+function ClientGameInfo.GetCurrentGuideType(): number
+	if localPlayerInfo == nil then
+		return GameConfig.GuideType.None
+	end
+	return localPlayerInfo.currentGuideType
+end
+
+function ClientGameInfo.SetCurrentGuideType(guideType: number)
+	if localPlayerInfo == nil then
+		return
+	end
+	if localPlayerInfo.currentGuideType == guideType then
+		return
+	end
+	localPlayerInfo.currentGuideType = guideType
+	ClientMsg.FireCurrentGuideTypeChanged()
 end
 
 return ClientGameInfo

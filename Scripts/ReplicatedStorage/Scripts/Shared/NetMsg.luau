@@ -12,6 +12,7 @@ local requestSetVibrationsOnOffStateEvent: RemoteEvent = remoteEventsFolder:Find
 local notifyPlayerInfoInitEvent = remoteEventsFolder:FindFirstChild("NotifyPlayerInfoInit") :: RemoteEvent
 local notifyPlayersOtherPlayerInfoInitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPlayersOtherPlayerInfoInit") :: RemoteEvent
 local notifyPlayerAcquiredGamePassEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPlayerAcquiredGamePass") :: RemoteEvent
+local notifyPlayerCurrencyUpdateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPlayerCurrencyUpdate") :: RemoteEvent
 -- Demo 玩法
 local requestFireEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestFire") :: RemoteEvent
 local requestHitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestHit") :: RemoteEvent
@@ -90,6 +91,15 @@ end
 
 function NetMsg.ConnectNotifyPlayerAcquiredGamePass(callback: (gamePassId: number) -> ())
 	notifyPlayerAcquiredGamePassEvent.OnClientEvent:Connect(callback)
+end
+
+--通知客户端玩家货币更新
+function NetMsg.FireNotifyPlayerCurrencyUpdate(player: Player, currencyType: number, totalAmount: number, changeAmount: number, reason: number)
+	notifyPlayerCurrencyUpdateEvent:FireClient(player, currencyType, totalAmount, changeAmount, reason)
+end
+
+function NetMsg.ConnectNotifyPlayerCurrencyUpdate(callback: (currencyType: number, totalAmount: number, changeAmount: number, reason: number) -> ())
+	notifyPlayerCurrencyUpdateEvent.OnClientEvent:Connect(callback)
 end
 
 -- ============================================================
