@@ -14,6 +14,7 @@ local serverStorage: ServerStorage = game:GetService("ServerStorage")
 local serverScripts = serverStorage:WaitForChild("Scripts")
 local PlayerStateManager = require(serverScripts:FindFirstChild("PlayerStateManager"))
 local ArenaManager = require(serverScripts:FindFirstChild("ArenaManager"))
+local VehicleLocomotionTool = require(sharedScripts:FindFirstChild("VehicleLocomotionTool"))
 
 type OnPlayerDeadCallback = (player: Player) -> ()
 
@@ -24,6 +25,12 @@ type ServerUnitInfo = {
 	spinDir: number,
 	moveAngle: number,
 	invincibleUntil: number,
+	targetVelX: number,
+	targetVelZ: number,
+	spinAngleRad: number,
+	lastWallBounceClock: number,
+	lastVehicleBumpClock: number,
+	driveVectorForce: VectorForce?,
 }
 
 type ServerBullet = {
@@ -34,6 +41,7 @@ type ServerBullet = {
 	bouncesLeft: number,
 	currentPos: Vector3,
 	estimatedRtt: number,
+	visualModel: Model?,
 }
 
 local heartbeatConnection: RBXScriptConnection? = nil
@@ -43,10 +51,16 @@ local activeServerBullets: {[string]: ServerBullet} = {}
 local LOG_PREFIX = "[CombatManager]"
 local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
 local UNDERGROUND_Y = -100
+local SERVER_PROJECTILE_NAME_PREFIX = "ServerProjectile_"
+local SERVER_BULLETS_FOLDER_NAME = "ServerBullets"
+local SERVER_BULLET_SHOOTER_USER_ID_ATTR = "ShooterUserId"
+
+local serverBulletsFolder: Folder? = nil
 
 local unitInfoMap: { [number]: ServerUnitInfo } = {}
 local playerDeadCallback: OnPlayerDeadCallback? = nil
-local vehicleBumpNextAllowedClock: { [string]: number } = {}
+
+local serverMatchState: GameConfig.MatchState = "InLobby"
 
 local function LogInfo(message: string)
 	print(string.format("%s %s", LOG_PREFIX, message))
@@ -62,10 +76,6 @@ local function ToHorizontalDirection(vector: Vector3): Vector3
 		return Vector3.new(0, 0, -1)
 	end
 	return horizontal.Unit
-end
-
-local function HorizontalImpulseFromVector(impulse: Vector3): Vector3
-	return Vector3.new(impulse.X, 0, impulse.Z)
 end
 
 local function GetModelsFolder(): Folder
@@ -149,7 +159,10 @@ end
 
 -- 载具关节、Seat 与炮塔连接等以 ReplicatedStorage.Models.VehicleModel 在 Studio 中的配置为准；服务端仅克隆，不在运行时改装配。
 
--- OnVehicleBaseDiskTouched removed as vehicle bumps are now handled client-side
+local function ZeroHorizontalVelocity(part: BasePart)
+	local v = part.AssemblyLinearVelocity
+	part.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
+end
 
 local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 	local vehicleTemplate = GetVehicleTemplate()
@@ -169,14 +182,14 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 	end
 	unitModel.PrimaryPart = rootPart
 	rootPart.CanCollide = true
-	-- SetNetworkOwner 必须在未锚固时调用；大厅 / MatchCountdown 期间再锚固，入场由 MatchManager 解锚
+	-- SetNetworkOwner(nil) 必须在未锚固时调用；对战期由服务端模拟载具物理
 	rootPart.Anchored = false
 	for _, inst in unitModel:GetDescendants() do
 		if inst:IsA("BasePart") then
 			local oldAnchored = inst.Anchored
 			inst.Anchored = false
 			pcall(function()
-				inst:SetNetworkOwner(player)
+				inst:SetNetworkOwner(nil)
 			end)
 			inst.Anchored = oldAnchored
 		end
@@ -189,6 +202,7 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 
 	local moveAngle = GetRandomMoveAngle()
 	local spinDir = GetRandomSpinDir()
+	local tvx, tvz = VehicleLocomotionTool.AngleToVelocityXZ(moveAngle)
 	local unitInfo: ServerUnitInfo = {
 		playerId = player.UserId,
 		unitModel = unitModel,
@@ -196,6 +210,12 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 		spinDir = spinDir,
 		moveAngle = moveAngle,
 		invincibleUntil = 0,
+		targetVelX = tvx,
+		targetVelZ = tvz,
+		spinAngleRad = math.atan2(tvz, tvx),
+		lastWallBounceClock = 0,
+		lastVehicleBumpClock = -math.huge,
+		driveVectorForce = nil,
 	}
 
 	unitInfoMap[player.UserId] = unitInfo
@@ -263,6 +283,53 @@ local function ResetUnitToUnderground(playerId: number)
 	LogInfo(string.format("ResetUnitToUnderground userId=%d", playerId))
 end
 
+function CombatManager.SetMatchState(matchState: GameConfig.MatchState)
+	serverMatchState = matchState
+end
+
+local function StepVehicleSimulation(dt: number)
+	for playerId, unitInfo in unitInfoMap do
+		local root = unitInfo.rootPart
+		if root.Parent == nil then
+			continue
+		end
+		if root.Anchored then
+			continue
+		end
+
+		local drive = unitInfo.driveVectorForce
+		if drive == nil then
+			drive = VehicleLocomotionTool.EnsureVehicleDriveConstraints(root)
+			unitInfo.driveVectorForce = drive
+		end
+
+		if serverMatchState == "GameStartCountdown" then
+			ZeroHorizontalVelocity(root)
+			root.AssemblyAngularVelocity = Vector3.zero
+			unitInfo.spinAngleRad = VehicleLocomotionTool.BaseDiskDriveYawRadFromState(unitInfo, root)
+			VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, false)
+		elseif serverMatchState == "Fighting" then
+			local roundInfo = PlayerStateManager.GetAllPlayerRoundInfoMap()[playerId]
+			if roundInfo ~= nil and roundInfo.isAlive then
+				unitInfo.spinAngleRad = (unitInfo.spinAngleRad + math.rad(GameConfig.UnitRotationSpeed) * dt * unitInfo.spinDir) % (math.pi * 2)
+				VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, true)
+				VehicleLocomotionTool.ResolveVehicleOverlaps(unitInfo, unitInfoMap, playerId, dt)
+			else
+				VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, false)
+			end
+		else
+			VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, false)
+		end
+	end
+
+	if serverMatchState == "Fighting" then
+		VehicleLocomotionTool.ResolveAllVehicleBumps(unitInfoMap, function(playerIdForBump: number): boolean
+			local roundInfoForBump = PlayerStateManager.GetAllPlayerRoundInfoMap()[playerIdForBump]
+			return roundInfoForBump ~= nil and roundInfoForBump.isAlive
+		end)
+	end
+end
+
 function CombatManager.ResetUnitToUnderground(playerId: number)
 	ResetUnitToUnderground(playerId)
 end
@@ -299,6 +366,86 @@ local function GetProjectileRadius(): number
 	return 1.5
 end
 
+local function EnsureServerBulletsFolder(): Folder
+	if serverBulletsFolder ~= nil and serverBulletsFolder.Parent ~= nil then
+		return serverBulletsFolder
+	end
+	local existing = workspace:FindFirstChild(SERVER_BULLETS_FOLDER_NAME)
+	if existing ~= nil and existing:IsA("Folder") then
+		serverBulletsFolder = existing
+		return existing
+	end
+	local folder = Instance.new("Folder")
+	folder.Name = SERVER_BULLETS_FOLDER_NAME
+	folder.Parent = workspace
+	serverBulletsFolder = folder
+	return folder
+end
+
+local function IsServerProjectileModel(model: Model): boolean
+	return string.sub(model.Name, 1, #SERVER_PROJECTILE_NAME_PREFIX) == SERVER_PROJECTILE_NAME_PREFIX
+end
+
+local function CreateServerProjectileVisual(
+	shooterId: number,
+	spawnPos: Vector3,
+	shotDir: Vector3,
+	bulletId: string
+): Model?
+	local modelsFolder = GetModelsFolder()
+	local projectileTemplate = modelsFolder:FindFirstChild("ProjectileModel")
+	if projectileTemplate == nil or not projectileTemplate:IsA("Model") then
+		warn("[CombatManager] ProjectileModel template not found.")
+		return nil
+	end
+	local projectileModel = projectileTemplate:Clone()
+	projectileModel.Name = SERVER_PROJECTILE_NAME_PREFIX .. bulletId
+	projectileModel:SetAttribute(SERVER_BULLET_SHOOTER_USER_ID_ATTR, shooterId)
+	projectileModel.Parent = EnsureServerBulletsFolder()
+
+	local projectileRoot = projectileModel:FindFirstChild("Core")
+	if projectileRoot == nil or not projectileRoot:IsA("BasePart") then
+		projectileModel:Destroy()
+		warn("[CombatManager] ProjectileModel.Core not found.")
+		return nil
+	end
+
+	projectileModel.PrimaryPart = projectileRoot
+	projectileRoot.CanCollide = false
+	for _, d in projectileModel:GetDescendants() do
+		if d:IsA("BasePart") then
+			d.Anchored = true
+			d.AssemblyLinearVelocity = Vector3.zero
+			d.AssemblyAngularVelocity = Vector3.zero
+		end
+	end
+
+	local flatShot = ToHorizontalDirection(shotDir)
+	local spawnCFrame = CFrame.lookAt(spawnPos, spawnPos + flatShot)
+	projectileModel:PivotTo(spawnCFrame)
+
+	return projectileModel
+end
+
+local function PivotServerProjectileToBullet(bullet: ServerBullet, displayPos: Vector3)
+	local vm = bullet.visualModel
+	if vm == nil or vm.Parent == nil then
+		return
+	end
+	local look = ToHorizontalDirection(bullet.shotDir)
+	vm:PivotTo(CFrame.lookAt(displayPos, displayPos + look))
+end
+
+local function DestroyServerBullet(bulletId: string)
+	local bullet = activeServerBullets[bulletId]
+	if bullet == nil then
+		return
+	end
+	if bullet.visualModel ~= nil and bullet.visualModel.Parent ~= nil then
+		bullet.visualModel:Destroy()
+	end
+	activeServerBullets[bulletId] = nil
+end
 
 local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, hitDirection: Vector3, bulletId: string, hitPosition: Vector3)
 	hitDirection = ToHorizontalDirection(hitDirection)
@@ -343,6 +490,21 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 		end)
 	end
 
+	if not isProtected and targetUnitInfo ~= nil then
+		local flatDir = Vector3.new(hitDirection.X, 0, hitDirection.Z)
+		if flatDir.Magnitude > 0.001 then
+			local knockbackDir = flatDir.Unit
+			targetUnitInfo.rootPart.AssemblyLinearVelocity = knockbackDir * (GameConfig.UnitSpeed * GameConfig.BulletHitSpeedMultiplier)
+			targetUnitInfo.targetVelX = knockbackDir.X * GameConfig.UnitSpeed
+			targetUnitInfo.targetVelZ = knockbackDir.Z * GameConfig.UnitSpeed
+		end
+	end
+
+	if isDead and targetUnitInfo ~= nil then
+		targetUnitInfo.targetVelX = 0
+		targetUnitInfo.targetVelZ = 0
+		ZeroHorizontalVelocity(targetUnitInfo.rootPart)
+	end
 
 	LogInfo(
 		string.format(
@@ -369,15 +531,21 @@ end
 
 
 function CombatManager.OnHeartbeat(dt: number)
+	StepVehicleSimulation(dt)
+
 	local currentServerTime = workspace:GetServerTimeNow()
-	
+
 	for bulletId, bullet in activeServerBullets do
+		if bullet.visualModel ~= nil and bullet.visualModel.Parent ~= nil and currentServerTime < bullet.activeTime then
+			PivotServerProjectileToBullet(bullet, bullet.spawnPos)
+		end
+
 		if currentServerTime < bullet.activeTime then
 			continue
 		end
-		
+
 		if (currentServerTime - bullet.activeTime) > GameConfig.ProjectileLifetime then
-			activeServerBullets[bulletId] = nil
+			DestroyServerBullet(bulletId)
 			continue
 		end
 		
@@ -455,8 +623,10 @@ function CombatManager.OnHeartbeat(dt: number)
 					shouldPass = true
 				else
 					local tm = inst:FindFirstAncestorOfClass("Model")
-					if tm ~= nil and tm.Name == "LocalProjectile" then
-						shouldPass = true
+					if tm ~= nil then
+						if tm.Name == "LocalProjectile" or IsServerProjectileModel(tm) then
+							shouldPass = true
+						end
 					end
 				end
 			end
@@ -486,7 +656,7 @@ function CombatManager.OnHeartbeat(dt: number)
 				if targetId ~= bullet.shooterId or GameConfig.CanHitSelf then
 					ResolveProjectileHit(bullet.shooterId, targetId, shotDir, bulletId, hitResult.Position)
 				end
-				activeServerBullets[bulletId] = nil
+				DestroyServerBullet(bulletId)
 				continue
 			end
 			
@@ -508,14 +678,16 @@ function CombatManager.OnHeartbeat(dt: number)
 				origin = impactCenter
 				remaining = distanceRemaining
 				bullet.currentPos = impactCenter
+				PivotServerProjectileToBullet(bullet, bullet.currentPos)
 				continue
 			end
-			
-			activeServerBullets[bulletId] = nil
+
+			DestroyServerBullet(bulletId)
 			continue
 		end
-		
+
 		bullet.currentPos = origin + shotDir * stepDist
+		PivotServerProjectileToBullet(bullet, bullet.currentPos)
 	end
 end
 
@@ -527,7 +699,9 @@ function CombatManager.Init(onPlayerDead: OnPlayerDeadCallback)
 	if heartbeatConnection == nil then
 		heartbeatConnection = runService.Heartbeat:Connect(CombatManager.OnHeartbeat)
 	end
-	
+
+	EnsureServerBulletsFolder()
+
 	LogInfo("Init success [server-authoritative mode]")
 end
 
@@ -599,6 +773,7 @@ function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDire
 	local estimatedRtt = math.clamp(serverTime - clientTimestamp, GameConfig.HitValidationClientTimestampMinDelta or -0.2, GameConfig.HitValidationClientTimestampMaxDelta or 0.6)
 	local bulletLaunchTime = clientTimestamp + GameConfig.FireCastTime
 	
+	local visualModel = CreateServerProjectileVisual(player.UserId, spawnPos, shotDirection, bulletId)
 	activeServerBullets[bulletId] = {
 		shooterId = player.UserId,
 		spawnPos = spawnPos,
@@ -607,8 +782,17 @@ function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDire
 		bouncesLeft = GameConfig.ProjectileMaxBounces or 0,
 		currentPos = spawnPos,
 		estimatedRtt = math.max(0, estimatedRtt),
+		visualModel = visualModel,
 	}
-	
+
+	local shooterUnit = unitInfoMap[player.UserId]
+	if shooterUnit ~= nil then
+		local recoilDir = -shotDirection
+		shooterUnit.rootPart.AssemblyLinearVelocity = recoilDir * (GameConfig.UnitSpeed * GameConfig.FireRecoilSpeedMultiplier)
+		shooterUnit.targetVelX = recoilDir.X * GameConfig.UnitSpeed * GameConfig.FireRecoilSpeedMultiplier
+		shooterUnit.targetVelZ = recoilDir.Z * GameConfig.UnitSpeed * GameConfig.FireRecoilSpeedMultiplier
+	end
+
 	LogInfo(string.format("FireAccepted userId=%d bulletId=%s", player.UserId, bulletId))
 	NetMsg.FireNotifyDirectionFlipToAll(player.UserId)
 	NetMsg.FireNotifyFireAccepted(player.UserId, clientTimestamp, spawnPos, shotDirection, serverTime, bulletId)
@@ -616,6 +800,13 @@ end
 
 function CombatManager.StartRound(participantIds: { number })
 	LogInfo("StartRound begin")
+	local staleBulletIds: { string } = {}
+	for id in activeServerBullets do
+		table.insert(staleBulletIds, id)
+	end
+	for _, id in staleBulletIds do
+		DestroyServerBullet(id)
+	end
 	PlayerStateManager.ResetAllPlayerRoundInfo(participantIds)
 	for _, playerId in participantIds do
 		local unitInfo = unitInfoMap[playerId]
@@ -624,6 +815,10 @@ function CombatManager.StartRound(participantIds: { number })
 		end
 		unitInfo.moveAngle = GetRandomMoveAngle()
 		unitInfo.spinDir = GetRandomSpinDir()
+		local tvx, tvz = VehicleLocomotionTool.AngleToVelocityXZ(unitInfo.moveAngle)
+		unitInfo.targetVelX = tvx
+		unitInfo.targetVelZ = tvz
+		unitInfo.spinAngleRad = math.atan2(tvz, tvx)
 		NetMsg.FireNotifyUnitInitToAll({
 			playerId = playerId,
 			moveAngle = unitInfo.moveAngle,
@@ -654,6 +849,7 @@ function CombatManager.SetVehicleAnchoredForPlayer(playerId: number, anchored: b
 	if anchored then
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
+		unitInfo.driveVectorForce = nil
 	end
 end
 

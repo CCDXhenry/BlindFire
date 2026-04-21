@@ -295,6 +295,7 @@ end
 
 local function BroadcastMatchState(matchState: GameConfig.MatchState, countdown: number)
 	currentMatchState = matchState
+	CombatManager.SetMatchState(matchState)
 	LogInfo(string.format("StateChanged state=%s countdown=%d", matchState, countdown))
 	NetMsg.FireNotifyMatchState(matchState, countdown)
 end
