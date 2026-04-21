@@ -542,7 +542,7 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 	end
 
 	if isDead then
-		NetMsg.FireNotifyDead(targetPlayerId)
+		NetMsg.FireNotifyDead(targetPlayerId, shooterId)
 		local targetPlayer = players:GetPlayerByUserId(targetPlayerId)
 		if targetPlayer ~= nil and playerDeadCallback ~= nil then
 			LogInfo(string.format("NotifyPlayerDead userId=%d", targetPlayerId))
@@ -755,7 +755,7 @@ function CombatManager.OnPlayerRemoving(player: Player)
 	NetMsg.FireNotifyUnitRemoveToAll(userId)
 
 	if shouldNotifyDead then
-		NetMsg.FireNotifyDead(userId)
+		NetMsg.FireNotifyDead(userId, nil)
 		if playerDeadCallback ~= nil then
 			local ok, err = pcall(function()
 				playerDeadCallback(player, true)

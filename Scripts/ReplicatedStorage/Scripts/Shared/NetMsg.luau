@@ -179,11 +179,11 @@ function NetMsg.ConnectNotifyHpChanged(callback: (playerId: number, hitCount: nu
 	notifyHpChangedEvent.OnClientEvent:Connect(callback)
 end
 
-function NetMsg.FireNotifyDead(playerId: number)
-	notifyDeadEvent:FireAllClients(playerId)
+function NetMsg.FireNotifyDead(playerId: number, killerId: number?)
+	notifyDeadEvent:FireAllClients(playerId, killerId)
 end
 
-function NetMsg.ConnectNotifyDead(callback: (playerId: number) -> ())
+function NetMsg.ConnectNotifyDead(callback: (playerId: number, killerId: number?) -> ())
 	notifyDeadEvent.OnClientEvent:Connect(callback)
 end
 

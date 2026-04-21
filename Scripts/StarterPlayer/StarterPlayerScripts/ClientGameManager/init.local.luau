@@ -34,6 +34,7 @@ local function InitUI()
 	--创建游戏主界面
 	--UIManager.CreateFrame("GameFrame", "GameFrame", gameScreenGui, 0)
 	UIManager.CreateFrame("GameTipFrame", "GameTipFrame", gameScreenGui, 0)
+	UIManager.CreateFrame("LobbyFrame", "LobbyFrame", gameScreenGui, 0)
 	--UI适配器初始化
 	UIAdapter.Init(DesignScreenSize, gameScreenGui.AbsoluteSize)
 	gameScreenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() 

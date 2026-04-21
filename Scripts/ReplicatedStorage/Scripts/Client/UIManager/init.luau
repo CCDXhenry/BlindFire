@@ -12,6 +12,7 @@ local clientScripts = scripts:WaitForChild("Client")
 local BillboardManager = require(clientScripts:WaitForChild("BillboardManager"))
 local PlayerInfoUIManager = require(script:WaitForChild("PlayerInfoUIManager"))
 local ConfigUIManager = require(script:WaitForChild("ConfigUIManager"))
+local KillFeedManager = require(script:WaitForChild("KillFeedManager"))
 local ClientMsg = require(clientScripts:FindFirstChild("ClientMsg"))
 local tweenService: TweenService = game:GetService("TweenService")
 
@@ -125,6 +126,8 @@ function UIManager.Init(gameScreenGuiNew: ScreenGui)
 	PlayerInfoUIManager.Init()
 	--参数配置 UI 管理
 	ConfigUIManager.Init()
+	--角落击败显示栏 UI 管理
+	KillFeedManager.Init(gameScreenGui)
 end
 
 --非窗口方式创建界面
