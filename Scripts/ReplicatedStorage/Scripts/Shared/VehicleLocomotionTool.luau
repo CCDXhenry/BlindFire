@@ -21,27 +21,23 @@ export type DriveState = {
 	lastVehicleBumpClock: number,
 }
 
-local function IsLikelyArenaWallPart(part: BasePart): boolean
-	if part.Name == "ArenaWall" then
-		return true
-	end
-	local lower = string.lower(part.Name)
-	if string.find(lower, "wall", 1, true) ~= nil then
-		return true
-	end
-	return false
-end
+-- 缓存的竞技场碰撞墙列表，仅在首次调用时初始化（名称精确匹配 "ArenaWall"）
+local cachedArenaWalls: { BasePart }? = nil
 
 local function GetArenaWalls(): { BasePart }
+	if cachedArenaWalls ~= nil then
+		return cachedArenaWalls
+	end
 	local walls: { BasePart } = {}
 	local arena = workspaceService:FindFirstChild("Arena")
 	if arena then
 		for _, child in arena:GetDescendants() do
-			if child:IsA("BasePart") and IsLikelyArenaWallPart(child) then
+			if child:IsA("BasePart") and child.Name == "ArenaWall" then
 				table.insert(walls, child)
 			end
 		end
 	end
+	cachedArenaWalls = walls
 	return walls
 end
 
@@ -128,7 +124,7 @@ function VehicleLocomotionTool.ComputeAggregatedWallInwardNormal(root: BasePart)
 	local radius = root.Size.X / 2
 
 	for _, part in root:GetTouchingParts() do
-		if part:IsA("BasePart") and IsLikelyArenaWallPart(part) then
+		if part:IsA("BasePart") and part.Name == "ArenaWall" then
 			local inwardNormalWorld, _, _, _ = GetWallInwardNormal(part, pos)
 			sum += inwardNormalWorld
 			count += 1
@@ -385,9 +381,14 @@ function VehicleLocomotionTool.ResolveAllVehicleBumps(
 			if dist < 1e-3 then
 				continue
 			end
-			-- 物理接触优先（与旧版 Touched 一致）；否则用两盘水平半径之和 + 余量，避免「刚好 5 stud」被 dist>=5 判掉
 			local sumRadii = horizontalHalfExtentXZ(rootA) + horizontalHalfExtentXZ(rootB)
 			local maxCenterDist = math.max(sumRadii + 0.6, GameConfig.VehicleCollisionRadius)
+			-- 快速距离剔除：距离明显过远时跳过 GetTouchingParts（物理查询），减少 O(n²) 开销
+			-- 留 1 stud 安全余量，确保不会漏掉刚好掠过边界的物理接触
+			if dist > maxCenterDist + 1 then
+				continue
+			end
+			-- 在可能接触的范围内，再做精确物理查询
 			local touching = vehiclesPhysicallyTouching(rootA, uB.unitModel) or vehiclesPhysicallyTouching(rootB, uA.unitModel)
 			if not touching and dist > maxCenterDist then
 				continue

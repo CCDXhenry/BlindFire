@@ -43,13 +43,17 @@ type ServerBullet = {
 	currentPos: Vector3,
 	estimatedRtt: number,
 	visualModel: Model?,
+	-- 激活前是否已执行过首次 PivotTo（避免每帧重复定位）
+	visualSpawned: boolean,
 }
 
 local heartbeatConnection: RBXScriptConnection? = nil
-local activeServerBullets: {[string]: ServerBullet} = {}
-
+local activeServerBullets: { [string]: ServerBullet } = {}
+-- 每个 shooterId 当前存活子弹数，O(1) 查询替代遍历
+local shooterBulletCountMap: { [number]: number } = {}
 
 local LOG_PREFIX = "[CombatManager]"
+local DEBUG_LOG = false -- 生产环境设为 false 关闭高频日志
 local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
 local UNDERGROUND_Y = -100
 local SERVER_PROJECTILE_NAME_PREFIX = "ServerProjectile_"
@@ -57,6 +61,8 @@ local SERVER_BULLETS_FOLDER_NAME = "ServerBullets"
 local SERVER_BULLET_SHOOTER_USER_ID_ATTR = "ShooterUserId"
 
 local serverBulletsFolder: Folder? = nil
+-- 缓存 Models Folder，避免每次开火都 WaitForChild
+local modelsFolder: Folder = replicatedStorage:WaitForChild("Models") :: Folder
 
 local unitInfoMap: { [number]: ServerUnitInfo } = {}
 local playerDeadCallback: OnPlayerDeadCallback? = nil
@@ -64,7 +70,14 @@ local playerDeadCallback: OnPlayerDeadCallback? = nil
 local serverMatchState: GameConfig.MatchState = "InLobby"
 
 local function LogInfo(message: string)
+	if not DEBUG_LOG then
+		return
+	end
 	print(string.format("%s %s", LOG_PREFIX, message))
+end
+
+local function LogWarn(message: string)
+	warn(string.format("%s %s", LOG_PREFIX, message))
 end
 
 local function FormatVector3(vector: Vector3): string
@@ -79,12 +92,7 @@ local function ToHorizontalDirection(vector: Vector3): Vector3
 	return horizontal.Unit
 end
 
-local function GetModelsFolder(): Folder
-	return replicatedStorage:WaitForChild("Models") :: Folder
-end
-
 local function GetVehicleTemplate(): Model?
-	local modelsFolder = GetModelsFolder()
 	local vehicleTemplate = modelsFolder:FindFirstChild("VehicleModel")
 	if vehicleTemplate == nil or not vehicleTemplate:IsA("Model") then
 		return nil
@@ -196,7 +204,7 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 		end
 	end
 	rootPart.Anchored = true
- 
+
 	local spawnPosition = GetSpawnPosition()
 	local undergroundPosition = Vector3.new(spawnPosition.X, UNDERGROUND_Y, spawnPosition.Z)
 	MoveModelKeepRotation(unitModel, undergroundPosition)
@@ -396,13 +404,7 @@ local function IsServerProjectileModel(model: Model): boolean
 	return string.sub(model.Name, 1, #SERVER_PROJECTILE_NAME_PREFIX) == SERVER_PROJECTILE_NAME_PREFIX
 end
 
-local function CreateServerProjectileVisual(
-	shooterId: number,
-	spawnPos: Vector3,
-	shotDir: Vector3,
-	bulletId: string
-): Model?
-	local modelsFolder = GetModelsFolder()
+local function CreateServerProjectileVisual(shooterId: number, spawnPos: Vector3, shotDir: Vector3, bulletId: string): Model?
 	local projectileTemplate = modelsFolder:FindFirstChild("ProjectileModel")
 	if projectileTemplate == nil or not projectileTemplate:IsA("Model") then
 		warn("[CombatManager] ProjectileModel template not found.")
@@ -454,6 +456,11 @@ local function DestroyServerBullet(bulletId: string)
 	if bullet.visualModel ~= nil and bullet.visualModel.Parent ~= nil then
 		bullet.visualModel:Destroy()
 	end
+	-- 同步减少计数
+	local sid = bullet.shooterId
+	if shooterBulletCountMap[sid] ~= nil then
+		shooterBulletCountMap[sid] = math.max(0, shooterBulletCountMap[sid] - 1)
+	end
 	activeServerBullets[bulletId] = nil
 end
 
@@ -475,7 +482,6 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 		else
 			targetUnitInfo.invincibleUntil = now + GameConfig.InvincibilityDuration
 		end
-
 
 		targetUnitInfo.spinDir = GetRandomSpinDir()
 		NetMsg.FireNotifyDirectionFlipToAll(targetPlayerId)
@@ -553,19 +559,18 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 	end
 end
 
-
-
 function CombatManager.OnHeartbeat(dt: number)
 	StepVehicleSimulation(dt)
 
 	local currentServerTime = workspace:GetServerTimeNow()
 
 	for bulletId, bullet in activeServerBullets do
-		if bullet.visualModel ~= nil and bullet.visualModel.Parent ~= nil and currentServerTime < bullet.activeTime then
-			PivotServerProjectileToBullet(bullet, bullet.spawnPos)
-		end
-
+		-- 激活前：仅在首帧定位 visualModel，然后 continue 跳过物理更新
 		if currentServerTime < bullet.activeTime then
+			if bullet.visualModel ~= nil and bullet.visualModel.Parent ~= nil and not bullet.visualSpawned then
+				PivotServerProjectileToBullet(bullet, bullet.spawnPos)
+				bullet.visualSpawned = true
+			end
 			continue
 		end
 
@@ -573,16 +578,16 @@ function CombatManager.OnHeartbeat(dt: number)
 			DestroyServerBullet(bulletId)
 			continue
 		end
-		
+
 		local stepDist = GameConfig.ProjectileSpeed * dt
 		local origin = bullet.currentPos
 		local shotDir = bullet.shotDir
 		local remaining = stepDist + GameConfig.ProjectileStepMargin
-		
+
 		local rayParams = RaycastParams.new()
 		rayParams.FilterType = Enum.RaycastFilterType.Exclude
-		local excludeList: {Instance} = {}
-		
+		local excludeList: { Instance } = {}
+
 		local shooterUnitInfo = unitInfoMap[bullet.shooterId]
 		if shooterUnitInfo and shooterUnitInfo.unitModel then
 			table.insert(excludeList, shooterUnitInfo.unitModel)
@@ -591,56 +596,29 @@ function CombatManager.OnHeartbeat(dt: number)
 		if shooterPlayer and shooterPlayer.Character then
 			table.insert(excludeList, shooterPlayer.Character)
 		end
-		
+
 		-- Allow hitting self if configured and bounces ran out (simulating that the bullet already bounced so self is exposed)
 		-- Or if not configured, we keep self in exclude list.
 		if GameConfig.CanHitSelf and bullet.bouncesLeft < (GameConfig.ProjectileMaxBounces or 0) then
 			-- It bounced at least once, can hit self, so don't exclude self.
 			excludeList = {}
 		end
-		
+
 		rayParams.FilterDescendantsInstances = excludeList
-		
-		-- Server Magnetism / Homing (Identical to client visual magnetism)
-		local closestDist = GameConfig.BulletMagnetismRadius
-		local bestTargetDir = nil
-		local magnetismEarlyExitRadius = GameConfig.BulletMagnetismRadius * (GameConfig.BulletMagnetismEarlyExitMultiplier or 2.0)
-		for otherId, otherState in unitInfoMap do
-			if otherId == bullet.shooterId then continue end
-			if otherState.rootPart ~= nil and otherState.rootPart.Parent ~= nil then
-				local toTarget = otherState.rootPart.Position - origin
-				local dist = toTarget.Magnitude
-				-- 早退：远超可磁吸范围的目标跳过，避免每帧无效计算平方根
-				if dist > magnetismEarlyExitRadius then continue end
-				if dist < closestDist then
-					local dirToTarget = toTarget.Unit
-					local angle = math.acos(math.clamp(shotDir:Dot(dirToTarget), -1, 1))
-					if angle < GameConfig.BulletMagnetismAngleRad then
-						closestDist = dist
-						bestTargetDir = dirToTarget
-					end
-				end
-			end
-		end
-		
-		if bestTargetDir ~= nil then
-			local newDir = shotDir:Lerp(bestTargetDir, 0.2).Unit
-			local flatNewDir = Vector3.new(newDir.X, 0, newDir.Z)
-			if flatNewDir.Magnitude > 0.01 then
-				shotDir = flatNewDir.Unit
-				bullet.shotDir = shotDir
-			end
-		end
-		
+
 		local hitResult: RaycastResult? = nil
 		-- Added a slight 1.25 multiplier to serve as ping/lag compensation leeway
 		local radius = GetProjectileRadius() * 1.25
 
 		for _ = 1, 10 do
-			if remaining < 1e-4 then break end
+			if remaining < 1e-4 then
+				break
+			end
 			local res = workspace:Spherecast(origin, radius, shotDir * remaining, rayParams)
-			if res == nil then break end
-			
+			if res == nil then
+				break
+			end
+
 			local inst = res.Instance
 			local shouldPass = false
 			if inst:IsA("BasePart") then
@@ -655,7 +633,7 @@ function CombatManager.OnHeartbeat(dt: number)
 					end
 				end
 			end
-			
+
 			if shouldPass then
 				table.insert(excludeList, inst)
 				rayParams.FilterDescendantsInstances = excludeList
@@ -664,7 +642,7 @@ function CombatManager.OnHeartbeat(dt: number)
 			hitResult = res
 			break
 		end
-		
+
 		if hitResult ~= nil then
 			local inst = hitResult.Instance
 			local targetId: number? = nil
@@ -673,10 +651,12 @@ function CombatManager.OnHeartbeat(dt: number)
 				targetId = GetPlayerIdByVehicleModelName(tm.Name)
 				if targetId == nil then
 					local charPlayer = players:GetPlayerFromCharacter(tm)
-					if charPlayer then targetId = charPlayer.UserId end
+					if charPlayer then
+						targetId = charPlayer.UserId
+					end
 				end
 			end
-			
+
 			if targetId ~= nil then
 				if targetId ~= bullet.shooterId or GameConfig.CanHitSelf then
 					ResolveProjectileHit(bullet.shooterId, targetId, shotDir, bulletId, hitResult.Position)
@@ -684,19 +664,25 @@ function CombatManager.OnHeartbeat(dt: number)
 				DestroyServerBullet(bulletId)
 				continue
 			end
-			
+
 			if bullet.bouncesLeft > 0 then
 				bullet.bouncesLeft -= 1
-				
+
 				local n = hitResult.Normal
 				local nFlat = Vector3.new(n.X, 0, n.Z)
-				if nFlat.Magnitude > 0.01 then nFlat = nFlat.Unit else nFlat = -shotDir end
+				if nFlat.Magnitude > 0.01 then
+					nFlat = nFlat.Unit
+				else
+					nFlat = -shotDir
+				end
 				local impactCenter = origin + shotDir * hitResult.Distance
-				
+
 				shotDir = shotDir - 2 * shotDir:Dot(nFlat) * nFlat
 				local flatDir = Vector3.new(shotDir.X, 0, shotDir.Z)
-				if flatDir.Magnitude > 0.01 then shotDir = flatDir.Unit end
-				
+				if flatDir.Magnitude > 0.01 then
+					shotDir = flatDir.Unit
+				end
+
 				bullet.shotDir = shotDir
 				-- 反弹后继续对剩余路径做子步骤检测，防止高速子弹穿模
 				local distanceRemaining = math.max(0, stepDist - hitResult.Distance)
@@ -721,7 +707,7 @@ function CombatManager.Init(onPlayerDead: OnPlayerDeadCallback)
 	NetMsg.ConnectRequestFire(CombatManager.OnRequestFire)
 	NetMsg.ConnectRequestSyncUnit(CombatManager.SyncToPlayer)
 	-- 完全服务端权威模式：不再监听 RequestHit，所有命中由 OnHeartbeat 物理轨迹决定
-	
+
 	if heartbeatConnection == nil then
 		heartbeatConnection = runService.Heartbeat:Connect(CombatManager.OnHeartbeat)
 	end
@@ -738,8 +724,10 @@ function CombatManager.SyncToPlayer(player: Player)
 	-- Sync existing participation units to this new joiner
 	local roundInfoMap = PlayerStateManager.GetAllPlayerRoundInfoMap()
 	for otherId, otherUnitInfo in unitInfoMap do
-		if otherId == player.UserId then continue end
-		
+		if otherId == player.UserId then
+			continue
+		end
+
 		local otherRoundInfo = roundInfoMap[otherId]
 		NetMsg.FireNotifyUnitInit(player, {
 			playerId = otherId,
@@ -749,7 +737,7 @@ function CombatManager.SyncToPlayer(player: Player)
 			maxHits = GameConfig.MaxHits,
 			isParticipant = if otherRoundInfo then otherRoundInfo.isParticipant else false,
 		})
-		
+
 		-- Sync current HP
 		local hitCount = PlayerStateManager.GetPlayerHitCount(otherId)
 		NetMsg.FireNotifyHpChangedToPlayer(player, otherId, hitCount, GameConfig.MaxHits)
@@ -803,16 +791,13 @@ function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDire
 		LogInfo(string.format("FireRejected userId=%d reason=cooldown_or_dead now=%.2f", player.UserId, nowTime))
 		return
 	end
-	
-	local count = 0
-	for _, b in activeServerBullets do
-		if b.shooterId == player.UserId then count += 1 end
-	end
+
+	local count = shooterBulletCountMap[player.UserId] or 0
 	if count >= 3 then
 		LogInfo(string.format("FireRejected userId=%d reason=bullet_spam_limit", player.UserId))
 		return
 	end
-	
+
 	PlayerStateManager.SetLastFireTime(player.UserId, nowTime)
 
 	local unitInfo = unitInfoMap[player.UserId]
@@ -825,11 +810,15 @@ function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDire
 			return
 		end
 	end
-	
+
 	local serverTime = workspace:GetServerTimeNow()
-	local estimatedRtt = math.clamp(serverTime - clientTimestamp, GameConfig.HitValidationClientTimestampMinDelta or -0.2, GameConfig.HitValidationClientTimestampMaxDelta or 0.6)
+	local estimatedRtt = math.clamp(
+		serverTime - clientTimestamp,
+		GameConfig.HitValidationClientTimestampMinDelta or -0.2,
+		GameConfig.HitValidationClientTimestampMaxDelta or 0.6
+	)
 	local bulletLaunchTime = clientTimestamp + GameConfig.FireCastTime
-	
+
 	local visualModel = CreateServerProjectileVisual(player.UserId, spawnPos, shotDirection, bulletId)
 	activeServerBullets[bulletId] = {
 		shooterId = player.UserId,
@@ -840,7 +829,10 @@ function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDire
 		currentPos = spawnPos,
 		estimatedRtt = math.max(0, estimatedRtt),
 		visualModel = visualModel,
+		visualSpawned = false,
 	}
+	-- 同步增加计数
+	shooterBulletCountMap[player.UserId] = (shooterBulletCountMap[player.UserId] or 0) + 1
 
 	local shooterUnit = unitInfoMap[player.UserId]
 	if shooterUnit ~= nil then
@@ -864,6 +856,8 @@ function CombatManager.StartRound(participantIds: { number })
 	for _, id in staleBulletIds do
 		DestroyServerBullet(id)
 	end
+	-- 确保计数表与子弹表同步归零
+	shooterBulletCountMap = {}
 	PlayerStateManager.ResetAllPlayerRoundInfo(participantIds)
 	for _, playerId in participantIds do
 		local unitInfo = unitInfoMap[playerId]

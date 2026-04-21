@@ -128,21 +128,21 @@ function ArenaManager.StartShrinking(maxDuration: number)
 		local startTime = os.clock()
 		local durationSoFar = 0
 		
+		-- 每 0.1 秒更新一次（原每帧），ScaleTo 调用减少约 85%
+		local ShrinkInterval = 0.1
+		local ShrinkMinStep = 0.05  -- 变化量低于此值时跳过 ScaleTo
 		while durationSoFar < maxDuration do
-			local dt = task.wait()
+			local dt = task.wait(ShrinkInterval)
 			durationSoFar = os.clock() - startTime
 			
 			if durationSoFar > GameConfig.ArenaShrinkStartDelay then
 				local aliveCount = PlayerStateManager.GetAlivePlayerCount()
 				local currentSpeed = CalculateDynamicShrinkSpeed(initialCount, aliveCount, currentHalfSize)
 				
-				if math.floor(durationSoFar) % 5 == 0 and dt > 0 then
-					LogInfo(string.format("Shrinking: Speed=%.2f, Alive=%d/%d, Size=%.1f", currentSpeed, aliveCount, initialCount, currentHalfSize))
-				end
-				
 				local shrinkStep = currentSpeed * dt
 				local newSize = math.max(GameConfig.ArenaMinHalfSize, currentHalfSize - shrinkStep)
-				if newSize ~= currentHalfSize then
+				-- 变化量低于阈值时跳过，避免亚像素级频繁缩放
+				if (currentHalfSize - newSize) >= ShrinkMinStep then
 					ArenaManager.SetArenaHalfSize(newSize)
 				end
 				
