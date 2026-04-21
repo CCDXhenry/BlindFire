@@ -561,7 +561,7 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 		local targetPlayer = players:GetPlayerByUserId(targetPlayerId)
 		if targetPlayer ~= nil and playerDeadCallback ~= nil then
 			LogInfo(string.format("NotifyPlayerDead userId=%d", targetPlayerId))
-			playerDeadCallback(targetPlayer, false)
+			task.defer(playerDeadCallback, targetPlayer, false)
 		end
 	end
 end

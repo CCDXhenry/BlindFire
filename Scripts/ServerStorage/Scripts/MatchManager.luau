@@ -28,8 +28,8 @@ local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
 -- local RETURN_TO_LOBBY_UNSEAT_WAIT_SEC = 0.1
 -- local ARENA_SEAT_PREPARE_DELAY_SEC = 0.22
 
-local seatRetryCountMap: {[number]: number} = {}
-local arenaTargetPositionMap: {[number]: Vector3} = {}
+local seatRetryCountMap: { [number]: number } = {}
+local arenaTargetPositionMap: { [number]: Vector3 } = {}
 
 local currentMatchState: GameConfig.MatchState = "InLobby"
 local roundWorkerThread: thread? = nil
@@ -50,13 +50,13 @@ local function MoveModelKeepRotation(model: Model, targetPosition: Vector3)
 	model:PivotTo(CFrame.new(targetPosition) * rotationOnly)
 end
 
-local function GetArenaSpawnPositionList(): {Vector3}
+local function GetArenaSpawnPositionList(): { Vector3 }
 	local arenaSpawnFolder = workspace:FindFirstChild(ARENA_SPAWN_FOLDER_NAME, true)
 	if arenaSpawnFolder == nil or not arenaSpawnFolder:IsA("Instance") then
 		LogInfo("ArenaSpawnPoints folder not found recursively")
 		return {}
 	end
-	local spawnPositionList: {Vector3} = {}
+	local spawnPositionList: { Vector3 } = {}
 	for _, child in arenaSpawnFolder:GetChildren() do
 		if child:IsA("BasePart") then
 			table.insert(spawnPositionList, Vector3.new(child.Position.X, GameConfig.UnitY, child.Position.Z))
@@ -92,9 +92,7 @@ local function GetRandomArenaPosition(excludedPositions: { Vector3 }?): Vector3
 		end
 		bestPos = pos
 		if i == maxAttempts then
-			LogInfo(
-				string.format("GetRandomArenaPosition warning: could not find separated position after %d attempts", maxAttempts)
-			)
+			LogInfo(string.format("GetRandomArenaPosition warning: could not find separated position after %d attempts", maxAttempts))
 		end
 	end
 	return bestPos
@@ -210,11 +208,11 @@ end
 
 local function TeleportAllPlayersToArena(participantPlayers: { Player })
 	local arenaCenter, arenaSize = ArenaManager.GetArenaFloorInfo()
-	LogInfo(string.format("TeleportAllPlayersToArena: Current Arena Center=%s HalfSize=%.1f", tostring(arenaCenter), arenaSize.X/2))
-	
+	LogInfo(string.format("TeleportAllPlayersToArena: Current Arena Center=%s HalfSize=%.1f", tostring(arenaCenter), arenaSize.X / 2))
+
 	local spawnPositionList = GetArenaSpawnPositionList()
 	LogInfo(string.format("Found %d spawn points after scaling", #spawnPositionList))
-	
+
 	-- Shuffle the predefined spawn points to ensure variety
 	for i = #spawnPositionList, 2, -1 do
 		local j = math.random(1, i)
@@ -222,13 +220,7 @@ local function TeleportAllPlayersToArena(participantPlayers: { Player })
 	end
 
 	local chosenPositions: { Vector3 } = {}
-	LogInfo(
-		string.format(
-			"TeleportAllPlayersToArena playerCount=%d spawnPointCount=%d",
-			#participantPlayers,
-			#spawnPositionList
-		)
-	)
+	LogInfo(string.format("TeleportAllPlayersToArena playerCount=%d spawnPointCount=%d", #participantPlayers, #spawnPositionList))
 	for index, player in ipairs(participantPlayers) do
 		local initialTarget = spawnPositionList[index]
 		local targetPosition: Vector3? = nil
@@ -246,12 +238,7 @@ local function TeleportAllPlayersToArena(participantPlayers: { Player })
 			if not conflict then
 				targetPosition = initialTarget
 			else
-				LogInfo(
-					string.format(
-						"TeleportAllPlayersToArena: Predefined point index %d conflicts, falling back to random",
-						index
-					)
-				)
+				LogInfo(string.format("TeleportAllPlayersToArena: Predefined point index %d conflicts, falling back to random", index))
 			end
 		end
 
@@ -291,7 +278,7 @@ local function TeleportPlayerToLobby(player: Player, reloadCharacter: boolean?)
 		player.CharacterAdded:Once(function()
 			TeleportPlayerToPosition(player, targetPosition)
 		end)
-		player:LoadCharacter()
+		player:LoadCharacterAsync()
 		return
 	end
 	TeleportPlayerToPosition(player, targetPosition)
