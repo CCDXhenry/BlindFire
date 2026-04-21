@@ -3,104 +3,137 @@ local MatchActionManager = {}
 
 local ContextActionService = game:GetService("ContextActionService")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Players = game:GetService("Players")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local scripts = replicatedStorage:WaitForChild("Scripts")
 local sharedScripts = scripts:WaitForChild("Shared")
 local NetMsg = require(sharedScripts:FindFirstChild("NetMsg"))
 local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
 
-local JUMP_ACTION_NAME = "DisableJumpAction"
-local isInitialized = false
-local isJumpDisabled = false
-local renderSteppedConnection: RBXScriptConnection? = nil
+local CAS_PRIORITY = 3000
+local DEFAULT_JUMP_POWER = 50
+local DEFAULT_JUMP_HEIGHT = 7.2
 
-local function SinkJump()
+local isInitialized = false
+local localPlayer: Player = Players.LocalPlayer
+local disableJumpActionId: string = ""
+
+local isLocalParticipant = false
+local isLocalDead = false
+local lastMatchState: GameConfig.MatchState = "InLobby"
+local lastCountdown = 0
+local isWaitingForRelease = false
+local wasDisabledLastFrame = false
+local jumpCasBound = false
+
+local function OnDisableJumpAction(_actionName: string, inputState: Enum.UserInputState, _inputObject: InputObject): Enum.ContextActionResult
+	if inputState == Enum.UserInputState.End or inputState == Enum.UserInputState.Cancel then
+		return Enum.ContextActionResult.Pass
+	end
 	return Enum.ContextActionResult.Sink
 end
 
-local function UpdateHumanoidJumpSuppression()
-	local localPlayer = game:GetService("Players").LocalPlayer
-	local character = localPlayer.Character
-	local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
-	if humanoid then
-		-- 每帧强制重置，拦截所有底层回弹逻辑
-		humanoid.Jump = false
-		humanoid.JumpPower = 0
-		humanoid.JumpHeight = 0
-		humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
-	end
+local function BindJumpSuppressCas()
+	ContextActionService:BindActionAtPriority(
+		disableJumpActionId,
+		OnDisableJumpAction,
+		false,
+		CAS_PRIORITY,
+		Enum.KeyCode.Space,
+		Enum.KeyCode.ButtonA
+	)
 end
 
-local function SetJumpEnabled(enabled: boolean)
-	if enabled then
-		if not isJumpDisabled then
-			return
-		end
-		isJumpDisabled = false
-		ContextActionService:UnbindAction(JUMP_ACTION_NAME)
+local function UnbindJumpSuppressCas()
+	ContextActionService:UnbindAction(disableJumpActionId)
+end
 
-		-- 断开每帧强制抑制
-		if renderSteppedConnection then
-			renderSteppedConnection:Disconnect()
-			renderSteppedConnection = nil
+local function OnUpdate()
+	local shouldSuppressByState = false
+	if lastMatchState == "MatchCountdown" then
+		if lastCountdown <= 2 then
+			shouldSuppressByState = true
 		end
+	elseif lastMatchState == "GameStartCountdown" or lastMatchState == "Fighting" then
+		if isLocalParticipant and not isLocalDead then
+			shouldSuppressByState = true
+		end
+	end
 
-		-- 恢复一次 Humanoid 状态
-		local character = game:GetService("Players").LocalPlayer.Character
-		local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
-		if humanoid then
-			humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
-			humanoid.JumpPower = 50
-			humanoid.JumpHeight = 7.2
-		end
+	if shouldSuppressByState then
+		isWaitingForRelease = true
 	else
-		if isJumpDisabled then
-			return
+		local isHoldingJumpKey = UserInputService:IsKeyDown(Enum.KeyCode.Space) or UserInputService:IsKeyDown(Enum.KeyCode.ButtonA)
+		if isWaitingForRelease and not isHoldingJumpKey then
+			isWaitingForRelease = false
 		end
-		isJumpDisabled = true
-		
-		-- 使用极高优先级拦截输入
-		ContextActionService:BindActionAtPriority(
-			JUMP_ACTION_NAME,
-			SinkJump,
-			false,
-			3000, -- 进一步提高优先级
-			Enum.KeyCode.Space,
-			Enum.KeyCode.ButtonA
-		)
+	end
 
-		-- 开启每帧强制抑制循环
-		if not renderSteppedConnection then
-			renderSteppedConnection = RunService.RenderStepped:Connect(UpdateHumanoidJumpSuppression)
+	local finalDisable = shouldSuppressByState or isWaitingForRelease
+
+	if finalDisable then
+		if not jumpCasBound then
+			BindJumpSuppressCas()
+			jumpCasBound = true
 		end
-		-- 立即执行一次
-		UpdateHumanoidJumpSuppression()
+		wasDisabledLastFrame = true
+	else
+		if jumpCasBound then
+			UnbindJumpSuppressCas()
+			jumpCasBound = false
+		end
+	end
+
+	local character = localPlayer.Character
+	local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
+
+	if finalDisable then
+		if humanoid then
+			humanoid.Jump = false
+			humanoid.JumpPower = 0
+			humanoid.JumpHeight = 0
+		end
+		return
+	end
+
+	if wasDisabledLastFrame then
+		if humanoid then
+			humanoid.Jump = false
+			humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+			humanoid.JumpPower = DEFAULT_JUMP_POWER
+			humanoid.JumpHeight = DEFAULT_JUMP_HEIGHT
+		end
+		wasDisabledLastFrame = false
 	end
 end
 
 local function OnMatchStateChanged(matchState: GameConfig.MatchState, countdown: number)
-	-- 根据纠正后的需求：
-	-- 1. InLobby 和 MatchCountdown 的早期（> 2s）允许跳跃。
-	-- 2. 在 MatchCountdown 的最后 2 秒开始屏蔽跳跃（此时即将进行转场）。
-	-- 3. GameStartCountdown (竞技场倒计时) 和 Fighting 阶段继续屏蔽跳跃。
+	lastMatchState = matchState
+	lastCountdown = countdown
 
-	local shouldDisable = false
-
-	if matchState == "MatchCountdown" then
-		-- 匹配倒计时的最后 2 秒起禁止跳跃
-		if countdown <= 2 then
-			shouldDisable = true
-		end
-	elseif matchState == "GameStartCountdown" or matchState == "Fighting" then
-		-- 进入竞技场阶段全程禁止跳跃
-		shouldDisable = true
+	if matchState == "InLobby" or matchState == "MatchCountdown" then
+		isLocalDead = false
 	end
+end
 
-	if shouldDisable then
-		SetJumpEnabled(false)
-	else
-		-- 其他情况（大厅待机、匹配阶段早期）允许跳跃
-		SetJumpEnabled(true)
+local function OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
+	if unitInitInfo.playerId == localPlayer.UserId then
+		isLocalParticipant = unitInitInfo.isParticipant
+		isLocalDead = false
+	end
+end
+
+local function OnDead(playerId: number, _killerId: number?)
+	if playerId == localPlayer.UserId then
+		isLocalDead = true
+	end
+end
+
+local function OnUnitRemove(playerId: number)
+	if playerId == localPlayer.UserId then
+		isLocalParticipant = false
+		isLocalDead = false
 	end
 end
 
@@ -110,7 +143,14 @@ function MatchActionManager.Init()
 	end
 	isInitialized = true
 
+	disableJumpActionId = "DisableJump_" .. tostring(localPlayer.UserId)
+
 	NetMsg.ConnectNotifyMatchState(OnMatchStateChanged)
+	NetMsg.ConnectNotifyUnitInit(OnUnitInit)
+	NetMsg.ConnectNotifyDead(OnDead)
+	NetMsg.ConnectNotifyUnitRemove(OnUnitRemove)
+
+	RunService.Heartbeat:Connect(OnUpdate)
 end
 
 return MatchActionManager
