@@ -64,6 +64,17 @@ local function UpdateHpUI(playerId: number, hitCount: number, maxHits: number)
 	end
 end
 
+local function UpdateUIVisibility(ui: BillboardGui, isParticipant: boolean)
+	ui.Enabled = true
+	local controllerFrame = ui:FindFirstChild("ControllerFrame")
+	if controllerFrame then
+		local healthBar = controllerFrame:FindFirstChild("HealthBar") :: GuiObject?
+		if healthBar then
+			healthBar.Visible = isFighting and isParticipant
+		end
+	end
+end
+
 local function CreateUIForPlayer(playerId: number, isParticipant: boolean)
 	local existingRecord = playerUIMap[playerId]
 	local ui: BillboardGui?
@@ -89,6 +100,22 @@ local function CreateUIForPlayer(playerId: number, isParticipant: boolean)
 				local character = player.Character
 				if not character then return end
 				
+				-- Hide default Roblox name UI
+				local humanoid = character:WaitForChild("Humanoid", 5) :: Humanoid?
+				if humanoid then
+					humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+					humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+				end
+
+				-- Setup Name Label
+				local controllerFrame = ui:FindFirstChild("ControllerFrame")
+				if controllerFrame then
+					local playerNameLabel = controllerFrame:FindFirstChild("PlayerName") :: TextLabel?
+					if playerNameLabel then
+						playerNameLabel.Text = player.DisplayName or player.Name
+					end
+				end
+
 				-- Wait for the head if the character exists but head isn't ready
 				local currentHead = character:WaitForChild("Head", 5) :: BasePart?
 				if currentHead then
@@ -97,11 +124,7 @@ local function CreateUIForPlayer(playerId: number, isParticipant: boolean)
 					if playerGui then
 						ui.Parent = playerGui
 						BillboardManager.Track(ui)
-						local shouldEnable = isFighting
-						if not isParticipant then
-							shouldEnable = false
-						end
-						ui.Enabled = shouldEnable
+						UpdateUIVisibility(ui, isParticipant)
 					end
 				end
 			end
@@ -117,13 +140,9 @@ local function CreateUIForPlayer(playerId: number, isParticipant: boolean)
 	-- Set initial state for BOTH new and reused UI
 	UpdateHpUI(playerId, 0, GameConfig.MaxHits)
 	
-	-- Hide if not fighting
-	local shouldEnable = isFighting
-	if not isParticipant then
-		shouldEnable = false
-	end
+	-- Refresh visibility
 	if ui then
-		ui.Enabled = shouldEnable
+		UpdateUIVisibility(ui, isParticipant)
 	end
 end
 
@@ -161,24 +180,8 @@ function PlayerInfoUIManager.Init()
 
 	NetMsg.ConnectNotifyMatchState(function(matchState, countdown)
 		isFighting = (matchState == "Fighting" or matchState == "GameStartCountdown")
-		local localPlayerId = players.LocalPlayer.UserId
 		for playerId, data in playerUIMap do
-			local shouldEnable = isFighting
-			if not data.isParticipant then
-				shouldEnable = false
-			end
-			data.ui.Enabled = shouldEnable
-		end
-		
-		-- If we just entered a match, make sure UIs are up for everyone
-		if isFighting then
-			-- In case some players were already there
-			for _, player in players:GetPlayers() do
-				if not playerUIMap[player.UserId] then
-					-- We might not have UnitInit info yet if we joined late, 
-					-- but CombatManager sends it.
-				end
-			end
+			UpdateUIVisibility(data.ui, data.isParticipant)
 		end
 	end)
 	
