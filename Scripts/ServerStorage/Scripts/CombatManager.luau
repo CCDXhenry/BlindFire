@@ -84,7 +84,14 @@ local function FormatVector3(vector: Vector3): string
 	return string.format("(%.2f, %.2f, %.2f)", vector.X, vector.Y, vector.Z)
 end
 
+local function isNaN(n: number): boolean
+	return n ~= n
+end
+
 local function ToHorizontalDirection(vector: Vector3): Vector3
+	if isNaN(vector.X) or isNaN(vector.Y) or isNaN(vector.Z) then
+		return Vector3.new(0, 0, -1)
+	end
 	local horizontal = Vector3.new(vector.X, 0, vector.Z)
 	if horizontal.Magnitude <= 0.001 then
 		return Vector3.new(0, 0, -1)
@@ -506,7 +513,7 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 		end)
 	end
 
-	if not isProtected and targetUnitInfo ~= nil then
+	if not isProtected and not isDead and targetUnitInfo ~= nil then
 		local flatDir = Vector3.new(hitDirection.X, 0, hitDirection.Z)
 		if flatDir.Magnitude > 0.001 then
 			local knockbackDir = flatDir.Unit

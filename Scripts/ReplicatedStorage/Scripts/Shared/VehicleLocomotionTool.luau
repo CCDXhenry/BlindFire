@@ -13,12 +13,18 @@ local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
 
 local BASE_DISK_MESH_OFFSET = CFrame.Angles(0, 0, 0)
 
+local function isNaN(n: number): boolean
+	return n ~= n
+end
+
 export type DriveState = {
 	targetVelX: number,
 	targetVelZ: number,
 	spinAngleRad: number,
 	lastWallBounceClock: number,
 	lastVehicleBumpClock: number,
+	lastPos: Vector3?,
+	stuckTime: number?,
 }
 
 -- 缓存的竞技场碰撞墙列表，仅在首次调用时初始化（名称精确匹配 "ArenaWall"）
@@ -187,6 +193,7 @@ function VehicleLocomotionTool.EnsureVehicleDriveConstraints(baseDisk: BasePart)
 	vectorForce.RelativeTo = Enum.ActuatorRelativeTo.World
 	vectorForce.ApplyAtCenterOfMass = true
 	vectorForce.Force = Vector3.zero
+	vectorForce.Enabled = true
 
 	local ao = baseDisk:FindFirstChild("UprightAlignOrientation")
 	if ao ~= nil then
@@ -227,13 +234,41 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 	local curXZ = Vector3.new(vel.X, 0, vel.Z)
 
 	local targetDir = Vector3.new(state.targetVelX, 0, state.targetVelZ)
-	if targetDir.Magnitude < 1e-4 then
-		drive.Force = Vector3.zero
-	else
-		local desired = targetDir.Unit * GameConfig.UnitSpeed
-		local err = desired - curXZ
-		drive.Force = Vector3.new(err.X, 0, err.Z) * (GameConfig.DriveHorizontalForceGain * mass)
+	local isTargetVelInvalid = (targetDir.Magnitude < 1e-4) or isNaN(state.targetVelX) or isNaN(state.targetVelZ)
+	
+	if isTargetVelInvalid then
+		-- 自愈逻辑：如果 applyHorizontalDrive 为 true 但速度矢量为 0 或 NaN，则根据当前旋转角恢复基础速度
+		local recoveredX, recoveredZ = VehicleLocomotionTool.AngleToVelocityXZ(math.deg(state.spinAngleRad))
+		state.targetVelX = recoveredX
+		state.targetVelZ = recoveredZ
+		targetDir = Vector3.new(recoveredX, 0, recoveredZ)
 	end
+
+	-- 静态卡死检测：如果驱动开启，但长时间位移极小
+	local currentPos = root.Position
+	if state.lastPos ~= nil then
+		local distMoved = (currentPos - state.lastPos).Magnitude
+		if distMoved < GameConfig.StuckVelocityThreshold * _dt then
+			state.stuckTime = (state.stuckTime or 0) + _dt
+			if state.stuckTime >= GameConfig.StuckStallDuration then
+				-- 触发强制重启位移
+				local recoveredX, recoveredZ = VehicleLocomotionTool.AngleToVelocityXZ(math.deg(state.spinAngleRad))
+				state.targetVelX = recoveredX
+				state.targetVelZ = recoveredZ
+				targetDir = Vector3.new(recoveredX, 0, recoveredZ)
+				state.stuckTime = 0
+				warn(string.format("[VehicleLocomotionTool] Stuck detected for unit, resetting targetVel"))
+			end
+		else
+			state.stuckTime = 0
+		end
+	end
+	state.lastPos = currentPos
+	
+	local targetDirUnit = if targetDir.Magnitude > 0.001 then targetDir.Unit else Vector3.new(0, 0, -1)
+	local desired = targetDirUnit * GameConfig.UnitSpeed
+	local err = desired - curXZ
+	drive.Force = Vector3.new(err.X, 0, err.Z) * (GameConfig.DriveHorizontalForceGain * mass)
 
 	local speed = curXZ.Magnitude
 	if speed > GameConfig.UnitMaxHorizontalSpeed then

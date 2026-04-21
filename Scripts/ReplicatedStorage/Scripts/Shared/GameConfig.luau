@@ -250,6 +250,10 @@ GameConfig.BulletMagnetismRadius = 15
 -- 假子弹视觉追踪最大视锥角度（弧度）
 GameConfig.BulletMagnetismAngleRad = math.rad(10)
 
+-- 静态卡死检测阈值
+GameConfig.StuckVelocityThreshold = 0.5
+GameConfig.StuckStallDuration = 1.0 -- 秒
+
 -- 服务端权威模式参数（OnRequestFire 中用于估算子弹发射时刻的延迟窗口）
 GameConfig.HitValidationClientTimestampMinDelta = -0.2
 GameConfig.HitValidationClientTimestampMaxDelta = 0.6
