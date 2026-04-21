@@ -120,6 +120,9 @@ local function TeleportPlayerToPosition(player: Player, targetPosition: Vector3)
 end
 
 local function SeatPlayerOnVehicle(player: Player, targetPosition: Vector3)
+	if players:GetPlayerByUserId(player.UserId) == nil then
+		return
+	end
 	local vehicleName = VEHICLE_MODEL_NAME_PREFIX .. tostring(player.UserId)
 	local vehicleModel = workspace:FindFirstChild(vehicleName)
 	if vehicleModel == nil or not vehicleModel:IsA("Model") then
@@ -127,6 +130,9 @@ local function SeatPlayerOnVehicle(player: Player, targetPosition: Vector3)
 		seatRetryCountMap[player.UserId] = retryCount
 		if retryCount <= GameConfig.MaxSeatRetry then
 			task.delay(GameConfig.SeatRetryInterval, function()
+				if players:GetPlayerByUserId(player.UserId) == nil then
+					return
+				end
 				SeatPlayerOnVehicle(player, targetPosition)
 			end)
 			return
@@ -161,6 +167,9 @@ local function SeatPlayerOnVehicle(player: Player, targetPosition: Vector3)
 	if character == nil then
 		LogInfo(string.format("Wait SeatPlayerOnVehicle userId=%d reason=no_character", player.UserId))
 		player.CharacterAdded:Once(function()
+			if players:GetPlayerByUserId(player.UserId) == nil then
+				return
+			end
 			SeatPlayerOnVehicle(player, targetPosition)
 		end)
 		return
@@ -189,6 +198,9 @@ local function SeatPlayerOnVehicle(player: Player, targetPosition: Vector3)
 			seatInstance:Sit(humanoid)
 		end)
 		task.delay(0.15, function()
+			if players:GetPlayerByUserId(player.UserId) == nil then
+				return
+			end
 			TryForceSeat(tryIndex + 1)
 		end)
 	end
@@ -318,9 +330,18 @@ local function RunMatchLoop()
 
 		LogInfo(string.format("MatchCountdown start seconds=%d", GameConfig.MatchCountdown))
 		CombatManager.SetAllVehiclesAnchored(true)
+		local matchAborted = false
 		for countdown = GameConfig.MatchCountdown, 1, -1 do
+			if #players:GetPlayers() < GameConfig.MinPlayerToStart then
+				LogInfo("MatchCountdown aborted: player count below minimum")
+				matchAborted = true
+				break
+			end
 			BroadcastMatchState("MatchCountdown", countdown)
 			task.wait(1)
+		end
+		if matchAborted then
+			continue
 		end
 
 		local roundParticipantPlayers = players:GetPlayers()
@@ -335,16 +356,33 @@ local function RunMatchLoop()
 		-- 入座失败等路径可能未解锚；开局倒计时前统一解锚，避免整局 BaseDisk 仍 Anchored
 		CombatManager.SetAllVehiclesAnchored(false)
 		LogInfo(string.format("GameStartCountdown start seconds=%d", GameConfig.RoundStartCountdown))
+		local gameStartAborted = false
 		for countdown = GameConfig.RoundStartCountdown, 1, -1 do
+			if #players:GetPlayers() <= 1 then
+				LogInfo("GameStartCountdown aborted: not enough players")
+				gameStartAborted = true
+				break
+			end
 			BroadcastMatchState("GameStartCountdown", countdown)
 			task.wait(1)
+		end
+
+		if gameStartAborted then
+			LogInfo("GameStart aborted, returning players to lobby")
+			BroadcastMatchState("InLobby", 0)
+			for _, player in players:GetPlayers() do
+				CombatManager.UnseatPlayerFromOwnedVehicle(player)
+			end
+			task.wait(GameConfig.ReturnToLobbyWait)
+			TeleportAllPlayersToLobby()
+			continue
 		end
 
 		BroadcastMatchState("Fighting", 0)
 		if roundStartCallback ~= nil then
 			LogInfo("Invoke roundStartCallback")
 			local participantIds = {}
-			for _, p in ipairs(roundParticipantPlayers) do
+			for _, p in ipairs(players:GetPlayers()) do
 				table.insert(participantIds, p.UserId)
 			end
 			roundStartCallback(participantIds)
@@ -405,9 +443,13 @@ function MatchManager.OnPlayerAdded(player: Player)
 	end
 end
 
-function MatchManager.OnPlayerDead(player: Player)
-	LogInfo(string.format("OnPlayerDead userId=%d", player.UserId))
+function MatchManager.OnPlayerDead(player: Player, isDisconnect: boolean?)
+	LogInfo(string.format("OnPlayerDead userId=%d isDisconnect=%s", player.UserId, tostring(isDisconnect == true)))
 	arenaTargetPositionMap[player.UserId] = nil
+	if isDisconnect == true then
+		LogInfo(string.format("OnPlayerDead skip teleport userId=%d reason=disconnect", player.UserId))
+		return
+	end
 	CombatManager.UnseatPlayerFromOwnedVehicle(player)
 	CombatManager.ResetUnitToUnderground(player.UserId)
 	TeleportPlayerToLobby(player, true)
@@ -416,6 +458,7 @@ end
 function MatchManager.OnPlayerRemoving(player: Player)
 	LogInfo(string.format("OnPlayerRemoving userId=%d", player.UserId))
 	arenaTargetPositionMap[player.UserId] = nil
+	seatRetryCountMap[player.UserId] = nil
 end
 
 function MatchManager.ForceResetToLobby()

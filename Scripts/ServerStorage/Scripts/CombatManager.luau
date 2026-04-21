@@ -16,7 +16,7 @@ local PlayerStateManager = require(serverScripts:FindFirstChild("PlayerStateMana
 local ArenaManager = require(serverScripts:FindFirstChild("ArenaManager"))
 local VehicleLocomotionTool = require(sharedScripts:FindFirstChild("VehicleLocomotionTool"))
 
-type OnPlayerDeadCallback = (player: Player) -> ()
+type OnPlayerDeadCallback = (player: Player, isDisconnect: boolean?) -> ()
 
 type ServerUnitInfo = {
 	playerId: number,
@@ -258,7 +258,14 @@ end
 function CombatManager.DestroyUnitForPlayer(playerId: number)
 	local unitInfo = unitInfoMap[playerId]
 	if unitInfo == nil then
-		LogInfo(string.format("DestroyUnit skip userId=%d reason=unit_not_found", playerId))
+		local orphanName = VEHICLE_MODEL_NAME_PREFIX .. tostring(playerId)
+		local orphan = workspace:FindFirstChild(orphanName)
+		if orphan ~= nil and orphan:IsA("Model") then
+			orphan:Destroy()
+			LogInfo(string.format("DestroyUnit orphan workspace model userId=%d", playerId))
+		else
+			LogInfo(string.format("DestroyUnit skip userId=%d reason=unit_not_found", playerId))
+		end
 		return
 	end
 	if unitInfo.unitModel.Parent ~= nil then
@@ -523,7 +530,7 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 		local targetPlayer = players:GetPlayerByUserId(targetPlayerId)
 		if targetPlayer ~= nil and playerDeadCallback ~= nil then
 			LogInfo(string.format("NotifyPlayerDead userId=%d", targetPlayerId))
-			playerDeadCallback(targetPlayer)
+			playerDeadCallback(targetPlayer, false)
 		end
 	end
 end
@@ -720,21 +727,28 @@ end
 
 function CombatManager.OnPlayerRemoving(player: Player)
 	LogInfo(string.format("OnPlayerRemoving userId=%d", player.UserId))
-	
+
+	local userId = player.UserId
 	local roundInfoMap = PlayerStateManager.GetAllPlayerRoundInfoMap()
-	local roundInfo = roundInfoMap[player.UserId]
-	if roundInfo ~= nil and roundInfo.isParticipant and roundInfo.isAlive then
-		roundInfo.isAlive = false
-		NetMsg.FireNotifyDead(player.UserId)
-		if playerDeadCallback ~= nil then
-			playerDeadCallback(player)
-		end
-	end
+	local roundInfo = roundInfoMap[userId]
+	local shouldNotifyDead = roundInfo ~= nil and roundInfo.isParticipant and roundInfo.isAlive
 
 	unseatPlayerFromOwnedVehicle(player)
-	DestroyUnitForPlayer(player.UserId)
-	PlayerStateManager.RemovePlayerRoundInfo(player.UserId)
-	NetMsg.FireNotifyUnitRemoveToAll(player.UserId)
+	CombatManager.DestroyUnitForPlayer(userId)
+	PlayerStateManager.RemovePlayerRoundInfo(userId)
+	NetMsg.FireNotifyUnitRemoveToAll(userId)
+
+	if shouldNotifyDead then
+		NetMsg.FireNotifyDead(userId)
+		if playerDeadCallback ~= nil then
+			local ok, err = pcall(function()
+				playerDeadCallback(player, true)
+			end)
+			if not ok then
+				warn(string.format("%s OnPlayerRemoving playerDeadCallback failed userId=%d err=%s", LOG_PREFIX, userId, tostring(err)))
+			end
+		end
+	end
 end
 
 function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDirection: Vector3, clientTimestamp: number, bulletId: string)
