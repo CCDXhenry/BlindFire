@@ -355,6 +355,16 @@ local function RunMatchLoop()
 		StabilizeArenaPlayers()
 		-- 入座失败等路径可能未解锚；开局倒计时前统一解锚，避免整局 BaseDisk 仍 Anchored
 		CombatManager.SetAllVehiclesAnchored(false)
+
+		if roundStartCallback ~= nil then
+			LogInfo("Invoke roundStartCallback (Early)")
+			local participantIds = {}
+			for _, p in ipairs(roundParticipantPlayers) do
+				table.insert(participantIds, p.UserId)
+			end
+			roundStartCallback(participantIds)
+		end
+
 		LogInfo(string.format("GameStartCountdown start seconds=%d", GameConfig.RoundStartCountdown))
 		local gameStartAborted = false
 		for countdown = GameConfig.RoundStartCountdown, 1, -1 do
@@ -379,14 +389,6 @@ local function RunMatchLoop()
 		end
 
 		BroadcastMatchState("Fighting", 0)
-		if roundStartCallback ~= nil then
-			LogInfo("Invoke roundStartCallback")
-			local participantIds = {}
-			for _, p in ipairs(players:GetPlayers()) do
-				table.insert(participantIds, p.UserId)
-			end
-			roundStartCallback(participantIds)
-		end
 		ArenaManager.StartShrinking(GameConfig.RoundFightDuration)
 		LogInfo(string.format("FightPhase start seconds=%d", GameConfig.RoundFightDuration))
 		-- 与 MatchCountdown / GameStartCountdown 一致：先广播再 wait，避免首秒无数字、客户端慢约 1s

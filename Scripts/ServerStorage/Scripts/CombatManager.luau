@@ -349,12 +349,14 @@ function CombatManager.ResetAllUnitsToUnderground()
 end
 
 local function BroadcastUnitInit(unitInfo: ServerUnitInfo)
+	local playerRoundInfo = PlayerStateManager.GetAllPlayerRoundInfoMap()[unitInfo.playerId]
 	local unitInitInfo: GameConfig.UnitInitInfo = {
 		playerId = unitInfo.playerId,
 		moveAngle = unitInfo.moveAngle,
 		spinDir = unitInfo.spinDir,
 		spawnPosition = unitInfo.rootPart.Position,
 		maxHits = GameConfig.MaxHits,
+		isParticipant = if playerRoundInfo then playerRoundInfo.isParticipant else false,
 	}
 	NetMsg.FireNotifyUnitInitToAll(unitInitInfo)
 	NetMsg.FireNotifyHpChanged(unitInfo.playerId, 0, GameConfig.MaxHits)
@@ -717,6 +719,7 @@ end
 function CombatManager.Init(onPlayerDead: OnPlayerDeadCallback)
 	playerDeadCallback = onPlayerDead
 	NetMsg.ConnectRequestFire(CombatManager.OnRequestFire)
+	NetMsg.ConnectRequestSyncUnit(CombatManager.SyncToPlayer)
 	-- 完全服务端权威模式：不再监听 RequestHit，所有命中由 OnHeartbeat 物理轨迹决定
 	
 	if heartbeatConnection == nil then
@@ -730,9 +733,33 @@ end
 
 -- OnRequestHit 已在服务端权威模式下移除；命中判定完全由 OnHeartbeat 物理轨迹负责
 
+function CombatManager.SyncToPlayer(player: Player)
+	LogInfo(string.format("SyncToPlayer userId=%d", player.UserId))
+	-- Sync existing participation units to this new joiner
+	local roundInfoMap = PlayerStateManager.GetAllPlayerRoundInfoMap()
+	for otherId, otherUnitInfo in unitInfoMap do
+		if otherId == player.UserId then continue end
+		
+		local otherRoundInfo = roundInfoMap[otherId]
+		NetMsg.FireNotifyUnitInit(player, {
+			playerId = otherId,
+			moveAngle = otherUnitInfo.moveAngle,
+			spinDir = otherUnitInfo.spinDir,
+			spawnPosition = otherUnitInfo.rootPart.Position,
+			maxHits = GameConfig.MaxHits,
+			isParticipant = if otherRoundInfo then otherRoundInfo.isParticipant else false,
+		})
+		
+		-- Sync current HP
+		local hitCount = PlayerStateManager.GetPlayerHitCount(otherId)
+		NetMsg.FireNotifyHpChangedToPlayer(player, otherId, hitCount, GameConfig.MaxHits)
+	end
+end
+
 function CombatManager.OnPlayerAdded(player: Player)
 	PlayerStateManager.EnsurePlayerRoundInfo(player)
 	LogInfo(string.format("OnPlayerAdded userId=%d", player.UserId))
+
 	local unitInfo = CreateUnitModelForPlayer(player)
 	if unitInfo == nil then
 		LogInfo(string.format("OnPlayerAdded failed userId=%d reason=create_unit_failed", player.UserId))
@@ -855,6 +882,7 @@ function CombatManager.StartRound(participantIds: { number })
 			spinDir = unitInfo.spinDir,
 			spawnPosition = unitInfo.rootPart.Position,
 			maxHits = GameConfig.MaxHits,
+			isParticipant = true, -- StartRound implies all passed IDs are participants
 		})
 		NetMsg.FireNotifyHpChanged(playerId, 0, GameConfig.MaxHits)
 		LogInfo(string.format("StartRoundReset userId=%d moveAngle=%d spinDir=%d", playerId, unitInfo.moveAngle, unitInfo.spinDir))

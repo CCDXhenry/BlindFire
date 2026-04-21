@@ -14,7 +14,7 @@ local playerInfoUITemplate = replicatedStorage:WaitForChild("UI"):WaitForChild("
 
 local PlayerInfoUIManager = {}
 
-local playerUIMap: { [number]: BillboardGui } = {}
+local playerUIMap: { [number]: { ui: BillboardGui, isParticipant: boolean } } = {}
 local connectionMap: { [number]: RBXScriptConnection } = {}
 local isFighting = false
 
@@ -29,10 +29,11 @@ local function GetPlayerHead(player: Player): BasePart?
 end
 
 local function UpdateHpUI(playerId: number, hitCount: number, maxHits: number)
-	local ui = playerUIMap[playerId]
-	if ui == nil then
+	local data = playerUIMap[playerId]
+	if data == nil then
 		return
 	end
+	local ui = data.ui
 
 	local controllerFrame = ui:FindFirstChild("ControllerFrame")
 	if not controllerFrame then return end
@@ -63,64 +64,73 @@ local function UpdateHpUI(playerId: number, hitCount: number, maxHits: number)
 	end
 end
 
-local function CreateUIForPlayer(playerId: number)
-	local existingUI = playerUIMap[playerId]
-	if existingUI and existingUI.Parent ~= nil then
-		return
-	end
+local function CreateUIForPlayer(playerId: number, isParticipant: boolean)
+	local existingRecord = playerUIMap[playerId]
+	local ui: BillboardGui?
+	
+	if existingRecord and existingRecord.ui.Parent ~= nil then
+		existingRecord.isParticipant = isParticipant
+		ui = existingRecord.ui
+	else
+		-- If UI was destroyed but still in map, clean up before recreating
+		if existingRecord then
+			RemoveUIForPlayer(playerId)
+		end
 
-	-- If UI was destroyed but still in map, clean up before recreating
-	if existingUI then
-		RemoveUIForPlayer(playerId)
-	end
-
-	local player = players:GetPlayerByUserId(playerId)
-	local head = player and GetPlayerHead(player)
-	
-	-- In this specific game, players are often on vehicles. 
-	-- But usually we mount to the head or the vehicle. 
-	-- Given "挂载到每个玩家身上", head is the standard choice.
-	
-	local ui = playerInfoUITemplate:Clone()
-	ui.Parent = replicatedStorage -- Just a holder until we can adonree
-	
-	if player then
-		local localPlayer = players.LocalPlayer
-		local function SetupAdornee()
-			if not ui or ui.Parent == nil then return end -- Validate UI is not destroyed
-			local character = player.Character
-			if not character then return end
-			
-			-- Wait for the head if the character exists but head isn't ready
-			local currentHead = character:WaitForChild("Head", 5) :: BasePart?
-			if currentHead then
-				ui.Adornee = currentHead
-				local playerGui = localPlayer:WaitForChild("PlayerGui", 5)
-				if playerGui then
-					ui.Parent = playerGui
-					BillboardManager.Track(ui)
-					ui.Enabled = isFighting
+		local player = players:GetPlayerByUserId(playerId)
+		
+		ui = playerInfoUITemplate:Clone()
+		ui.Parent = replicatedStorage -- Just a holder until we can adonree
+		
+		if player then
+			local localPlayer = players.LocalPlayer
+			local function SetupAdornee()
+				if not ui or ui.Parent == nil then return end -- Validate UI is not destroyed
+				local character = player.Character
+				if not character then return end
+				
+				-- Wait for the head if the character exists but head isn't ready
+				local currentHead = character:WaitForChild("Head", 5) :: BasePart?
+				if currentHead then
+					ui.Adornee = currentHead
+					local playerGui = localPlayer:WaitForChild("PlayerGui", 5)
+					if playerGui then
+						ui.Parent = playerGui
+						BillboardManager.Track(ui)
+						local shouldEnable = isFighting
+						if not isParticipant then
+							shouldEnable = false
+						end
+						ui.Enabled = shouldEnable
+					end
 				end
 			end
+			
+			SetupAdornee()
+			local conn = player.CharacterAdded:Connect(SetupAdornee)
+			connectionMap[playerId] = conn
 		end
 		
-		SetupAdornee()
-		local conn = player.CharacterAdded:Connect(SetupAdornee)
-		connectionMap[playerId] = conn
+		playerUIMap[playerId] = { ui = ui, isParticipant = isParticipant }
 	end
 	
-	playerUIMap[playerId] = ui
-	
-	-- Set initial state
+	-- Set initial state for BOTH new and reused UI
 	UpdateHpUI(playerId, 0, GameConfig.MaxHits)
 	
 	-- Hide if not fighting
-	ui.Enabled = isFighting
+	local shouldEnable = isFighting
+	if not isParticipant then
+		shouldEnable = false
+	end
+	if ui then
+		ui.Enabled = shouldEnable
+	end
 end
 
 RemoveUIForPlayer = function(playerId: number)
-	local ui = playerUIMap[playerId]
-	if ui then
+	local data = playerUIMap[playerId]
+	if data then
+		local ui = data.ui
 		BillboardManager.Untrack(ui)
 		ui:Destroy()
 		playerUIMap[playerId] = nil
@@ -134,7 +144,7 @@ end
 
 function PlayerInfoUIManager.Init()
 	NetMsg.ConnectNotifyUnitInit(function(unitInitInfo)
-		CreateUIForPlayer(unitInitInfo.playerId)
+		CreateUIForPlayer(unitInitInfo.playerId, unitInitInfo.isParticipant)
 	end)
 
 	NetMsg.ConnectNotifyUnitRemove(function(playerId)
@@ -145,10 +155,19 @@ function PlayerInfoUIManager.Init()
 		UpdateHpUI(playerId, hitCount, maxHits)
 	end)
 
+	NetMsg.ConnectNotifyDead(function(playerId, killerId)
+		RemoveUIForPlayer(playerId)
+	end)
+
 	NetMsg.ConnectNotifyMatchState(function(matchState, countdown)
 		isFighting = (matchState == "Fighting" or matchState == "GameStartCountdown")
-		for _, ui in playerUIMap do
-			ui.Enabled = isFighting
+		local localPlayerId = players.LocalPlayer.UserId
+		for playerId, data in playerUIMap do
+			local shouldEnable = isFighting
+			if not data.isParticipant then
+				shouldEnable = false
+			end
+			data.ui.Enabled = shouldEnable
 		end
 		
 		-- If we just entered a match, make sure UIs are up for everyone
@@ -163,6 +182,23 @@ function PlayerInfoUIManager.Init()
 		end
 	end)
 	
+	NetMsg.FireRequestSyncUnit()
+
+	-- Local player respawn handling
+	players.LocalPlayer.CharacterAdded:Connect(function()
+		-- When local player respawns, the PlayerGui may be reset.
+		-- Clear all local UI state and request a fresh sync.
+		local ids = {}
+		for id, _ in playerUIMap do
+			table.insert(ids, id)
+		end
+		for _, id in ids do
+			RemoveUIForPlayer(id)
+		end
+		
+		NetMsg.FireRequestSyncUnit()
+	end)
+
 	print("[PlayerInfoUIManager] Initialized")
 end
 

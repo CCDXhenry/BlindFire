@@ -29,6 +29,7 @@ local notifyTeleportEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("Noti
 local notifyArenaSeatPrepareEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyArenaSeatPrepare") :: RemoteEvent
 local notifyGameConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyGameConfigSync") :: RemoteEvent
 local notifyPendingConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPendingConfigSync") :: RemoteEvent
+local requestSyncUnitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestSyncUnit") :: RemoteEvent
 
 --客户端请求设置背景音乐音量
 function NetMsg.FireRequestSetBGMVolume(volume: number)
@@ -115,6 +116,15 @@ function NetMsg.ConnectRequestFire(callback: (player: Player, spawnPos: Vector3,
 	requestFireEvent.OnServerEvent:Connect(callback)
 end
 
+--客户端请求同步单位状态
+function NetMsg.FireRequestSyncUnit()
+	requestSyncUnitEvent:FireServer()
+end
+
+function NetMsg.ConnectRequestSyncUnit(callback: (player: Player) -> ())
+	requestSyncUnitEvent.OnServerEvent:Connect(callback)
+end
+
 -- 客户端请求命中某个玩家
 function NetMsg.FireRequestHit(targetPlayerId: number, hitDir: Vector3, bulletId: string)
 	requestHitEvent:FireServer(targetPlayerId, hitDir, bulletId)
@@ -173,6 +183,10 @@ end
 
 function NetMsg.FireNotifyHpChanged(playerId: number, hitCount: number, maxHits: number)
 	notifyHpChangedEvent:FireAllClients(playerId, hitCount, maxHits)
+end
+
+function NetMsg.FireNotifyHpChangedToPlayer(player: Player, playerId: number, hitCount: number, maxHits: number)
+	notifyHpChangedEvent:FireClient(player, playerId, hitCount, maxHits)
 end
 
 function NetMsg.ConnectNotifyHpChanged(callback: (playerId: number, hitCount: number, maxHits: number) -> ())

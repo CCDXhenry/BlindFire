@@ -327,6 +327,8 @@ export type UnitInitInfo = {
 	spawnPosition: Vector3,
 	-- 初始生命（命中上限）
 	maxHits: number,
+	-- 是否为当前回合参赛者
+	isParticipant: boolean,
 }
 
 GameConfig.VisibleParameters = {
