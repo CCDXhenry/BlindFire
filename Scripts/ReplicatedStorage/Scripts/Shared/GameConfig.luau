@@ -268,12 +268,29 @@ GameConfig.WallBounceCooldown = 0.22
 GameConfig.VehicleBumpCooldown = 0.5
 -- 玩家碰撞反弹速度倍数
 GameConfig.VehicleBumpSpeedMultiplier = 1.2
--- 玩家碰撞判定半径 (两个载具中心距离)
-GameConfig.VehicleCollisionRadius = 5.0
+-- 玩家碰撞判定半径 (从 VehicleModel.BaseDisk 动态计算并缓存)
+local cachedVehicleCollisionRadius: number? = nil
+function GameConfig.GetVehicleCollisionRadius(): number
+	if cachedVehicleCollisionRadius then
+		return cachedVehicleCollisionRadius
+	end
+
+	local models = replicatedStorage:FindFirstChild("Models")
+	local vehicleModel = if models then models:FindFirstChild("VehicleModel") else nil
+	local baseDisk = if vehicleModel then vehicleModel:FindFirstChild("BaseDisk") else nil
+
+	if baseDisk and baseDisk:IsA("BasePart") then
+		local size = baseDisk.Size
+		cachedVehicleCollisionRadius = math.sqrt(size.X ^ 2 + size.Z ^ 2)
+		return cachedVehicleCollisionRadius :: number
+	end
+
+	return 5.0 -- Fallback
+end
 -- 玩家重叠主动解围速度
 GameConfig.VehicleOverlapResolutionSpeed = 15
--- 玩家碰撞方向判定阈值 (点积 < 此值则反射)
-GameConfig.VehicleBumpDotThreshold = -0.2
+-- 玩家碰撞方向判定阈值 (点积 < 此值则反射; 调为 0.0 以增加侧向碰撞灵敏度)
+GameConfig.VehicleBumpDotThreshold = 0.0
 -- 触发反弹的进入速度阈值 (负数)
 GameConfig.WallBounceVelThreshold = -0.35
 -- 判定卡墙的最大速度
@@ -290,14 +307,7 @@ GameConfig.WallBounceSpeedMultiplier = 1
 GameConfig.ArenaSpawnMargin = 8
 -- 随机出生时单位间的最小间隔（Studs）
 GameConfig.MinSpawnSeparation = 20
--- 开火导致的镜头旋转角度（每次射击改变顺逆时针）
-GameConfig.CameraRecoilAngleRad = math.rad(720)
--- 镜头后坐力平滑系数（越大抵达顶峰越快）
-GameConfig.CameraRecoilLerpSpeed = 2
--- 自定义战斗相机俯仰限制（弧度）
-GameConfig.CombatCameraMaxPitchRad = math.rad(72)
--- 第三人称：焦点相对 BaseDisk 位置的垂直偏移（studs，向上为正）
-GameConfig.CombatCameraFocusYOffsetStuds = 5
+
 -- 炮塔受开火扰动：角速度增量（弧度/秒，乘 spinDir）
 GameConfig.TurretSpinImpulseOnFireRadPerSec = math.rad(420)
 -- 炮塔受击扰动：角速度增量（弧度/秒，随机向）

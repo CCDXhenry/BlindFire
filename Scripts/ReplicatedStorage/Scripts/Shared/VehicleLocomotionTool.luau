@@ -293,7 +293,7 @@ export type VehicleBumpUnitInfo = DriveState & {
 function VehicleLocomotionTool.ResolveVehicleOverlaps(selfInfo: UnitInfoLike, unitInfoMap: { [number]: UnitInfoLike }, selfId: number, dt: number)
 	local root = selfInfo.rootPart
 	local pos = root.Position
-	local radius = GameConfig.VehicleCollisionRadius
+	local radius = GameConfig.GetVehicleCollisionRadius()
 
 	for otherId, otherInfo in unitInfoMap do
 		if otherId == selfId then
@@ -382,7 +382,7 @@ function VehicleLocomotionTool.ResolveAllVehicleBumps(
 				continue
 			end
 			local sumRadii = horizontalHalfExtentXZ(rootA) + horizontalHalfExtentXZ(rootB)
-			local maxCenterDist = math.max(sumRadii + 0.6, GameConfig.VehicleCollisionRadius)
+			local maxCenterDist = math.max(sumRadii + 1.2, GameConfig.GetVehicleCollisionRadius())
 			-- 快速距离剔除：距离明显过远时跳过 GetTouchingParts（物理查询），减少 O(n²) 开销
 			-- 留 1 stud 安全余量，确保不会漏掉刚好掠过边界的物理接触
 			if dist > maxCenterDist + 1 then
