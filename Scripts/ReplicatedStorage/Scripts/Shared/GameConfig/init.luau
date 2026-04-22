@@ -96,6 +96,42 @@ export type SettingInfo = {
 	vibrationOn: boolean,
 }
 --玩家配置信息
+export type BulletData = {
+	id: number,
+	iconImage: string,
+	resourceName: string,
+	labelName_t: string,
+	sortId: number,
+	maxDistance: number,
+	productId: number,
+	lifetime: number,
+	cost: number,
+	maxBounces: number,
+	costType: number,
+	moveSpeed: number,
+}
+
+export type VehicleData = {
+	id: number,
+	iconImage: string,
+	resourceName: string,
+	labelName_t: string,
+	bulletId: number,
+	sortId: number,
+	productId: number,
+	cost: number,
+	costType: number,
+	moveSpeed: number,
+	bulletData: BulletData?,
+}
+
+export type VehicleInventory = {
+	--当前使用的载具ID
+	currentId: string,
+	--已拥有的载具列表
+	ownedList: { [string]: boolean },
+}
+
 export type PlayerConfigInfo = {}
 export type PlayerSaveInfo = {
 	--数据版本
@@ -116,6 +152,8 @@ export type PlayerSaveInfo = {
 	ownedGamePassList: { number },
 	--货币信息
 	currencies: { [string]: number },
+	--载具信息
+	vehicleInventory: VehicleInventory,
 }
 export type PlayerInfo = PlayerSaveInfo & {
 	--玩家信息是否发生变化
@@ -163,6 +201,12 @@ function GameConfig.CreateDefaultPlayerSaveInfo(): PlayerSaveInfo
 		currencies = {
 			[tostring(GameConfig.CurrencyType.Coin)] = 0,
 		},
+		vehicleInventory = {
+			currentId = "1",
+			ownedList = {
+				["1"] = true,
+			},
+		},
 	}
 end
 
@@ -174,6 +218,8 @@ export type ClientLocalPlayerSaveInfo = {
 	ownedGamePassList: { number },
 	--货币信息
 	currencies: { [string]: number },
+	--载具信息
+	vehicleInventory: VehicleInventory,
 }
 export type ClientLocalPlayerInfo = ClientLocalPlayerSaveInfo & {
 	--已拥有的通行证映射
@@ -369,5 +415,30 @@ GameConfig.VisibleParameters = {
 	{ key = "VehicleCollisionRadius", alias = "载具碰撞半径" },
 	{ key = "VehicleOverlapResolutionSpeed", alias = "重叠解围速度" },
 }
+
+local BulletData = require(script.BulletData)
+local VehiclesData = require(script.VehiclesData)
+
+GameConfig.BulletDataMap = BulletData :: { [number]: BulletData }
+GameConfig.VehicleDataMap = {} :: { [number]: VehicleData }
+
+for id, data in pairs(VehiclesData) do
+	local vehicle: VehicleData = {
+		id = data.id,
+		iconImage = data.iconImage,
+		resourceName = data.resourceName,
+		labelName_t = data.labelName_t,
+		bulletId = data.bulletId,
+		sortId = data.sortId,
+		productId = data.productId,
+		cost = data.cost,
+		costType = data.costType,
+		moveSpeed = data.moveSpeed,
+	}
+	if vehicle.bulletId then
+		vehicle.bulletData = BulletData[vehicle.bulletId]
+	end
+	GameConfig.VehicleDataMap[id] = vehicle
+end
 
 return GameConfig

@@ -36,6 +36,10 @@ function ServerGameInfo.InitPlayerInfo(player: Player, playerSaveInfo: GameConfi
 		ownedGamePassMap = {},
 		playerConfigInfo = playerConfigInfo,
 		currencies = playerSaveInfo.currencies or {},
+		vehicleInventory = playerSaveInfo.vehicleInventory or {
+			currentId = "1",
+			ownedList = { ["1"] = true },
+		},
 		currentGuideType = GameConfig.GuideType.None,
 	}
 	for ownedGamePassIndex: number, ownedGamePassId: number in playerInfo.ownedGamePassList do
@@ -47,6 +51,7 @@ function ServerGameInfo.InitPlayerInfo(player: Player, playerSaveInfo: GameConfi
 		settingInfo = playerInfo.settingInfo,
 		ownedGamePassList = playerInfo.ownedGamePassList,
 		currencies = playerInfo.currencies,
+		vehicleInventory = playerInfo.vehicleInventory,
 	}
 	local clientOtherPlayerSaveInfo: GameConfig.ClientOtherPlayerSyncInfo = {
 		
@@ -92,6 +97,7 @@ function ServerGameInfo.CreatePlayerSaveInfoByPlayerInfo(playerInfo: GameConfig.
 		ownedGamePassList = playerInfo.ownedGamePassList,
 		settingInfo = playerInfo.settingInfo,
 		currencies = playerInfo.currencies,
+		vehicleInventory = playerInfo.vehicleInventory,
 	}
 end
 
@@ -148,6 +154,28 @@ function ServerGameInfo.UpdatePlayerCurrency(player: Player, currencyType: numbe
 
 	--通知客户端
 	NetMsg.FireNotifyPlayerCurrencyUpdate(player, currencyType, totalAmount, changeAmount, reason)
+end
+
+--增加玩家载具
+function ServerGameInfo.AddPlayerVehicle(player: Player, vehicleId: string)
+	local playerInfo: GameConfig.PlayerInfo = playerInfoMap[player.UserId]
+	if playerInfo == nil or playerInfo.vehicleInventory.ownedList[vehicleId] then
+		return
+	end
+	playerInfo.vehicleInventory.ownedList[vehicleId] = true
+	playerInfo.playerInfoChanged = true
+	-- 这里可以增加 NetMsg 通知客户端
+end
+
+--设置当前使用的载具
+function ServerGameInfo.SetPlayerCurrentVehicle(player: Player, vehicleId: string)
+	local playerInfo: GameConfig.PlayerInfo = playerInfoMap[player.UserId]
+	if playerInfo == nil or not playerInfo.vehicleInventory.ownedList[vehicleId] then
+		return
+	end
+	playerInfo.vehicleInventory.currentId = vehicleId
+	playerInfo.playerInfoChanged = true
+	-- 这里可以增加 NetMsg 通知客户端
 end
 
 return ServerGameInfo

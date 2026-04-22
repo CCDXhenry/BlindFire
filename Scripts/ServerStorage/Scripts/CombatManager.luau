@@ -32,6 +32,7 @@ type ServerUnitInfo = {
 	lastWallBounceClock: number,
 	lastVehicleBumpClock: number,
 	driveVectorForce: VectorForce?,
+	vehicleConfig: any,
 }
 
 type ServerBullet = {
@@ -99,8 +100,8 @@ local function ToHorizontalDirection(vector: Vector3): Vector3
 	return horizontal.Unit
 end
 
-local function GetVehicleTemplate(): Model?
-	local vehicleTemplate = modelsFolder:FindFirstChild("VehicleModel")
+local function GetVehicleTemplate(modelName: string): Model?
+	local vehicleTemplate = modelsFolder:FindFirstChild(modelName)
 	if vehicleTemplate == nil or not vehicleTemplate:IsA("Model") then
 		return nil
 	end
@@ -181,9 +182,20 @@ local function ZeroHorizontalVelocity(part: BasePart)
 end
 
 local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
-	local vehicleTemplate = GetVehicleTemplate()
+	local playerInfo = ServerGameInfo.GetPlayerInfo(player)
+	if playerInfo == nil then
+		return nil
+	end
+	local vehicleId = tonumber(playerInfo.vehicleInventory.currentId) or 1
+	local vehicleConfig = GameConfig.VehicleDataMap[vehicleId]
+	if vehicleConfig == nil then
+		warn("[CombatManager] Vehicle config not found for id:", vehicleId)
+		return nil
+	end
+
+	local vehicleTemplate = GetVehicleTemplate(vehicleConfig.resourceName)
 	if vehicleTemplate == nil then
-		warn("[CombatManager] VehicleModel template not found.")
+		warn("[CombatManager] Vehicle model template not found:", vehicleConfig.modelName)
 		return nil
 	end
 	local unitModel: Model = vehicleTemplate:Clone()
@@ -230,8 +242,9 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 		targetVelZ = tvz,
 		spinAngleRad = math.atan2(tvz, tvx),
 		lastWallBounceClock = 0,
-		lastVehicleBumpClock = -math.huge,
+		lastVehicleBumpClock = 0,
 		driveVectorForce = nil,
+		vehicleConfig = vehicleConfig,
 	}
 
 	unitInfoMap[player.UserId] = unitInfo
@@ -326,22 +339,23 @@ local function StepVehicleSimulation(dt: number)
 			unitInfo.driveVectorForce = drive
 		end
 
+		local unitSpeed = unitInfo.vehicleConfig.moveSpeed or GameConfig.UnitSpeed
 		if serverMatchState == "GameStartCountdown" then
 			ZeroHorizontalVelocity(root)
 			root.AssemblyAngularVelocity = Vector3.zero
 			unitInfo.spinAngleRad = VehicleLocomotionTool.BaseDiskDriveYawRadFromState(unitInfo, root)
-			VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, false)
+			VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, false, unitSpeed)
 		elseif serverMatchState == "Fighting" then
 			local roundInfo = PlayerStateManager.GetAllPlayerRoundInfoMap()[playerId]
 			if roundInfo ~= nil and roundInfo.isAlive then
 				unitInfo.spinAngleRad = (unitInfo.spinAngleRad + math.rad(GameConfig.UnitRotationSpeed) * dt * unitInfo.spinDir) % (math.pi * 2)
-				VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, true)
+				VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, true, unitSpeed)
 				VehicleLocomotionTool.ResolveVehicleOverlaps(unitInfo, unitInfoMap, playerId, dt)
 			else
-				VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, false)
+				VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, false, unitSpeed)
 			end
 		else
-			VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, false)
+			VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, false, unitSpeed)
 		end
 	end
 
@@ -517,9 +531,10 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 		local flatDir = Vector3.new(hitDirection.X, 0, hitDirection.Z)
 		if flatDir.Magnitude > 0.001 then
 			local knockbackDir = flatDir.Unit
-			targetUnitInfo.rootPart.AssemblyLinearVelocity = knockbackDir * (GameConfig.UnitSpeed * GameConfig.BulletHitSpeedMultiplier)
-			targetUnitInfo.targetVelX = knockbackDir.X * GameConfig.UnitSpeed
-			targetUnitInfo.targetVelZ = knockbackDir.Z * GameConfig.UnitSpeed
+			local unitSpeed = targetUnitInfo.vehicleConfig.moveSpeed or GameConfig.UnitSpeed
+			targetUnitInfo.rootPart.AssemblyLinearVelocity = knockbackDir * (unitSpeed * GameConfig.BulletHitSpeedMultiplier)
+			targetUnitInfo.targetVelX = knockbackDir.X * unitSpeed
+			targetUnitInfo.targetVelZ = knockbackDir.Z * unitSpeed
 		end
 	end
 
@@ -826,13 +841,17 @@ function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDire
 	)
 	local bulletLaunchTime = clientTimestamp + GameConfig.FireCastTime
 
+	local unitInfo = unitInfoMap[player.UserId]
+	local bulletData = if unitInfo then unitInfo.vehicleConfig.bulletData else nil
+	local bounces = if bulletData then bulletData.maxBounces else (GameConfig.ProjectileMaxBounces or 0)
+
 	local visualModel = CreateServerProjectileVisual(player.UserId, spawnPos, shotDirection, bulletId)
 	activeServerBullets[bulletId] = {
 		shooterId = player.UserId,
 		spawnPos = spawnPos,
 		shotDir = shotDirection,
 		activeTime = bulletLaunchTime,
-		bouncesLeft = GameConfig.ProjectileMaxBounces or 0,
+		bouncesLeft = bounces,
 		currentPos = spawnPos,
 		estimatedRtt = math.max(0, estimatedRtt),
 		visualModel = visualModel,
@@ -844,9 +863,11 @@ function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDire
 	local shooterUnit = unitInfoMap[player.UserId]
 	if shooterUnit ~= nil then
 		local recoilDir = -shotDirection
-		shooterUnit.rootPart.AssemblyLinearVelocity = recoilDir * (GameConfig.UnitSpeed * GameConfig.FireRecoilSpeedMultiplier)
-		shooterUnit.targetVelX = recoilDir.X * GameConfig.UnitSpeed * GameConfig.FireRecoilSpeedMultiplier
-		shooterUnit.targetVelZ = recoilDir.Z * GameConfig.UnitSpeed * GameConfig.FireRecoilSpeedMultiplier
+		local unitSpeed = shooterUnit.vehicleConfig.moveSpeed or GameConfig.UnitSpeed
+		local recoilSpeed = unitSpeed * GameConfig.FireRecoilSpeedMultiplier
+		shooterUnit.rootPart.AssemblyLinearVelocity = recoilDir * recoilSpeed
+		shooterUnit.targetVelX = recoilDir.X * recoilSpeed
+		shooterUnit.targetVelZ = recoilDir.Z * recoilSpeed
 	end
 
 	LogInfo(string.format("FireAccepted userId=%d bulletId=%s", player.UserId, bulletId))
@@ -873,7 +894,8 @@ function CombatManager.StartRound(participantIds: { number })
 		end
 		unitInfo.moveAngle = GetRandomMoveAngle()
 		unitInfo.spinDir = GetRandomSpinDir()
-		local tvx, tvz = VehicleLocomotionTool.AngleToVelocityXZ(unitInfo.moveAngle)
+		local unitSpeed = unitInfo.vehicleConfig.moveSpeed or GameConfig.UnitSpeed
+		local tvx, tvz = VehicleLocomotionTool.AngleToVelocityXZ(unitInfo.moveAngle, unitSpeed)
 		unitInfo.targetVelX = tvx
 		unitInfo.targetVelZ = tvz
 		unitInfo.spinAngleRad = math.atan2(tvz, tvx)

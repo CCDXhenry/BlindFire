@@ -150,9 +150,10 @@ function VehicleLocomotionTool.UprightGoalCFrame(hullYawRad: number): CFrame
 	return CFrame.Angles(0, hullYawRad, 0) * BASE_DISK_MESH_OFFSET
 end
 
-function VehicleLocomotionTool.AngleToVelocityXZ(angleDeg: number): (number, number)
+function VehicleLocomotionTool.AngleToVelocityXZ(angleDeg: number, customSpeed: number?): (number, number)
 	local rad = math.rad(angleDeg)
-	return math.cos(rad) * GameConfig.UnitSpeed, math.sin(rad) * GameConfig.UnitSpeed
+	local speed = customSpeed or GameConfig.UnitSpeed
+	return math.cos(rad) * speed, math.sin(rad) * speed
 end
 
 function VehicleLocomotionTool.BaseDiskDriveYawRadFromState(state: DriveState, root: BasePart): number
@@ -220,7 +221,8 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 	root: BasePart,
 	drive: VectorForce,
 	_dt: number,
-	applyHorizontalDrive: boolean
+	applyHorizontalDrive: boolean,
+	customSpeed: number?
 )
 	root.CFrame = CFrame.new(root.Position) * VehicleLocomotionTool.UprightGoalCFrame(state.spinAngleRad)
 
@@ -238,7 +240,7 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 	
 	if isTargetVelInvalid then
 		-- 自愈逻辑：如果 applyHorizontalDrive 为 true 但速度矢量为 0 或 NaN，则根据当前旋转角恢复基础速度
-		local recoveredX, recoveredZ = VehicleLocomotionTool.AngleToVelocityXZ(math.deg(state.spinAngleRad))
+		local recoveredX, recoveredZ = VehicleLocomotionTool.AngleToVelocityXZ(math.deg(state.spinAngleRad), customSpeed)
 		state.targetVelX = recoveredX
 		state.targetVelZ = recoveredZ
 		targetDir = Vector3.new(recoveredX, 0, recoveredZ)
@@ -252,7 +254,7 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 			state.stuckTime = (state.stuckTime or 0) + _dt
 			if state.stuckTime >= GameConfig.StuckStallDuration then
 				-- 触发强制重启位移
-				local recoveredX, recoveredZ = VehicleLocomotionTool.AngleToVelocityXZ(math.deg(state.spinAngleRad))
+				local recoveredX, recoveredZ = VehicleLocomotionTool.AngleToVelocityXZ(math.deg(state.spinAngleRad), customSpeed)
 				state.targetVelX = recoveredX
 				state.targetVelZ = recoveredZ
 				targetDir = Vector3.new(recoveredX, 0, recoveredZ)
@@ -266,7 +268,8 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 	state.lastPos = currentPos
 	
 	local targetDirUnit = if targetDir.Magnitude > 0.001 then targetDir.Unit else Vector3.new(0, 0, -1)
-	local desired = targetDirUnit * GameConfig.UnitSpeed
+	local speed = customSpeed or GameConfig.UnitSpeed
+	local desired = targetDirUnit * speed
 	local err = desired - curXZ
 	drive.Force = Vector3.new(err.X, 0, err.Z) * (GameConfig.DriveHorizontalForceGain * mass)
 
@@ -297,14 +300,16 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 				or (curXZ.Magnitude < GameConfig.WallStuckSpeedThreshold and desiredDot < GameConfig.WallStuckAngleThreshold)
 			if shouldBounce then
 				state.lastWallBounceClock = now
-				local newSpeed = GameConfig.UnitSpeed * GameConfig.WallBounceSpeedMultiplier
+				local speed = customSpeed or GameConfig.UnitSpeed
+				local newSpeed = speed * GameConfig.WallBounceSpeedMultiplier
 				root.AssemblyLinearVelocity = inward * newSpeed
 				if targetDir2.Magnitude >= 1e-4 then
 					local du = targetDir2.Unit
 					local reflected = du - 2 * inward:Dot(du) * inward
 					local rFlat = Vector3.new(reflected.X, 0, reflected.Z)
 					if rFlat.Magnitude > 1e-4 then
-						local r = rFlat.Unit * GameConfig.UnitSpeed
+						local speed = customSpeed or GameConfig.UnitSpeed
+						local r = rFlat.Unit * speed
 						state.targetVelX = r.X
 						state.targetVelZ = r.Z
 					end
@@ -363,7 +368,7 @@ local function vehiclesPhysicallyTouching(root: BasePart, otherVehicle: Model): 
 	return false
 end
 
-local function reflectTargetVelForVehicleBump(state: DriveState, normalAwayFromOther: Vector3)
+local function reflectTargetVelForVehicleBump(state: DriveState, normalAwayFromOther: Vector3, customSpeed: number?)
 	local currentTarget = Vector3.new(state.targetVelX, 0, state.targetVelZ)
 	if currentTarget.Magnitude <= 0.01 then
 		return
@@ -375,7 +380,8 @@ local function reflectTargetVelForVehicleBump(state: DriveState, normalAwayFromO
 	local reflected = du - 2 * normalAwayFromOther:Dot(du) * normalAwayFromOther
 	local rFlat = Vector3.new(reflected.X, 0, reflected.Z)
 	if rFlat.Magnitude > 0.01 then
-		local r = rFlat.Unit * GameConfig.UnitSpeed
+		local speed = customSpeed or GameConfig.UnitSpeed
+		local r = rFlat.Unit * speed
 		state.targetVelX = r.X
 		state.targetVelZ = r.Z
 	end
@@ -386,7 +392,7 @@ end
 	shouldInclude 为 nil 时处理 map 内全部单位。
 ]]
 function VehicleLocomotionTool.ResolveAllVehicleBumps(
-	unitInfoMap: { [number]: VehicleBumpUnitInfo },
+	unitInfoMap: { [number]: VehicleBumpUnitInfo & { vehicleConfig: any? } },
 	shouldInclude: ((number) -> boolean)?
 )
 	local now = os.clock()
@@ -434,15 +440,17 @@ function VehicleLocomotionTool.ResolveAllVehicleBumps(
 			end
 
 			local bumpDir = flat.Unit
-			local newSpeed = GameConfig.UnitSpeed * GameConfig.VehicleBumpSpeedMultiplier
-			rootA.AssemblyLinearVelocity = bumpDir * newSpeed
-			rootB.AssemblyLinearVelocity = (-bumpDir) * newSpeed
+			local speedA = if uA.vehicleConfig then uA.vehicleConfig.moveSpeed else GameConfig.UnitSpeed
+			local speedB = if uB.vehicleConfig then uB.vehicleConfig.moveSpeed else GameConfig.UnitSpeed
+			
+			rootA.AssemblyLinearVelocity = bumpDir * (speedA * GameConfig.VehicleBumpSpeedMultiplier)
+			rootB.AssemblyLinearVelocity = (-bumpDir) * (speedB * GameConfig.VehicleBumpSpeedMultiplier)
 
 			uA.lastVehicleBumpClock = now
 			uB.lastVehicleBumpClock = now
 
-			reflectTargetVelForVehicleBump(uA, bumpDir)
-			reflectTargetVelForVehicleBump(uB, -bumpDir)
+			reflectTargetVelForVehicleBump(uA, bumpDir, speedA)
+			reflectTargetVelForVehicleBump(uB, -bumpDir, speedB)
 		end
 	end
 end
