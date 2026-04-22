@@ -33,6 +33,8 @@ type ServerUnitInfo = {
 	lastVehicleBumpClock: number,
 	driveVectorForce: VectorForce?,
 	vehicleConfig: any,
+	stuckTime: number?,
+	lastPos: Vector3?,
 }
 
 type ServerBullet = {
@@ -62,8 +64,10 @@ local SERVER_BULLETS_FOLDER_NAME = "ServerBullets"
 local SERVER_BULLET_SHOOTER_USER_ID_ATTR = "ShooterUserId"
 
 local serverBulletsFolder: Folder? = nil
--- 缓存 Models Folder，避免每次开火都 WaitForChild
+-- 缓存 Models Folder
 local modelsFolder: Folder = replicatedStorage:WaitForChild("Models") :: Folder
+local vehiclesFolder: Folder = modelsFolder:WaitForChild("Vehicles") :: Folder
+local bulletModelsFolder: Folder = modelsFolder:WaitForChild("Bullet") :: Folder
 
 local unitInfoMap: { [number]: ServerUnitInfo } = {}
 local playerDeadCallback: OnPlayerDeadCallback? = nil
@@ -77,7 +81,7 @@ local function LogInfo(message: string)
 	print(string.format("%s %s", LOG_PREFIX, message))
 end
 
-local function LogWarn(message: string)
+local function _LogWarn(message: string)
 	warn(string.format("%s %s", LOG_PREFIX, message))
 end
 
@@ -101,7 +105,7 @@ local function ToHorizontalDirection(vector: Vector3): Vector3
 end
 
 local function GetVehicleTemplate(modelName: string): Model?
-	local vehicleTemplate = modelsFolder:FindFirstChild(modelName)
+	local vehicleTemplate = vehiclesFolder:FindFirstChild(modelName)
 	if vehicleTemplate == nil or not vehicleTemplate:IsA("Model") then
 		return nil
 	end
@@ -148,7 +152,7 @@ local function GetSpawnPosition(): Vector3
 	return bestPos
 end
 
-local function GetMuzzleAttachment(unitModel: Model): Attachment?
+local function _GetMuzzleAttachment(unitModel: Model): Attachment?
 	local barrel = unitModel:FindFirstChild("TurretBarrel", true)
 	if barrel == nil or not barrel:IsA("BasePart") then
 		return nil
@@ -195,7 +199,7 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 
 	local vehicleTemplate = GetVehicleTemplate(vehicleConfig.resourceName)
 	if vehicleTemplate == nil then
-		warn("[CombatManager] Vehicle model template not found:", vehicleConfig.modelName)
+		warn("[CombatManager] Vehicle model template not found:", vehicleConfig.resourceName)
 		return nil
 	end
 	local unitModel: Model = vehicleTemplate:Clone()
@@ -338,29 +342,31 @@ local function StepVehicleSimulation(dt: number)
 			drive = VehicleLocomotionTool.EnsureVehicleDriveConstraints(root)
 			unitInfo.driveVectorForce = drive
 		end
+		local driveNotNull: VectorForce = drive :: VectorForce
 
-		local unitSpeed = unitInfo.vehicleConfig.moveSpeed or GameConfig.UnitSpeed
+		local vehicleConfig = unitInfo.vehicleConfig
+		local unitSpeed = if vehicleConfig then (vehicleConfig.moveSpeed or GameConfig.UnitSpeed) else GameConfig.UnitSpeed
 		if serverMatchState == "GameStartCountdown" then
 			ZeroHorizontalVelocity(root)
 			root.AssemblyAngularVelocity = Vector3.zero
 			unitInfo.spinAngleRad = VehicleLocomotionTool.BaseDiskDriveYawRadFromState(unitInfo, root)
-			VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, false, unitSpeed)
+			VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, driveNotNull, dt, false, unitSpeed)
 		elseif serverMatchState == "Fighting" then
 			local roundInfo = PlayerStateManager.GetAllPlayerRoundInfoMap()[playerId]
 			if roundInfo ~= nil and roundInfo.isAlive then
 				unitInfo.spinAngleRad = (unitInfo.spinAngleRad + math.rad(GameConfig.UnitRotationSpeed) * dt * unitInfo.spinDir) % (math.pi * 2)
-				VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, true, unitSpeed)
-				VehicleLocomotionTool.ResolveVehicleOverlaps(unitInfo, unitInfoMap, playerId, dt)
+				VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, driveNotNull, dt, true, unitSpeed)
+				VehicleLocomotionTool.ResolveVehicleOverlaps(unitInfo, unitInfoMap :: any, playerId, dt)
 			else
-				VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, false, unitSpeed)
+				VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, driveNotNull, dt, false, unitSpeed)
 			end
 		else
-			VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, drive, dt, false, unitSpeed)
+			VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, driveNotNull, dt, false, unitSpeed)
 		end
 	end
 
 	if serverMatchState == "Fighting" then
-		VehicleLocomotionTool.ResolveAllVehicleBumps(unitInfoMap, function(playerIdForBump: number): boolean
+		VehicleLocomotionTool.ResolveAllVehicleBumps(unitInfoMap :: any, function(playerIdForBump: number): boolean
 			local roundInfoForBump = PlayerStateManager.GetAllPlayerRoundInfoMap()[playerIdForBump]
 			return roundInfoForBump ~= nil and roundInfoForBump.isAlive
 		end)
@@ -425,10 +431,11 @@ local function IsServerProjectileModel(model: Model): boolean
 	return string.sub(model.Name, 1, #SERVER_PROJECTILE_NAME_PREFIX) == SERVER_PROJECTILE_NAME_PREFIX
 end
 
-local function CreateServerProjectileVisual(shooterId: number, spawnPos: Vector3, shotDir: Vector3, bulletId: string): Model?
-	local projectileTemplate = modelsFolder:FindFirstChild("ProjectileModel")
+local function CreateServerProjectileVisual(shooterId: number, spawnPos: Vector3, shotDir: Vector3, bulletId: string, modelName: string?): Model?
+	local templateName = modelName or "ProjectileModel"
+	local projectileTemplate = bulletModelsFolder:FindFirstChild(templateName)
 	if projectileTemplate == nil or not projectileTemplate:IsA("Model") then
-		warn("[CombatManager] ProjectileModel template not found.")
+		warn("[CombatManager] ProjectileModel template not found:", templateName)
 		return nil
 	end
 	local projectileModel = projectileTemplate:Clone()
@@ -841,11 +848,11 @@ function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDire
 	)
 	local bulletLaunchTime = clientTimestamp + GameConfig.FireCastTime
 
-	local unitInfo = unitInfoMap[player.UserId]
 	local bulletData = if unitInfo then unitInfo.vehicleConfig.bulletData else nil
 	local bounces = if bulletData then bulletData.maxBounces else (GameConfig.ProjectileMaxBounces or 0)
+	local bulletResource = if bulletData then bulletData.resourceName else "ProjectileModel"
 
-	local visualModel = CreateServerProjectileVisual(player.UserId, spawnPos, shotDirection, bulletId)
+	local visualModel = CreateServerProjectileVisual(player.UserId, spawnPos, shotDirection, bulletId, bulletResource)
 	activeServerBullets[bulletId] = {
 		shooterId = player.UserId,
 		spawnPos = spawnPos,
