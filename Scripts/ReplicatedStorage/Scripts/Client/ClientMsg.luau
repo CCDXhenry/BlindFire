@@ -16,6 +16,7 @@ local showGameTipEvent: BindableEvent = bindableEventsFolder:FindFirstChild("Sho
 local showAddRewardsTipEvent: BindableEvent = bindableEventsFolder:FindFirstChild("ShowAddRewardsTip") :: BindableEvent
 local localPlayerCurrencyUpdateEvent: BindableEvent = bindableEventsFolder:FindFirstChild("LocalPlayerCurrencyUpdate") :: BindableEvent
 local currentGuideTypeChangedEvent: BindableEvent = bindableEventsFolder:FindFirstChild("CurrentGuideTypeChanged") :: BindableEvent
+local localPlayerVehicleInventoryUpdateEvent: BindableEvent = bindableEventsFolder:FindFirstChild("LocalPlayerVehicleInventoryUpdate") :: BindableEvent
 --关闭窗口事件
 function ClientMsg.FireCloseWindow(windowName: string)
 	closeWindowEvent:Fire(windowName)
@@ -96,6 +97,15 @@ end
 
 function ClientMsg.ConnectCurrentGuideTypeChanged(callback: () -> ())
 	currentGuideTypeChangedEvent.Event:Connect(callback)
+end
+
+--本地玩家载具仓库更新事件
+function ClientMsg.FireLocalPlayerVehicleInventoryUpdate()
+	localPlayerVehicleInventoryUpdateEvent:Fire()
+end
+
+function ClientMsg.ConnectLocalPlayerVehicleInventoryUpdate(callback: () -> ())
+	localPlayerVehicleInventoryUpdateEvent.Event:Connect(callback)
 end
 
 return ClientMsg

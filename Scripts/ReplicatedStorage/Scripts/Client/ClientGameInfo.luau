@@ -21,6 +21,7 @@ function ClientGameInfo.InitPlayerInfo(localPlayerSaveInfo: GameConfig.ClientLoc
 		ownedGamePassMap = {},
 		playerConfigInfo = playerConfigInfo,
 		currencies = localPlayerSaveInfo.currencies,
+		vehicleInventory = localPlayerSaveInfo.vehicleInventory,
 		currentGuideType = GameConfig.GuideType.None,
 	}
 	if localPlayerInfo == nil then
@@ -116,6 +117,15 @@ function ClientGameInfo.SetCurrentGuideType(guideType: number)
 	end
 	localPlayerInfo.currentGuideType = guideType
 	ClientMsg.FireCurrentGuideTypeChanged()
+end
+
+--更新载具仓库
+function ClientGameInfo.UpdateVehicleInventory(vehicleInventory: GameConfig.VehicleInventory)
+	if localPlayerInfo == nil then
+		return
+	end
+	localPlayerInfo.vehicleInventory = vehicleInventory
+	ClientMsg.FireLocalPlayerVehicleInventoryUpdate()
 end
 
 return ClientGameInfo

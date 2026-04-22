@@ -30,6 +30,9 @@ local notifyArenaSeatPrepareEvent: RemoteEvent = remoteEventsFolder:FindFirstChi
 local notifyGameConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyGameConfigSync") :: RemoteEvent
 local notifyPendingConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPendingConfigSync") :: RemoteEvent
 local requestSyncUnitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestSyncUnit") :: RemoteEvent
+local requestBuyVehicleEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestBuyVehicle") :: RemoteEvent
+local requestUpdateVehicleUsingEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestUpdateVehicleUsing") :: RemoteEvent
+local notifyPlayerVehicleInventoryUpdateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPlayerVehicleInventoryUpdate") :: RemoteEvent
 
 --客户端请求设置背景音乐音量
 function NetMsg.FireRequestSetBGMVolume(volume: number)
@@ -250,6 +253,33 @@ end
 
 function NetMsg.ConnectNotifyPendingConfigSync(callback: (overrides: { [string]: any }) -> ())
 	notifyPendingConfigSyncEvent.OnClientEvent:Connect(callback)
+end
+
+--客户端请求购买载具
+function NetMsg.FireRequestBuyVehicle(vehicleId: number)
+	requestBuyVehicleEvent:FireServer(vehicleId)
+end
+
+function NetMsg.ConnectRequestBuyVehicle(callback: (player: Player, vehicleId: number) -> ())
+	requestBuyVehicleEvent.OnServerEvent:Connect(callback)
+end
+
+--客户端请求更新当前使用的载具
+function NetMsg.FireRequestUpdateVehicleUsing(vehicleId: number)
+	requestUpdateVehicleUsingEvent:FireServer(vehicleId)
+end
+
+function NetMsg.ConnectRequestUpdateVehicleUsing(callback: (player: Player, vehicleId: number) -> ())
+	requestUpdateVehicleUsingEvent.OnServerEvent:Connect(callback)
+end
+
+--通知客户端玩家载具仓库更新
+function NetMsg.FireNotifyPlayerVehicleInventoryUpdate(player: Player, vehicleInventory: GameConfig.VehicleInventory)
+	notifyPlayerVehicleInventoryUpdateEvent:FireClient(player, vehicleInventory)
+end
+
+function NetMsg.ConnectNotifyPlayerVehicleInventoryUpdate(callback: (vehicleInventory: GameConfig.VehicleInventory) -> ())
+	notifyPlayerVehicleInventoryUpdateEvent.OnClientEvent:Connect(callback)
 end
 
 return NetMsg

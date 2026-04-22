@@ -17,11 +17,12 @@ local ClientMsg = require(clientScripts:FindFirstChild("ClientMsg"))
 local tweenService: TweenService = game:GetService("TweenService")
 
 local ModalTransparency = 0.3
-local ButtonHoveredScale: number = 1.1  --按钮鼠标移入放大
-local ButtonPressedScale: number = 0.9   --按钮按下缩小
+local ButtonHoveredScale: number = 1.1 --按钮鼠标移入放大
+local ButtonPressedScale: number = 0.9 --按钮按下缩小
 local ButtonInteractionTweenInfo: TweenInfo = TweenInfo.new(0.1) --按钮交互动画缓动信息
 
 UIManager.WindowId = {
+	VehiclesShop = "VehiclesShop",
 }
 
 type WindowConfig = {
@@ -29,10 +30,15 @@ type WindowConfig = {
 	scriptName: string,
 	isModal: boolean,
 }
-local WindowConfigs: {[string]: WindowConfig} = {
+local WindowConfigs: { [string]: WindowConfig } = {
+	[UIManager.WindowId.VehiclesShop] = {
+		FrameName = "VehiclesShopFrame",
+		scriptName = "VehiclesShopFrame",
+		isModal = true,
+	},
 }
 
-local addedWindows: {[string]: Frame} = {}
+local addedWindows: { [string]: Frame } = {}
 local gameScreenGui: ScreenGui?
 local modalButton: ImageButton
 
@@ -65,10 +71,10 @@ local function ApplyButtonEffects(button: GuiButton)
 	local normalScale: number = uiScale.Scale
 	local hoveredScale: number = ButtonHoveredScale * normalScale
 	local pressedScale: number = ButtonPressedScale * normalScale
-	local mouseEnterTween: Tween = tweenService:Create(uiScale, ButtonInteractionTweenInfo, {Scale = hoveredScale})
-	local mouseLeaveTween: Tween = tweenService:Create(uiScale, ButtonInteractionTweenInfo, {Scale = normalScale})
-	local clickTween1: Tween = tweenService:Create(uiScale, ButtonInteractionTweenInfo, {Scale = pressedScale})
-	local clickTween2: Tween = tweenService:Create(uiScale, ButtonInteractionTweenInfo, {Scale = normalScale})
+	local mouseEnterTween: Tween = tweenService:Create(uiScale, ButtonInteractionTweenInfo, { Scale = hoveredScale })
+	local mouseLeaveTween: Tween = tweenService:Create(uiScale, ButtonInteractionTweenInfo, { Scale = normalScale })
+	local clickTween1: Tween = tweenService:Create(uiScale, ButtonInteractionTweenInfo, { Scale = pressedScale })
+	local clickTween2: Tween = tweenService:Create(uiScale, ButtonInteractionTweenInfo, { Scale = normalScale })
 	clickTween1.Completed:Connect(function(playbackState: Enum.PlaybackState)
 		clickTween2:Play()
 	end)
@@ -99,7 +105,7 @@ function UIManager.Init(gameScreenGuiNew: ScreenGui)
 		return
 	end
 	--模态按钮
-	modalButton	= Instance.new("ImageButton")
+	modalButton = Instance.new("ImageButton")
 	modalButton.Name = "ModalButton"
 	modalButton.Modal = true
 	modalButton.BackgroundColor3 = Color3.new(0, 0, 0)
@@ -109,12 +115,12 @@ function UIManager.Init(gameScreenGuiNew: ScreenGui)
 	modalButton.Parent = gameScreenGui
 	modalButton.Visible = false
 	--按钮交互效果
-	local uiParents: {Instance} = {workspace, gameScreenGui}
+	local uiParents: { Instance } = { workspace, gameScreenGui }
 	for uiParentIndex: number, uiParent: Instance in uiParents do
 		uiParent.DescendantAdded:Connect(function(descendant: Instance)
 			if descendant:IsA("GuiButton") then
 				ApplyButtonEffects(descendant)
-			end	
+			end
 		end)
 		for descendantIndex: number, descendant: Instance in uiParent:GetDescendants() do
 			if descendant:IsA("GuiButton") then

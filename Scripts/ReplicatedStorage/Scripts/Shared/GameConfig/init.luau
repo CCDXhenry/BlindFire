@@ -54,6 +54,7 @@ GameConfig.RewardType = {
 --货币类型
 GameConfig.CurrencyType = {
 	Coin = 1, --金币
+	Rb = 2, --Robux
 }
 
 --物品数量改变原因
@@ -79,6 +80,7 @@ GameConfig.GuideTextKeyMap = {
 }
 
 GameConfig.CoinIconImage = "rbxassetid://138756794615498"
+GameConfig.RbIconImage = "rbxassetid://116949418469040"
 
 --通行证id
 GameConfig.GamePassId = {}

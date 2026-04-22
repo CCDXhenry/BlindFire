@@ -10,5 +10,6 @@ local GameTexts = {
 	RoundNoSurvivors = { key = "RoundNoSurvivors", source = "Round over — no survivors" },
 	RoundTimeDraw = { key = "RoundTimeDraw", source = "Time! Surviving draw" },
 	KillFeedDefeated = { key = "KillFeedDefeated", source = "{1} eliminates {2}" },
+	InsufficientCoin = { key = "InsufficientCoin", source = "Insufficient Coins!" },
 }
 return GameTexts
