@@ -1,6 +1,7 @@
 --!strict
 local replicatedStorage: ReplicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
+local tweenService = game:GetService("TweenService")
 
 local core = replicatedStorage:WaitForChild("Core")
 local coreScripts = core:WaitForChild("Scripts")
@@ -9,117 +10,176 @@ local UIAdapter = require(coreClientScripts:FindFirstChild("UIAdapter"))
 
 local scripts = replicatedStorage:WaitForChild("Scripts")
 local clientScripts = scripts:WaitForChild("Client")
+local sharedScripts = scripts:WaitForChild("Shared")
 local BulletClientManager = require(clientScripts:FindFirstChild("BulletClientManager"))
+local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
 
 local gameFrame: Frame = script.Parent
 
-local FIRE_BUTTON_SIZE = UDim2.new(0, 160, 0, 160)
-local FIRE_BUTTON_POS = UDim2.new(1, -180, 1, -180)
+local FIRE_BUTTON_SIZE = UDim2.new(0, 140, 0, 140)
+-- Extra rotation on both ring bars (degrees). Studio template `ReplicatedStorage.UI.GameFrame` uses Bar.Rotation=180 at full ring; keep 0 unless you intentionally retime the fill.
+local CooldownRingRotationOffsetDeg = 0
 
+local fireButtonContainer: Frame? = nil
 local fireButton: TextButton? = nil
-local tipTextLabel: TextLabel? = nil
-local hpTextLabel: TextLabel? = nil
-local cooldownTextLabel: TextLabel? = nil
 
-local function CreateLabel(name: string, position: UDim2, text: string): TextLabel
-	local label = Instance.new("TextLabel")
-	label.Name = name
-	label.Size = UDim2.new(0, 360, 0, 40)
-	label.Position = position
-	label.BackgroundTransparency = 0.2
-	label.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-	label.TextColor3 = Color3.fromRGB(245, 245, 245)
-	label.TextXAlignment = Enum.TextXAlignment.Left
-	label.TextSize = 20
-	label.Font = Enum.Font.GothamMedium
-	label.Text = text
-	label.BorderSizePixel = 0
-	label.Parent = gameFrame
+local progressLeft: Frame? = nil
+local progressRight: Frame? = nil
+local flashOverlay: Frame? = nil
 
-	local padding = Instance.new("UIPadding")
-	padding.PaddingLeft = UDim.new(0, 10)
-	padding.Parent = label
+local isCoolingDown = false
 
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 6)
-	corner.Parent = label
-
-	return label
-end
-
-local function CreateFireButton(): TextButton
-	local button = Instance.new("TextButton")
-	button.Name = "FireButton"
-	button.Size = FIRE_BUTTON_SIZE
-	button.Position = FIRE_BUTTON_POS
-	button.AnchorPoint = Vector2.new(0.5, 0.5)
-	button.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
-	button.Text = "Fire"
-	button.TextColor3 = Color3.fromRGB(255, 255, 255)
-	button.Font = Enum.Font.GothamBold
-	button.TextSize = 26
-	button.BorderSizePixel = 0
-	button.ZIndex = 10
-	button.Parent = gameFrame
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(1, 0)
-	corner.Parent = button
-
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = Color3.fromRGB(255, 120, 120)
-	stroke.Thickness = 3
-	stroke.Transparency = 0.3
-	stroke.Parent = button
-
-	return button
+local function PlayFlashEffect()
+	if not flashOverlay or not fireButton then return end
+	
+	flashOverlay.BackgroundTransparency = 0.3
+	local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+	tweenService:Create(flashOverlay, tweenInfo, {BackgroundTransparency = 1}):Play()
+	
+	-- Button brightness bump
+	local originalColor = Color3.fromRGB(220, 60, 60)
+	fireButton.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
+	tweenService:Create(fireButton, tweenInfo, {BackgroundColor3 = originalColor}):Play()
 end
 
 local function UpdateGameFrame()
-	if tipTextLabel == nil or hpTextLabel == nil or cooldownTextLabel == nil then
+	local matchState = BulletClientManager.GetMatchState()
+	local isAlive = BulletClientManager.IsLocalInVehicle()
+	
+	-- Show fire button only if alive AND during GameStartCountdown or Fighting
+	local shouldBeVisible = isAlive and (matchState == "GameStartCountdown" or matchState == "Fighting")
+	if fireButtonContainer then
+		fireButtonContainer.Visible = shouldBeVisible
+	end
+	
+	if not shouldBeVisible or fireButton == nil then
 		return
 	end
 
-	local hitCount, maxHits = BulletClientManager.GetLocalHpInfo()
 	local cooldownLeft = BulletClientManager.GetLocalFireCooldownLeft()
-	local matchState = BulletClientManager.GetMatchState()
-	local hpLeft = math.max(0, maxHits - hitCount)
 
-	tipTextLabel.Text = string.format("State: %s  |  Fire: button (Space in vehicle = fire, no exit)", matchState)
-	hpTextLabel.Text = string.format("HP: %d/%d", hpLeft, maxHits)
-	cooldownTextLabel.Text = string.format("Fire CD: %.1fs", cooldownLeft)
+	-- Update Progress Bar
+	local totalCD = GameConfig.FireCooldown
+	local progress = 1 - math.clamp(cooldownLeft / totalCD, 0, 1)
+	
+	if progressLeft and progressRight then
+		-- progress 0 = empty (dark), 1 = full ring. Each half only rotates 0–180 so at p=1 we get (180,180), not (180,360); 360° == 0° and would drop the second semicircle.
+		-- Fill from top toward left first: LeftHalf bar leads 0–50%, RightHalf follows 50–100% (CCW sense on screen when paired with masks below).
+		local leftAngle = math.clamp(progress * 2, 0, 1) * 180
+		local rightAngle = math.clamp(progress * 2 - 1, 0, 1) * 180
+		
+		progressLeft.Rotation = leftAngle + CooldownRingRotationOffsetDeg
+		progressRight.Rotation = rightAngle + CooldownRingRotationOffsetDeg
+	end
+
+	-- State feedback
+	if cooldownLeft > 0 then
+		isCoolingDown = true
+		fireButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+		fireButton.TextTransparency = 0.5
+	else
+		if isCoolingDown then
+			isCoolingDown = false
+			PlayFlashEffect()
+		end
+		fireButton.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+		fireButton.TextTransparency = 0
+	end
+end
+
+local function SemicircleTransparencyLeftHalf(): NumberSequence
+	return NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(0.499, 0),
+		NumberSequenceKeypoint.new(0.5, 1),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+end
+
+local function SemicircleTransparencyRightHalf(): NumberSequence
+	return NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 1),
+		NumberSequenceKeypoint.new(0.499, 1),
+		NumberSequenceKeypoint.new(0.5, 0),
+		NumberSequenceKeypoint.new(1, 0),
+	})
+end
+
+local function ApplySemicircleMaskToTarget(target: GuiObject, useRightHalfMask: boolean)
+	local grad = target:FindFirstChildOfClass("UIGradient")
+	if grad == nil then
+		grad = Instance.new("UIGradient")
+		grad.Parent = target
+	end
+	grad.Rotation = 0
+	grad.Transparency = if useRightHalfMask then SemicircleTransparencyRightHalf() else SemicircleTransparencyLeftHalf()
+end
+
+local function InitCooldownRingMasks()
+	if progressLeft == nil or progressRight == nil then
+		return
+	end
+	ApplySemicircleMaskToTarget(progressRight, true)
+	local strokeRight = progressRight:FindFirstChildOfClass("UIStroke")
+	if strokeRight then
+		ApplySemicircleMaskToTarget(strokeRight, true)
+	end
+	ApplySemicircleMaskToTarget(progressLeft, false)
+	local strokeLeft = progressLeft:FindFirstChildOfClass("UIStroke")
+	if strokeLeft then
+		ApplySemicircleMaskToTarget(strokeLeft, false)
+	end
 end
 
 local function OnFireButtonPressed()
-	if fireButton == nil then
-		return
-	end
-	fireButton.BackgroundColor3 = Color3.fromRGB(160, 30, 30)
-	fireButton.Size = UDim2.new(0, 148, 0, 148)
+	if fireButton == nil or isCoolingDown then return end
+	fireButton.Size = UDim2.new(0, 130, 0, 130)
 end
 
 local function OnFireButtonReleased()
-	if fireButton == nil then
-		return
-	end
-	fireButton.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+	if fireButton == nil then return end
 	fireButton.Size = FIRE_BUTTON_SIZE
 end
 
 local function OnFireButtonClicked()
+	if isCoolingDown then return end
 	BulletClientManager.FireShot()
+end
+
+local function SetupFireButton()
+	fireButtonContainer = gameFrame:WaitForChild("FireButtonContainer", 5) :: Frame
+	if not fireButtonContainer then 
+		warn("[GameFrame] FireButtonContainer not found in GameFrame")
+		return 
+	end
+
+	-- Find the button (could be TextButton or ImageButton)
+	fireButton = (fireButtonContainer:FindFirstChild("FireButton") or fireButtonContainer:FindFirstChildOfClass("TextButton") or fireButtonContainer:FindFirstChildOfClass("ImageButton")) :: any
+	
+	if fireButton then
+		flashOverlay = fireButton:FindFirstChild("FlashOverlay") :: Frame
+		
+		fireButton.MouseButton1Down:Connect(OnFireButtonPressed)
+		fireButton.MouseButton1Up:Connect(OnFireButtonReleased)
+		fireButton.Activated:Connect(OnFireButtonClicked)
+	end
+
+	local rightHalf = fireButtonContainer:FindFirstChild("RightHalf")
+	if rightHalf then
+		progressRight = rightHalf:FindFirstChild("Bar") :: Frame
+	end
+
+	local leftHalf = fireButtonContainer:FindFirstChild("LeftHalf")
+	if leftHalf then
+		progressLeft = leftHalf:FindFirstChild("Bar") :: Frame
+	end
+
+	InitCooldownRingMasks()
 end
 
 local function InitUI()
 	UIAdapter.AddAdaptiveFrame(gameFrame, UIAdapter.AdaptiveType.FullScreen)
-	tipTextLabel = CreateLabel("TipLabel", UDim2.new(0, 20, 0, 20), "State: InLobby")
-	hpTextLabel = CreateLabel("HpLabel", UDim2.new(0, 20, 0, 70), "HP: 3/3")
-	cooldownTextLabel = CreateLabel("CooldownLabel", UDim2.new(0, 20, 0, 120), "Fire CD: 0.0s")
-
-	fireButton = CreateFireButton()
-	fireButton.MouseButton1Down:Connect(OnFireButtonPressed)
-	fireButton.MouseButton1Up:Connect(OnFireButtonReleased)
-	fireButton.MouseButton1Click:Connect(OnFireButtonClicked)
+	SetupFireButton()
 end
 
 InitUI()

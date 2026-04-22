@@ -153,7 +153,7 @@ local function GetSpawnPosition(): Vector3
 end
 
 local function _GetMuzzleAttachment(unitModel: Model): Attachment?
-	local barrel = unitModel:FindFirstChild("TurretBarrel", true)
+	local barrel = unitModel:FindFirstChild("TurretBarrel")
 	if barrel == nil or not barrel:IsA("BasePart") then
 		return nil
 	end

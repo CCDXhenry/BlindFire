@@ -37,7 +37,7 @@ local roundStartCallback: OnRoundStartCallback? = nil
 local isStopRequested: boolean = false
 
 local function LogInfo(message: string)
-	print(string.format("%s %s", LOG_PREFIX, message))
+	--print(string.format("%s %s", LOG_PREFIX, message))
 end
 
 local function FormatVector3(vector: Vector3): string

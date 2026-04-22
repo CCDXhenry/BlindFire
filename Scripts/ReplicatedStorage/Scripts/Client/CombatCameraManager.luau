@@ -96,8 +96,23 @@ local function UpdateJumpSuppressionForCombatSeat()
 	humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
 end
 
+local function UpdateVehicleOcclusionProtection()
+	local character = players.LocalPlayer.Character
+	if character == nil then return end
+
+	local seat = GetOwnVehicleSeat()
+	if seat ~= nil then
+		local model = seat:FindFirstAncestorOfClass("Model")
+		if model ~= nil and model.Parent ~= character then
+			-- 将载具模型本地父级设为角色，防止 Invisicam 将其视为遮挡物而变透明
+			model.Parent = character
+		end
+	end
+end
+
 local function OnRenderStepped()
 	UpdateJumpSuppressionForCombatSeat()
+	UpdateVehicleOcclusionProtection()
 end
 
 local function OnCombatFireAction(actionName: string, inputState: Enum.UserInputState, _inputObject: InputObject): Enum.ContextActionResult

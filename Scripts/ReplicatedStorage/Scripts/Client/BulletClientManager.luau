@@ -355,7 +355,7 @@ function BulletClientManager.FireShot()
 		local unitPart = localState.unitPart
 		local muzzleAttachment: Attachment? = nil
 		if localState.model ~= nil then
-			local barrel = localState.model:FindFirstChild("TurretBarrel", true)
+			local barrel = localState.model:FindFirstChild("TurretBarrel")
 			if barrel ~= nil and barrel:IsA("BasePart") then
 				muzzleAttachment = barrel:FindFirstChild("MuzzleAttachment") :: Attachment
 			end
@@ -450,6 +450,12 @@ end
 
 function BulletClientManager.GetMatchState(): GameConfig.MatchState
 	return matchState
+end
+
+function BulletClientManager.IsLocalInVehicle(): boolean
+	local state = unitStateMap[localPlayerId]
+	if state == nil then return false end
+	return state.hitCount < state.maxHits
 end
 
 return BulletClientManager

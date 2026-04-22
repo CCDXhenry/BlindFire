@@ -98,7 +98,7 @@ local function ComputeInwardNormalFromInnerWallProximity(worldPos: Vector3, unit
 		return nil
 	end
 
-	local radius = unitRadius or (2.5)
+	local radius = unitRadius or 2.5
 	local tol = GameConfig.ArenaWallProximityStuds
 	local combinedNormal = Vector3.zero
 	local found = false
@@ -237,7 +237,7 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 
 	local targetDir = Vector3.new(state.targetVelX, 0, state.targetVelZ)
 	local isTargetVelInvalid = (targetDir.Magnitude < 1e-4) or isNaN(state.targetVelX) or isNaN(state.targetVelZ)
-	
+
 	if isTargetVelInvalid then
 		-- 自愈逻辑：如果 applyHorizontalDrive 为 true 但速度矢量为 0 或 NaN，则根据当前旋转角恢复基础速度
 		local recoveredX, recoveredZ = VehicleLocomotionTool.AngleToVelocityXZ(math.deg(state.spinAngleRad), customSpeed)
@@ -266,7 +266,7 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 		end
 	end
 	state.lastPos = currentPos
-	
+
 	local targetDirUnit = if targetDir.Magnitude > 0.001 then targetDir.Unit else Vector3.new(0, 0, -1)
 	local speed = customSpeed or GameConfig.UnitSpeed
 	local desired = targetDirUnit * speed
@@ -442,9 +442,9 @@ function VehicleLocomotionTool.ResolveAllVehicleBumps(
 			local bumpDir = flat.Unit
 			local speedA = if uA.vehicleConfig then uA.vehicleConfig.moveSpeed else GameConfig.UnitSpeed
 			local speedB = if uB.vehicleConfig then uB.vehicleConfig.moveSpeed else GameConfig.UnitSpeed
-			
+
 			rootA.AssemblyLinearVelocity = bumpDir * (speedA * GameConfig.VehicleBumpSpeedMultiplier)
-			rootB.AssemblyLinearVelocity = (-bumpDir) * (speedB * GameConfig.VehicleBumpSpeedMultiplier)
+			rootB.AssemblyLinearVelocity = -bumpDir * (speedB * GameConfig.VehicleBumpSpeedMultiplier)
 
 			uA.lastVehicleBumpClock = now
 			uB.lastVehicleBumpClock = now

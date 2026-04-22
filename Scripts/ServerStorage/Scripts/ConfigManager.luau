@@ -13,7 +13,7 @@ local LOG_PREFIX = "[ConfigManager]"
 local configOverrides: { [string]: any } = {}
 
 local function LogInfo(message: string)
-	print(string.format("%s %s", LOG_PREFIX, message))
+	--print(string.format("%s %s", LOG_PREFIX, message))
 end
 
 -- 设置一个参数对应的覆盖值

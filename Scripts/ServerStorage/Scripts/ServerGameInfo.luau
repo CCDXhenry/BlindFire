@@ -164,7 +164,8 @@ function ServerGameInfo.AddPlayerVehicle(player: Player, vehicleId: string)
 	end
 	playerInfo.vehicleInventory.ownedList[vehicleId] = true
 	playerInfo.playerInfoChanged = true
-	-- 这里可以增加 NetMsg 通知客户端
+	--通知客户端
+	NetMsg.FireNotifyPlayerVehicleInventoryUpdate(player, playerInfo.vehicleInventory)
 end
 
 --设置当前使用的载具
@@ -175,7 +176,8 @@ function ServerGameInfo.SetPlayerCurrentVehicle(player: Player, vehicleId: strin
 	end
 	playerInfo.vehicleInventory.currentId = vehicleId
 	playerInfo.playerInfoChanged = true
-	-- 这里可以增加 NetMsg 通知客户端
+	--通知客户端
+	NetMsg.FireNotifyPlayerVehicleInventoryUpdate(player, playerInfo.vehicleInventory)
 end
 
 return ServerGameInfo

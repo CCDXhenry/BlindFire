@@ -32,7 +32,7 @@ local function InitUI()
 	--设置窗口容器
 	UIManager.Init(gameScreenGui)
 	--创建游戏主界面
-	--UIManager.CreateFrame("GameFrame", "GameFrame", gameScreenGui, 0)
+	UIManager.CreateFrame("GameFrame", "GameFrame", gameScreenGui, 0)
 	UIManager.CreateFrame("GameTipFrame", "GameTipFrame", gameScreenGui, 0)
 	UIManager.CreateFrame("LobbyFrame", "LobbyFrame", gameScreenGui, 0)
 	--UI适配器初始化
@@ -76,10 +76,15 @@ local function OnNotifyPlayerCurrencyUpdate(currencyType: number, totalAmount: n
 	ClientGameInfo.UpdateCurrency(currencyType, totalAmount, lastChange, reason)
 end
 
+local function OnNotifyPlayerVehicleInventoryUpdate(vehicleInventory: GameConfig.VehicleInventory)
+	ClientGameInfo.UpdateVehicleInventory(vehicleInventory)
+end
+
 NetMsg.ConnectNotifyPlayerInfoInit(OnNotifyPlayerInfoInit)
 NetMsg.ConnectNotifyPlayersOtherPlayerInfoInit(OnNotifyPlayersOtherPlayerInfoInit)
 NetMsg.ConnectNotifyPlayerAcquiredGamePass(OnNotifyPlayerAcquiredGamePass)
 NetMsg.ConnectNotifyPlayerCurrencyUpdate(OnNotifyPlayerCurrencyUpdate)
+NetMsg.ConnectNotifyPlayerVehicleInventoryUpdate(OnNotifyPlayerVehicleInventoryUpdate)
 
 BulletClientManager.Init()
 CombatCameraManager.Init()
