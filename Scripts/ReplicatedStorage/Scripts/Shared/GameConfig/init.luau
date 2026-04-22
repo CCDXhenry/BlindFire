@@ -245,10 +245,6 @@ GameConfig.ProjectileMaxBounces = 1
 GameConfig.FireRecoilSpeedMultiplier = 5
 -- 开火前摇时长（秒）
 GameConfig.FireCastTime = 0.2
--- 假子弹视觉追踪触发半径
-GameConfig.BulletMagnetismRadius = 15
--- 假子弹视觉追踪最大视锥角度（弧度）
-GameConfig.BulletMagnetismAngleRad = math.rad(10)
 
 -- 静态卡死检测阈值
 GameConfig.StuckVelocityThreshold = 0.5
@@ -257,8 +253,6 @@ GameConfig.StuckStallDuration = 1.0 -- 秒
 -- 服务端权威模式参数（OnRequestFire 中用于估算子弹发射时刻的延迟窗口）
 GameConfig.HitValidationClientTimestampMinDelta = -0.2
 GameConfig.HitValidationClientTimestampMaxDelta = 0.6
--- 磁力寻迹早退半径倍数（超过 BulletMagnetismRadius 的此倍数则跳过该目标）
-GameConfig.BulletMagnetismEarlyExitMultiplier = 2.0
 
 -- 自己的子弹是否可以命中自己
 GameConfig.CanHitSelf = true
@@ -286,7 +280,7 @@ function GameConfig.GetVehicleCollisionRadius(): number
 	if baseDisk and baseDisk:IsA("BasePart") then
 		local size = baseDisk.Size
 		cachedVehicleCollisionRadius = math.sqrt(size.X ^ 2 + size.Z ^ 2)
-		return cachedVehicleCollisionRadius :: number
+		return if cachedVehicleCollisionRadius then cachedVehicleCollisionRadius :: number else 5.0
 	end
 
 	return 5.0 -- Fallback
