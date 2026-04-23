@@ -480,7 +480,11 @@ function MatchManager.OnPlayerDead(player: Player, isDisconnect: boolean?, hitDi
 		CombatManager.DestroyUnitForPlayer(player.UserId)
 
 		-- 死亡表现：人物肢体受力爆开并逐渐淡出
-		character:BreakJoints() -- 显式断开关节，确保肢体能分离
+		--character:BreakJoints() -- 显式断开关节，确保肢体能分离
+		local humanoid = character:FindFirstChild("Humanoid") :: Humanoid
+		if humanoid then
+			humanoid.Health = 0
+		end
 
 		local explosionPower = 60
 		local upwardPower = 40
