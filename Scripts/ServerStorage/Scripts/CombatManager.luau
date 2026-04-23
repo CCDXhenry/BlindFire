@@ -739,18 +739,29 @@ function CombatManager.OnHeartbeat(dt: number)
 				end
 				local impactCenter = origin + shotDir * hitResult.Distance
 
-				shotDir = shotDir - 2 * shotDir:Dot(nFlat) * nFlat
+				local dot = shotDir:Dot(nFlat)
+				if dot < 0 then
+					shotDir = shotDir - 2 * dot * nFlat
+				end
+
 				local flatDir = Vector3.new(shotDir.X, 0, shotDir.Z)
 				if flatDir.Magnitude > 0.01 then
 					shotDir = flatDir.Unit
 				end
 
+				-- 确保反弹后有最小的离开角度，避免完美的平行滑动导致 Spherecast 穿模
+				if shotDir:Dot(nFlat) < 0.05 then
+					shotDir = (shotDir + nFlat * 0.05).Unit
+				end
+
 				bullet.shotDir = shotDir
 				-- 反弹后继续对剩余路径做子步骤检测，防止高速子弹穿模
 				local distanceRemaining = math.max(0, stepDist - hitResult.Distance)
-				origin = impactCenter
+				
+				-- 稍微沿法线推开，避免浮点误差或共面拼接导致下一次 Spherecast 误判为初始相交而忽略碰撞（即穿模）
+				origin = impactCenter + nFlat * 0.05
 				remaining = distanceRemaining
-				bullet.currentPos = impactCenter
+				bullet.currentPos = origin
 				PivotServerProjectileToBullet(bullet, bullet.currentPos)
 				continue
 			end
