@@ -363,6 +363,10 @@ end
 
 function BulletClientManager.OnMatchStateChanged(newState: GameConfig.MatchState, _countdown: number)
 	matchState = newState
+	if newState == "InLobby" then
+		table.clear(unitStateMap)
+		table.clear(pendingUnitInits)
+	end
 end
 
 function BulletClientManager.OnNotifyAfkState(playerId: number, isAfk: boolean)

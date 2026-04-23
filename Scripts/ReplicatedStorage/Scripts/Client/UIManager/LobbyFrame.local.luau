@@ -20,6 +20,7 @@ local clientScripts = scripts:WaitForChild("Client")
 local ClientGameInfo = require(clientScripts:FindFirstChild("ClientGameInfo"))
 local uiManagerScript = clientScripts:WaitForChild("UIManager")
 local UIManager = require(uiManagerScript)
+local BulletClientManager = require(clientScripts:FindFirstChild("BulletClientManager"))
 local ClientMsg = require(clientScripts:FindFirstChild("ClientMsg"))
 
 local localPlayer = players.LocalPlayer
@@ -42,13 +43,14 @@ local AFK_OFF_COLOR = Color3.fromRGB(220, 60, 60)
 local AFK_ON_COLOR = Color3.fromRGB(60, 180, 75)
 
 local isAfk = false
-local isLocalParticipant = false
-local isLocalDead = false
 local matchState: GameConfig.MatchState = "InLobby"
 
 local function IsAfkButtonHiddenByBattleState(): boolean
 	local isBattleState = (matchState == "GameStartCountdown" or matchState == "Fighting")
-	return isBattleState and isLocalParticipant and not isLocalDead
+	if not isBattleState then
+		return false
+	end
+	return BulletClientManager.IsLocalInVehicle()
 end
 
 --刷新载具红点
@@ -151,10 +153,6 @@ local function OnNotifyUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 	if unitInitInfo.playerId ~= localPlayerId then
 		return
 	end
-	isLocalParticipant = unitInitInfo.isParticipant == true
-	if isLocalParticipant then
-		isLocalDead = false
-	end
 	RefreshAfkButton()
 end
 
@@ -162,7 +160,6 @@ local function OnNotifyDead(playerId: number, _killerId: number?)
 	if playerId ~= localPlayerId then
 		return
 	end
-	isLocalDead = true
 	RefreshAfkButton()
 end
 
@@ -170,16 +167,11 @@ local function OnNotifyUnitRemove(playerId: number)
 	if playerId ~= localPlayerId then
 		return
 	end
-	isLocalParticipant = false
-	isLocalDead = false
 	RefreshAfkButton()
 end
 
 local function OnNotifyMatchState(newMatchState: GameConfig.MatchState, _countdown: number)
 	matchState = newMatchState
-	if newMatchState == "InLobby" or newMatchState == "MatchCountdown" then
-		isLocalDead = false
-	end
 	RefreshAfkButton()
 end
 
