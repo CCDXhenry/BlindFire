@@ -17,14 +17,10 @@ local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
 local gameFrame: Frame = script.Parent
 
 local FIRE_BUTTON_SIZE = UDim2.new(0, 140, 0, 140)
--- Extra rotation on both ring bars (degrees). Studio template `ReplicatedStorage.UI.GameFrame` uses Bar.Rotation=180 at full ring; keep 0 unless you intentionally retime the fill.
-local CooldownRingRotationOffsetDeg = 0
+
 
 local fireButtonContainer: Frame? = nil
 local fireButton: TextButton? = nil
-
-local progressLeft: Frame? = nil
-local progressRight: Frame? = nil
 local flashOverlay: Frame? = nil
 
 local isCoolingDown = false
@@ -58,19 +54,6 @@ local function UpdateGameFrame()
 
 	local cooldownLeft = BulletClientManager.GetLocalFireCooldownLeft()
 
-	-- Update Progress Bar
-	local totalCD = GameConfig.FireCooldown
-	local progress = 1 - math.clamp(cooldownLeft / totalCD, 0, 1)
-	
-	if progressLeft and progressRight then
-		-- progress 0 = empty (dark), 1 = full ring. Each half only rotates 0–180 so at p=1 we get (180,180), not (180,360); 360° == 0° and would drop the second semicircle.
-		-- Fill from top toward left first: LeftHalf bar leads 0–50%, RightHalf follows 50–100% (CCW sense on screen when paired with masks below).
-		local leftAngle = math.clamp(progress * 2, 0, 1) * 180
-		local rightAngle = math.clamp(progress * 2 - 1, 0, 1) * 180
-		
-		progressLeft.Rotation = leftAngle + CooldownRingRotationOffsetDeg
-		progressRight.Rotation = rightAngle + CooldownRingRotationOffsetDeg
-	end
 
 	-- State feedback
 	if cooldownLeft > 0 then
@@ -87,49 +70,6 @@ local function UpdateGameFrame()
 	end
 end
 
-local function SemicircleTransparencyLeftHalf(): NumberSequence
-	return NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0),
-		NumberSequenceKeypoint.new(0.499, 0),
-		NumberSequenceKeypoint.new(0.5, 1),
-		NumberSequenceKeypoint.new(1, 1),
-	})
-end
-
-local function SemicircleTransparencyRightHalf(): NumberSequence
-	return NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 1),
-		NumberSequenceKeypoint.new(0.499, 1),
-		NumberSequenceKeypoint.new(0.5, 0),
-		NumberSequenceKeypoint.new(1, 0),
-	})
-end
-
-local function ApplySemicircleMaskToTarget(target: GuiObject, useRightHalfMask: boolean)
-	local grad = target:FindFirstChildOfClass("UIGradient")
-	if grad == nil then
-		grad = Instance.new("UIGradient")
-		grad.Parent = target
-	end
-	grad.Rotation = 0
-	grad.Transparency = if useRightHalfMask then SemicircleTransparencyRightHalf() else SemicircleTransparencyLeftHalf()
-end
-
-local function InitCooldownRingMasks()
-	if progressLeft == nil or progressRight == nil then
-		return
-	end
-	ApplySemicircleMaskToTarget(progressRight, true)
-	local strokeRight = progressRight:FindFirstChildOfClass("UIStroke")
-	if strokeRight then
-		ApplySemicircleMaskToTarget(strokeRight, true)
-	end
-	ApplySemicircleMaskToTarget(progressLeft, false)
-	local strokeLeft = progressLeft:FindFirstChildOfClass("UIStroke")
-	if strokeLeft then
-		ApplySemicircleMaskToTarget(strokeLeft, false)
-	end
-end
 
 local function OnFireButtonPressed()
 	if fireButton == nil or isCoolingDown then return end
@@ -166,15 +106,13 @@ local function SetupFireButton()
 
 	local rightHalf = fireButtonContainer:FindFirstChild("RightHalf")
 	if rightHalf then
-		progressRight = rightHalf:FindFirstChild("Bar") :: Frame
+		(rightHalf :: any).Visible = false
 	end
 
 	local leftHalf = fireButtonContainer:FindFirstChild("LeftHalf")
 	if leftHalf then
-		progressLeft = leftHalf:FindFirstChild("Bar") :: Frame
+		(leftHalf :: any).Visible = false
 	end
-
-	InitCooldownRingMasks()
 end
 
 local function InitUI()
