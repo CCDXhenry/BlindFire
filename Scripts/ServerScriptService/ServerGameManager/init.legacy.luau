@@ -117,71 +117,75 @@ local function SavePlayerInfo(player: Player)
 end
 
 local function OnPlayerAdded(player: Player)
-	LogInfo(string.format("OnPlayerAdded userId=%d", player.UserId))
+	task.spawn(function()
+		LogInfo(string.format("OnPlayerAdded userId=%d", player.UserId))
 
-	local success: boolean, result: any = DataStoreTool.SafeGet(playerInfoDataStore, tostring(player.UserId))
-	if not success then
-		player:Kick(result)
-		return
-	end
-
-	local playerSaveInfo: GameConfig.PlayerSaveInfo
-	if result ~= nil then
-		PlayerSaveInfoVersionUpdateTool.Update(result)
-		playerSaveInfo = result
-	else
-		playerSaveInfo = GameConfig.CreateDefaultPlayerSaveInfo()
-	end
-
-	success, result = RetryAsync(function()
-		return localizationService:GetCountryRegionForPlayerAsync(player)
-	end, 5, 1)
-	local countryRegion: string = if success then result else "unknown"
-
-	local _configSnapshot: any
-	if IsVersionAfter(playerSaveInfo.firstEnterVersion, GameConfig.ABTestVersion) then
-		_configSnapshot = configService:GetConfigForPlayerAsync(player)
-	else
-		_configSnapshot = configService:GetConfigAsync()
-	end
-
-	local playerConfigInfo: GameConfig.PlayerConfigInfo = {}
-	ServerGameInfo.InitPlayerInfo(player, playerSaveInfo, countryRegion, playerConfigInfo)
-
-	local nowDate: DateTimeExtension.DateTimeTable = DateTimeExtension.GetNowDate()
-	CheckPlayerLoginDays(player, nowDate)
-	CheckOwnedGamePasses(player)
-
-	local autoSaveThread: thread = coroutine.create(function()
-		while true do
-			task.wait(AutoSavePlayerInfoInterval)
-			SavePlayerInfo(player)
+		local success: boolean, result: any = DataStoreTool.SafeGet(playerInfoDataStore, tostring(player.UserId))
+		if not success then
+			player:Kick(result)
+			return
 		end
+
+		local playerSaveInfo: GameConfig.PlayerSaveInfo
+		if result ~= nil then
+			PlayerSaveInfoVersionUpdateTool.Update(result)
+			playerSaveInfo = result
+		else
+			playerSaveInfo = GameConfig.CreateDefaultPlayerSaveInfo()
+		end
+
+		success, result = RetryAsync(function()
+			return localizationService:GetCountryRegionForPlayerAsync(player)
+		end, 5, 1)
+		local countryRegion: string = if success then result else "unknown"
+
+		local _configSnapshot: any
+		if IsVersionAfter(playerSaveInfo.firstEnterVersion, GameConfig.ABTestVersion) then
+			_configSnapshot = configService:GetConfigForPlayerAsync(player)
+		else
+			_configSnapshot = configService:GetConfigAsync()
+		end
+
+		local playerConfigInfo: GameConfig.PlayerConfigInfo = {}
+		ServerGameInfo.InitPlayerInfo(player, playerSaveInfo, countryRegion, playerConfigInfo)
+
+		local nowDate: DateTimeExtension.DateTimeTable = DateTimeExtension.GetNowDate()
+		CheckPlayerLoginDays(player, nowDate)
+		CheckOwnedGamePasses(player)
+
+		local autoSaveThread: thread = coroutine.create(function()
+			while true do
+				task.wait(AutoSavePlayerInfoInterval)
+				SavePlayerInfo(player)
+			end
+		end)
+		coroutine.resume(autoSaveThread)
+		autoSaveThreads[player.UserId] = autoSaveThread
+
+		AnalyticsTool.AddPlayer(player)
+
+		CombatManager.OnPlayerAdded(player)
+		MatchManager.OnPlayerAdded(player)
 	end)
-	coroutine.resume(autoSaveThread)
-	autoSaveThreads[player.UserId] = autoSaveThread
-
-	AnalyticsTool.AddPlayer(player)
-
-	CombatManager.OnPlayerAdded(player)
-	MatchManager.OnPlayerAdded(player)
 end
 
 local function OnPlayerRemoving(player: Player)
-	LogInfo(string.format("OnPlayerRemoving userId=%d", player.UserId))
+	task.spawn(function()
+		LogInfo(string.format("OnPlayerRemoving userId=%d", player.UserId))
 
-	SavePlayerInfo(player)
-	AnalyticsTool.RemovePlayer(player)
-	ServerGameInfo.RemovePlayerInfo(player)
+		SavePlayerInfo(player)
+		AnalyticsTool.RemovePlayer(player)
+		ServerGameInfo.RemovePlayerInfo(player)
 
-	local autoSaveThread = autoSaveThreads[player.UserId]
-	if autoSaveThread ~= nil then
-		coroutine.close(autoSaveThread)
-		autoSaveThreads[player.UserId] = nil
-	end
+		local autoSaveThread = autoSaveThreads[player.UserId]
+		if autoSaveThread ~= nil then
+			coroutine.close(autoSaveThread)
+			autoSaveThreads[player.UserId] = nil
+		end
 
-	CombatManager.OnPlayerRemoving(player)
-	MatchManager.OnPlayerRemoving(player)
+		CombatManager.OnPlayerRemoving(player)
+		MatchManager.OnPlayerRemoving(player)
+	end)
 end
 
 local function OnHeartbeat(deltaTime: number)

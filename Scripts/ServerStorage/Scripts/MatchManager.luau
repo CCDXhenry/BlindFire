@@ -491,12 +491,14 @@ function MatchManager.GetCurrentMatchState(): GameConfig.MatchState
 end
 
 function MatchManager.OnPlayerAdded(player: Player)
-	LogInfo(string.format("OnPlayerAdded userId=%d state=%s", player.UserId, currentMatchState))
-	PlayerStateManager.EnsurePlayerRoundInfo(player)
-	PlayerStateManager.SetPlayerAfk(player.UserId, false)
-	NetMsg.FireNotifyAfkState(player.UserId, false)
-	-- 无论当前处于什么阶段，新加入的玩家都先传送到大厅
-	TeleportPlayerToLobby(player)
+	task.spawn(function()
+		LogInfo(string.format("OnPlayerAdded userId=%d state=%s", player.UserId, currentMatchState))
+		PlayerStateManager.EnsurePlayerRoundInfo(player)
+		PlayerStateManager.SetPlayerAfk(player.UserId, false)
+		NetMsg.FireNotifyAfkState(player.UserId, false)
+		-- 无论当前处于什么阶段，新加入的玩家都先传送到大厅
+		TeleportPlayerToLobby(player)
+	end)
 end
 
 function MatchManager.OnPlayerDead(player: Player, isDisconnect: boolean?, hitDirection: Vector3?)
