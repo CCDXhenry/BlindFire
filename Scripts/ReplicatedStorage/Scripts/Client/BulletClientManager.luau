@@ -30,6 +30,7 @@ type ClientUnitState = {
 	spinOffsetRad: number,
 	lastWallBounceClock: number,
 	lastVehicleBumpClock: number?,
+	isParticipant: boolean,
 }
 
 local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
@@ -205,10 +206,17 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 
 	pendingUnitInits[playerId] = unitInitInfo
 
+	-- Update existing state immediately to avoid UI delays if this is a state update (e.g. StartRound)
+	local existingState = unitStateMap[playerId]
+	if existingState ~= nil then
+		existingState.isParticipant = unitInitInfo.isParticipant == true
+	end
+
 	local unitPart: BasePart? = FindUnitPart(playerId)
-	
-	-- If unit was removed while we were yielding in FindUnitPart, abort
-	if pendingUnitInits[playerId] == nil then
+
+	local currentInfo = pendingUnitInits[playerId]
+	if currentInfo == nil then
+		-- Unit might have been removed while we were yielding in FindUnitPart, abort
 		return
 	end
 
@@ -217,7 +225,7 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 		-- We retry indefinitely until it's found or the unit is removed.
 		task.delay(0.5, function()
 			if pendingUnitInits[playerId] ~= nil then
-				BulletClientManager.OnUnitInit(unitInitInfo)
+				BulletClientManager.OnUnitInit(currentInfo)
 			end
 		end)
 		return
@@ -239,19 +247,19 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 		end
 	end
 
-	local targetVelX: number, targetVelZ: number = AngleToVelocityXZ(unitInitInfo.moveAngle)
+	local targetVelX: number, targetVelZ: number = AngleToVelocityXZ(currentInfo.moveAngle)
 	local initHullYaw = math.atan2(targetVelZ, targetVelX)
 
 	local state: ClientUnitState = {
 		playerId = playerId,
 		targetVelX = targetVelX,
 		targetVelZ = targetVelZ,
-		spinDir = unitInitInfo.spinDir,
+		spinDir = currentInfo.spinDir,
 		unitPart = unitPart,
 		turretPart = turretPart,
 		model = unitModel,
 		isLocal = isLocal,
-		maxHits = unitInitInfo.maxHits,
+		maxHits = currentInfo.maxHits,
 		hitCount = 0,
 		spinDampingUntil = 0,
 		driveVectorForce = nil,
@@ -262,6 +270,7 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 		spinOffsetRad = 0,
 		lastWallBounceClock = 0,
 		lastVehicleBumpClock = 0,
+		isParticipant = currentInfo.isParticipant == true,
 	}
 	unitStateMap[playerId] = state
 
@@ -355,92 +364,15 @@ function BulletClientManager.FireShot()
 	end
 	lastFireTime = now
 
-	local spawnPos = Vector3.zero
-	local shotDir = Vector3.new(0, 0, -1)
-
 	local localState: ClientUnitState? = unitStateMap[localPlayerId]
 	if localState ~= nil then
 		-- spinDir 由服务端 NotifyDirectionFlip 统一翻转，避免与 FireShot 本地预测双翻
 		localState.spinDampingUntil = os.clock() + GameConfig.SpinDampingDuration
-
-		local unitPart = localState.unitPart
-		local muzzleAttachment: Attachment? = nil
-		if localState.model ~= nil then
-			local barrel = localState.model:FindFirstChild("TurretBarrel")
-			if barrel ~= nil and barrel:IsA("BasePart") then
-				muzzleAttachment = barrel:FindFirstChild("MuzzleAttachment") :: Attachment
-			end
-		end
-
-		if muzzleAttachment ~= nil then
-			spawnPos = muzzleAttachment.WorldCFrame.Position
-			local flat = Vector3.new(muzzleAttachment.WorldCFrame.LookVector.X, 0, muzzleAttachment.WorldCFrame.LookVector.Z)
-			if flat.Magnitude > 0.001 then
-				shotDir = flat.Unit
-			end
-		else
-			local fallbackCFrame = unitPart.CFrame * CFrame.new(0, 1.2, -3.4)
-			spawnPos = fallbackCFrame.Position
-			local flat = Vector3.new(unitPart.CFrame.LookVector.X, 0, unitPart.CFrame.LookVector.Z)
-			if flat.Magnitude > 0.001 then
-				shotDir = flat.Unit
-			end
-		end
-
-		local rayOrigin = unitPart.Position + Vector3.new(0, 1.2, 0)
-		local toSpawn = spawnPos - rayOrigin
-		if toSpawn.Magnitude > 0.01 then
-			local rayParams = RaycastParams.new()
-			rayParams.FilterType = Enum.RaycastFilterType.Exclude
-			local excludeList: { Instance } = {}
-			if localState.model ~= nil then
-				table.insert(excludeList, localState.model)
-			end
-			local character = players.LocalPlayer.Character
-			if character ~= nil then
-				table.insert(excludeList, character)
-			end
-			rayParams.FilterDescendantsInstances = excludeList
-
-			local dist = toSpawn.Magnitude
-			local dir = toSpawn.Unit
-
-			local hitPoint = nil
-			local curOrigin = rayOrigin
-			local remaining = dist
-			for _ = 1, 10 do
-				if remaining < 1e-4 then
-					break
-				end
-				local res = workspaceService:Raycast(curOrigin, dir * remaining, rayParams)
-				if res == nil then
-					break
-				end
-
-				if res.Instance.Name == "ArenaFloor" then
-					table.insert(excludeList, res.Instance)
-					rayParams.FilterDescendantsInstances = excludeList
-					curOrigin = res.Position + dir * 0.01
-					remaining = remaining - res.Distance - 0.01
-					continue
-				end
-				hitPoint = res.Position
-				break
-			end
-
-			if hitPoint ~= nil then
-				local projRadius = GetProjectileRadius()
-				local safeDist = math.max(0, (hitPoint - rayOrigin).Magnitude - (projRadius * 2 + 0.1))
-				spawnPos = rayOrigin + (dir * safeDist)
-			end
-		end
-	end
-	if localState ~= nil then
 		localState.spinImpulseRadPerSec += GameConfig.TurretSpinImpulseOnFireRadPerSec * localState.spinDir
 	end
 
 	local bulletId = HttpService:GenerateGUID(false)
-	NetMsg.FireRequestFire(spawnPos, shotDir, workspaceService:GetServerTimeNow(), bulletId)
+	NetMsg.FireRequestFire(workspaceService:GetServerTimeNow(), bulletId)
 end
 
 function BulletClientManager.GetLocalHpInfo(): (number, number)
@@ -466,7 +398,7 @@ end
 function BulletClientManager.IsLocalInVehicle(): boolean
 	local state = unitStateMap[localPlayerId]
 	if state == nil then return false end
-	return state.hitCount < state.maxHits
+	return state.hitCount < state.maxHits and state.isParticipant
 end
 
 return BulletClientManager

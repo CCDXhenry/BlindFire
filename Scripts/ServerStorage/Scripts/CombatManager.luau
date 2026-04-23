@@ -249,11 +249,13 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 
 	local spawnPosition = GetSpawnPosition()
 	local undergroundPosition = Vector3.new(spawnPosition.X, UNDERGROUND_Y, spawnPosition.Z)
-	MoveModelKeepRotation(unitModel, undergroundPosition)
 
 	local moveAngle = GetRandomMoveAngle()
 	local spinDir = GetRandomSpinDir()
 	local tvx, tvz = VehicleLocomotionTool.AngleToVelocityXZ(moveAngle)
+
+	local initYawRad = math.atan2(tvz, tvx)
+	unitModel:PivotTo(CFrame.new(undergroundPosition) * VehicleLocomotionTool.UprightGoalCFrame(initYawRad))
 	local unitInfo: ServerUnitInfo = {
 		playerId = player.UserId,
 		unitModel = unitModel,
@@ -365,15 +367,19 @@ local function StepVehicleSimulation(dt: number)
 
 		local vehicleConfig = unitInfo.vehicleConfig
 		local unitSpeed = if vehicleConfig then (vehicleConfig.moveSpeed or GameConfig.UnitSpeed) else GameConfig.UnitSpeed
+
+		local spinAV = root:FindFirstChild("SpinAngularVelocity")
+		local avValue = Vector3.zero
+
 		if serverMatchState == "GameStartCountdown" then
 			ZeroHorizontalVelocity(root)
 			root.AssemblyAngularVelocity = Vector3.zero
-			unitInfo.spinAngleRad = VehicleLocomotionTool.BaseDiskDriveYawRadFromState(unitInfo, root)
+			-- unitInfo.spinAngleRad = VehicleLocomotionTool.BaseDiskDriveYawRadFromState(unitInfo, root)
 			VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, driveNotNull, dt, false, unitSpeed)
 		elseif serverMatchState == "Fighting" then
 			local roundInfo = PlayerStateManager.GetAllPlayerRoundInfoMap()[playerId]
-			if roundInfo ~= nil and roundInfo.isAlive then
-				unitInfo.spinAngleRad = (unitInfo.spinAngleRad + math.rad(GameConfig.UnitRotationSpeed) * dt * unitInfo.spinDir) % (math.pi * 2)
+			if roundInfo ~= nil and roundInfo.isParticipant and roundInfo.isAlive then
+				avValue = Vector3.new(0, math.rad(GameConfig.UnitRotationSpeed) * unitInfo.spinDir, 0)
 				VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, driveNotNull, dt, true, unitSpeed)
 				VehicleLocomotionTool.ResolveVehicleOverlaps(unitInfo, unitInfoMap :: any, playerId, dt)
 			else
@@ -382,12 +388,16 @@ local function StepVehicleSimulation(dt: number)
 		else
 			VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, driveNotNull, dt, false, unitSpeed)
 		end
+
+		if spinAV and spinAV:IsA("AngularVelocity") then
+			spinAV.AngularVelocity = avValue
+		end
 	end
 
 	if serverMatchState == "Fighting" then
 		VehicleLocomotionTool.ResolveAllVehicleBumps(unitInfoMap :: any, function(playerIdForBump: number): boolean
 			local roundInfoForBump = PlayerStateManager.GetAllPlayerRoundInfoMap()[playerIdForBump]
-			return roundInfoForBump ~= nil and roundInfoForBump.isAlive
+			return roundInfoForBump ~= nil and roundInfoForBump.isParticipant and roundInfoForBump.isAlive
 		end)
 	end
 end
@@ -830,9 +840,7 @@ function CombatManager.OnPlayerRemoving(player: Player)
 	end
 end
 
-function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDirection: Vector3, clientTimestamp: number, bulletId: string)
-	-- Normalize and ensure height is roughly correct to prevent weird angle exploits, or trust the client for now
-	shotDirection = ToHorizontalDirection(shotDirection)
+function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bulletId: string)
 	local nowTime = os.clock()
 	local canFire = PlayerStateManager.CanFire(player.UserId, nowTime)
 	if not canFire then
@@ -849,15 +857,75 @@ function CombatManager.OnRequestFire(player: Player, spawnPos: Vector3, shotDire
 	PlayerStateManager.SetLastFireTime(player.UserId, nowTime)
 
 	local unitInfo = unitInfoMap[player.UserId]
-	if unitInfo ~= nil then
-		unitInfo.spinDir = -unitInfo.spinDir
-		local flatSpawn = Vector3.new(spawnPos.X, 0, spawnPos.Z)
-		local flatUnit = Vector3.new(unitInfo.rootPart.Position.X, 0, unitInfo.rootPart.Position.Z)
-		if (flatSpawn - flatUnit).Magnitude > 20 then
-			LogInfo(string.format("FireRejected userId=%d reason=spawn_too_far", player.UserId))
-			return
+	if unitInfo == nil then
+		return
+	end
+
+	local spawnPos = Vector3.zero
+	local shotDirection = Vector3.new(0, 0, -1)
+
+	local muzzleAttachment = _GetMuzzleAttachment(unitInfo.unitModel)
+	if muzzleAttachment ~= nil then
+		spawnPos = muzzleAttachment.WorldCFrame.Position
+		local flat = Vector3.new(muzzleAttachment.WorldCFrame.LookVector.X, 0, muzzleAttachment.WorldCFrame.LookVector.Z)
+		if flat.Magnitude > 0.001 then
+			shotDirection = flat.Unit
+		end
+	else
+		local fallbackCFrame = unitInfo.rootPart.CFrame * CFrame.new(0, 1.2, -3.4)
+		spawnPos = fallbackCFrame.Position
+		local flat = Vector3.new(unitInfo.rootPart.CFrame.LookVector.X, 0, unitInfo.rootPart.CFrame.LookVector.Z)
+		if flat.Magnitude > 0.001 then
+			shotDirection = flat.Unit
 		end
 	end
+
+	local rayOrigin = unitInfo.rootPart.Position + Vector3.new(0, 1.2, 0)
+	local toSpawn = spawnPos - rayOrigin
+	if toSpawn.Magnitude > 0.01 then
+		local rayParams = RaycastParams.new()
+		rayParams.FilterType = Enum.RaycastFilterType.Exclude
+		local excludeList: { Instance } = { unitInfo.unitModel }
+		local character = player.Character
+		if character ~= nil then
+			table.insert(excludeList, character)
+		end
+		rayParams.FilterDescendantsInstances = excludeList
+
+		local dist = toSpawn.Magnitude
+		local dir = toSpawn.Unit
+
+		local hitPoint = nil
+		local curOrigin = rayOrigin
+		local remaining = dist
+		for _ = 1, 10 do
+			if remaining < 1e-4 then
+				break
+			end
+			local res = workspace:Raycast(curOrigin, dir * remaining, rayParams)
+			if res == nil then
+				break
+			end
+
+			if res.Instance.Name == "ArenaFloor" then
+				table.insert(excludeList, res.Instance)
+				rayParams.FilterDescendantsInstances = excludeList
+				curOrigin = res.Position + dir * 0.01
+				remaining = remaining - res.Distance - 0.01
+				continue
+			end
+			hitPoint = res.Position
+			break
+		end
+
+		if hitPoint ~= nil then
+			local projRadius = GetProjectileRadius()
+			local safeDist = math.max(0, (hitPoint - rayOrigin).Magnitude - (projRadius * 2 + 0.1))
+			spawnPos = rayOrigin + (dir * safeDist)
+		end
+	end
+
+	unitInfo.spinDir = -unitInfo.spinDir
 
 	local serverTime = workspace:GetServerTimeNow()
 	local estimatedRtt = math.clamp(
@@ -925,6 +993,7 @@ function CombatManager.StartRound(participantIds: { number })
 		unitInfo.targetVelX = tvx
 		unitInfo.targetVelZ = tvz
 		unitInfo.spinAngleRad = math.atan2(tvz, tvx)
+		unitInfo.unitModel:PivotTo(CFrame.new(unitInfo.rootPart.Position) * VehicleLocomotionTool.UprightGoalCFrame(unitInfo.spinAngleRad))
 		NetMsg.FireNotifyUnitInitToAll({
 			playerId = playerId,
 			moveAngle = unitInfo.moveAngle,

@@ -103,6 +103,9 @@ local function TeleportPlayerToPosition(player: Player, targetPosition: Vector3)
 	if character == nil then
 		LogInfo(string.format("Wait teleport userId=%d reason=no_character", player.UserId))
 		player.CharacterAdded:Once(function()
+			if player.Parent ~= players then
+				return
+			end
 			TeleportPlayerToPosition(player, targetPosition)
 		end)
 		return
@@ -165,7 +168,7 @@ local function SeatPlayerOnVehicle(player: Player, targetPosition: Vector3)
 	if character == nil then
 		LogInfo(string.format("Wait SeatPlayerOnVehicle userId=%d reason=no_character", player.UserId))
 		player.CharacterAdded:Once(function()
-			if players:GetPlayerByUserId(player.UserId) == nil then
+			if player.Parent ~= players then
 				return
 			end
 			SeatPlayerOnVehicle(player, targetPosition)
@@ -276,9 +279,18 @@ local function TeleportPlayerToLobby(player: Player, reloadCharacter: boolean?)
 
 	if reloadCharacter == true then
 		player.CharacterAdded:Once(function()
+			if player.Parent ~= players then
+				return
+			end
 			TeleportPlayerToPosition(player, targetPosition)
 		end)
-		player:LoadCharacterAsync()
+
+		local success, err = pcall(function()
+			player:LoadCharacterAsync()
+		end)
+		if not success then
+			LogInfo(string.format("LoadCharacterAsync failed for userId=%d: %s", player.UserId, tostring(err)))
+		end
 		return
 	end
 	TeleportPlayerToPosition(player, targetPosition)
@@ -287,8 +299,10 @@ end
 local function TeleportAllPlayersToLobby()
 	CombatManager.ResetAllUnitsToUnderground()
 	for _, player in players:GetPlayers() do
-		arenaTargetPositionMap[player.UserId] = nil
-		TeleportPlayerToLobby(player, true)
+		task.spawn(function()
+			arenaTargetPositionMap[player.UserId] = nil
+			TeleportPlayerToLobby(player, true)
+		end)
 	end
 end
 

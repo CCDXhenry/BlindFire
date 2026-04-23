@@ -196,19 +196,61 @@ function VehicleLocomotionTool.EnsureVehicleDriveConstraints(baseDisk: BasePart)
 	vectorForce.Force = Vector3.zero
 	vectorForce.Enabled = true
 
-	local ao = baseDisk:FindFirstChild("UprightAlignOrientation")
-	if ao ~= nil then
-		ao:Destroy()
+	local upAtt = baseDisk:FindFirstChild("UprightAttachment")
+	if upAtt == nil or not upAtt:IsA("Attachment") then
+		if upAtt ~= nil then
+			upAtt:Destroy()
+		end
+		local newUpAtt = Instance.new("Attachment")
+		newUpAtt.Name = "UprightAttachment"
+		newUpAtt.Parent = baseDisk
+		newUpAtt.Axis = Vector3.new(0, 1, 0)
+		upAtt = newUpAtt
 	end
+
+	local ao = baseDisk:FindFirstChild("UprightAlignOrientation")
+	if ao == nil or not ao:IsA("AlignOrientation") then
+		if ao ~= nil then
+			ao:Destroy()
+		end
+		local newAo = Instance.new("AlignOrientation")
+		newAo.Name = "UprightAlignOrientation"
+		newAo.Parent = baseDisk
+		ao = newAo
+	end
+	local alignOrientation = ao :: AlignOrientation
+	alignOrientation.Attachment0 = upAtt
+	alignOrientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+	alignOrientation.AlignType = Enum.AlignType.PrimaryAxisParallel
+	alignOrientation.PrimaryAxis = Vector3.new(0, 1, 0)
+	alignOrientation.RigidityEnabled = false
+	alignOrientation.MaxTorque = 10000000
+	alignOrientation.Responsiveness = 200
+
+	local av = baseDisk:FindFirstChild("SpinAngularVelocity")
+	if av == nil or not av:IsA("AngularVelocity") then
+		if av ~= nil then
+			av:Destroy()
+		end
+		local newAv = Instance.new("AngularVelocity")
+		newAv.Name = "SpinAngularVelocity"
+		newAv.Parent = baseDisk
+		av = newAv
+	end
+	local angularVel = av :: AngularVelocity
+	angularVel.Attachment0 = driveAtt
+	angularVel.RelativeTo = Enum.ActuatorRelativeTo.World
+	angularVel.AngularVelocity = Vector3.zero
+	angularVel.MaxTorque = 1000000
 
 	local existingProps = baseDisk.CustomPhysicalProperties
 	if existingProps ~= nil then
 		local bounceElasticity = math.clamp(GameConfig.WallBounceElasticity, 0, 1)
 		baseDisk.CustomPhysicalProperties = PhysicalProperties.new(
 			existingProps.Density,
-			existingProps.Friction,
+			0, -- 强制设为 0，防止自转物体互相挤压时产生破坏性的巨大摩擦力（导致斜向飞天）
 			bounceElasticity,
-			existingProps.FrictionWeight,
+			100, -- 最大摩擦力权重，覆盖其他物体的摩擦力
 			existingProps.ElasticityWeight
 		)
 	end
@@ -224,7 +266,8 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 	applyHorizontalDrive: boolean,
 	customSpeed: number?
 )
-	root.CFrame = CFrame.new(root.Position) * VehicleLocomotionTool.UprightGoalCFrame(state.spinAngleRad)
+	local _, yaw, _ = root.CFrame:ToEulerAnglesYXZ()
+	state.spinAngleRad = yaw
 
 	if not applyHorizontalDrive then
 		drive.Force = Vector3.zero
@@ -244,25 +287,32 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 		state.targetVelX = recoveredX
 		state.targetVelZ = recoveredZ
 		targetDir = Vector3.new(recoveredX, 0, recoveredZ)
+		root.AssemblyLinearVelocity = targetDir
 	end
 
 	-- 静态卡死检测：如果驱动开启，但长时间位移极小
 	local currentPos = root.Position
 	if state.lastPos ~= nil then
-		local distMoved = (currentPos - state.lastPos).Magnitude
-		if distMoved < GameConfig.StuckVelocityThreshold * _dt then
-			state.stuckTime = (state.stuckTime or 0) + _dt
-			if state.stuckTime >= GameConfig.StuckStallDuration then
-				-- 触发强制重启位移
-				local recoveredX, recoveredZ = VehicleLocomotionTool.AngleToVelocityXZ(math.deg(state.spinAngleRad), customSpeed)
-				state.targetVelX = recoveredX
-				state.targetVelZ = recoveredZ
-				targetDir = Vector3.new(recoveredX, 0, recoveredZ)
-				state.stuckTime = 0
-				warn(string.format("[VehicleLocomotionTool] Stuck detected for unit, resetting targetVel"))
-			end
-		else
+		if _dt > 0.2 then
+			-- 服务器发生卡顿（例如新玩家加载载具），忽略这一帧的位移，防止误判卡死
 			state.stuckTime = 0
+		else
+			local distMoved = (currentPos - state.lastPos).Magnitude
+			if distMoved < GameConfig.StuckVelocityThreshold * _dt then
+				state.stuckTime = (state.stuckTime or 0) + _dt
+				if state.stuckTime >= GameConfig.StuckStallDuration then
+					-- 触发强制重启位移
+					local recoveredX, recoveredZ = VehicleLocomotionTool.AngleToVelocityXZ(math.deg(state.spinAngleRad), customSpeed)
+					state.targetVelX = recoveredX
+					state.targetVelZ = recoveredZ
+					targetDir = Vector3.new(recoveredX, 0, recoveredZ)
+					root.AssemblyLinearVelocity = Vector3.new(targetDir.X, root.AssemblyLinearVelocity.Y, targetDir.Z)
+					state.stuckTime = 0
+					warn(string.format("[VehicleLocomotionTool] Stuck detected for unit, resetting targetVel"))
+				end
+			else
+				state.stuckTime = 0
+			end
 		end
 	end
 	state.lastPos = currentPos
@@ -302,7 +352,7 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 				state.lastWallBounceClock = now
 				local speed = customSpeed or GameConfig.UnitSpeed
 				local newSpeed = speed * GameConfig.WallBounceSpeedMultiplier
-				root.AssemblyLinearVelocity = inward * newSpeed
+				root.AssemblyLinearVelocity = Vector3.new(inward.X * newSpeed, root.AssemblyLinearVelocity.Y, inward.Z * newSpeed)
 				if targetDir2.Magnitude >= 1e-4 then
 					local du = targetDir2.Unit
 					local reflected = du - 2 * inward:Dot(du) * inward
@@ -443,8 +493,11 @@ function VehicleLocomotionTool.ResolveAllVehicleBumps(
 			local speedA = if uA.vehicleConfig then uA.vehicleConfig.moveSpeed else GameConfig.UnitSpeed
 			local speedB = if uB.vehicleConfig then uB.vehicleConfig.moveSpeed else GameConfig.UnitSpeed
 
-			rootA.AssemblyLinearVelocity = bumpDir * (speedA * GameConfig.VehicleBumpSpeedMultiplier)
-			rootB.AssemblyLinearVelocity = -bumpDir * (speedB * GameConfig.VehicleBumpSpeedMultiplier)
+			local bumpSpeedA = speedA * GameConfig.VehicleBumpSpeedMultiplier
+			local bumpSpeedB = speedB * GameConfig.VehicleBumpSpeedMultiplier
+
+			rootA.AssemblyLinearVelocity = Vector3.new(bumpDir.X * bumpSpeedA, rootA.AssemblyLinearVelocity.Y, bumpDir.Z * bumpSpeedA)
+			rootB.AssemblyLinearVelocity = Vector3.new(-bumpDir.X * bumpSpeedB, rootB.AssemblyLinearVelocity.Y, -bumpDir.Z * bumpSpeedB)
 
 			uA.lastVehicleBumpClock = now
 			uB.lastVehicleBumpClock = now

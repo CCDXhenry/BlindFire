@@ -111,11 +111,11 @@ end
 -- ============================================================
 
 --客户端请求开火
-function NetMsg.FireRequestFire(spawnPos: Vector3, shotDir: Vector3, clientTimestamp: number, bulletId: string)
-	requestFireEvent:FireServer(spawnPos, shotDir, clientTimestamp, bulletId)
+function NetMsg.FireRequestFire(clientTimestamp: number, bulletId: string)
+	requestFireEvent:FireServer(clientTimestamp, bulletId)
 end
 
-function NetMsg.ConnectRequestFire(callback: (player: Player, spawnPos: Vector3, shotDir: Vector3, clientTimestamp: number, bulletId: string) -> ())
+function NetMsg.ConnectRequestFire(callback: (player: Player, clientTimestamp: number, bulletId: string) -> ())
 	requestFireEvent.OnServerEvent:Connect(callback)
 end
 
