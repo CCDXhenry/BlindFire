@@ -81,6 +81,8 @@ GameConfig.GuideTextKeyMap = {
 
 GameConfig.CoinIconImage = "rbxassetid://138756794615498"
 GameConfig.RbIconImage = "rbxassetid://116949418469040"
+GameConfig.AFKOnImage = "rbxassetid://114216336762183"
+GameConfig.AFKOffImage = "rbxassetid://113696020530948"
 
 --通行证id
 GameConfig.GamePassId = {}

@@ -494,7 +494,7 @@ local function GetPhaseTopTipDuration(matchState: GameConfig.MatchState, countdo
 		end
 		return GameConfig.RoundFightDuration
 	elseif matchState == "InLobby" then
-		return MATCH_PHASE_TOP_TIP_DURATION
+		return 999999
 	end
 	return MATCH_PHASE_TOP_TIP_DURATION
 end

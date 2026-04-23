@@ -30,6 +30,9 @@ local notifyArenaSeatPrepareEvent: RemoteEvent = remoteEventsFolder:FindFirstChi
 local notifyGameConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyGameConfigSync") :: RemoteEvent
 local notifyPendingConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPendingConfigSync") :: RemoteEvent
 local requestSyncUnitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestSyncUnit") :: RemoteEvent
+local requestSetAfkStateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestSetAfkState") :: RemoteEvent
+local requestSyncAfkStateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestSyncAfkState") :: RemoteEvent
+local notifyAfkStateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyAfkState") :: RemoteEvent
 local requestBuyVehicleEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestBuyVehicle") :: RemoteEvent
 local requestUpdateVehicleUsingEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestUpdateVehicleUsing") :: RemoteEvent
 local notifyPlayerVehicleInventoryUpdateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPlayerVehicleInventoryUpdate") :: RemoteEvent
@@ -128,6 +131,24 @@ function NetMsg.ConnectRequestSyncUnit(callback: (player: Player) -> ())
 	requestSyncUnitEvent.OnServerEvent:Connect(callback)
 end
 
+-- 客户端请求切换 AFK 状态
+function NetMsg.FireRequestSetAfkState(isAfk: boolean)
+	requestSetAfkStateEvent:FireServer(isAfk)
+end
+
+function NetMsg.ConnectRequestSetAfkState(callback: (player: Player, isAfk: boolean) -> ())
+	requestSetAfkStateEvent.OnServerEvent:Connect(callback)
+end
+
+-- 客户端请求同步 AFK 状态
+function NetMsg.FireRequestSyncAfkState()
+	requestSyncAfkStateEvent:FireServer()
+end
+
+function NetMsg.ConnectRequestSyncAfkState(callback: (player: Player) -> ())
+	requestSyncAfkStateEvent.OnServerEvent:Connect(callback)
+end
+
 -- 客户端请求命中某个玩家
 function NetMsg.FireRequestHit(targetPlayerId: number, hitDir: Vector3, bulletId: string)
 	requestHitEvent:FireServer(targetPlayerId, hitDir, bulletId)
@@ -218,6 +239,19 @@ end
 
 function NetMsg.ConnectNotifyMatchState(callback: (matchState: GameConfig.MatchState, countdown: number) -> ())
 	notifyMatchStateEvent.OnClientEvent:Connect(callback)
+end
+
+-- 通知 AFK 状态变化
+function NetMsg.FireNotifyAfkState(playerId: number, isAfk: boolean)
+	notifyAfkStateEvent:FireAllClients(playerId, isAfk)
+end
+
+function NetMsg.FireNotifyAfkStateToPlayer(player: Player, playerId: number, isAfk: boolean)
+	notifyAfkStateEvent:FireClient(player, playerId, isAfk)
+end
+
+function NetMsg.ConnectNotifyAfkState(callback: (playerId: number, isAfk: boolean) -> ())
+	notifyAfkStateEvent.OnClientEvent:Connect(callback)
 end
 
 -- 本局竞技场入座前：仅通知本局参与者，客户端应先禁止跳跃再等待服务端入座

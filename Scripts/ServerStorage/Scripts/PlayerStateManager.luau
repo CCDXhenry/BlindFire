@@ -11,6 +11,7 @@ export type PlayerRoundInfo = {
 	userId: number,
 	isAlive: boolean,
 	isParticipant: boolean,
+	isAfk: boolean,
 	hitCount: number,
 	lastFireTime: number,
 }
@@ -24,6 +25,7 @@ local function CreateDefaultPlayerRoundInfo(player: Player): PlayerRoundInfo
 		userId = player.UserId,
 		isAlive = true,
 		isParticipant = false,
+		isAfk = false,
 		hitCount = 0,
 		lastFireTime = DEFAULT_LAST_FIRE_TIME,
 	}
@@ -69,6 +71,32 @@ function PlayerStateManager.SetLastFireTime(playerId: number, fireTime: number)
 		return
 	end
 	playerRoundInfo.lastFireTime = fireTime
+end
+
+function PlayerStateManager.SetPlayerAfk(playerId: number, isAfk: boolean)
+	local playerRoundInfo = playerRoundInfoMap[playerId]
+	if playerRoundInfo == nil then
+		return
+	end
+	playerRoundInfo.isAfk = isAfk
+end
+
+function PlayerStateManager.IsPlayerAfk(playerId: number): boolean
+	local playerRoundInfo = playerRoundInfoMap[playerId]
+	if playerRoundInfo == nil then
+		return false
+	end
+	return playerRoundInfo.isAfk == true
+end
+
+function PlayerStateManager.GetNonAfkOnlinePlayerCount(): number
+	local count = 0
+	for _, playerRoundInfo in playerRoundInfoMap do
+		if playerRoundInfo.isAfk ~= true then
+			count += 1
+		end
+	end
+	return count
 end
 
 function PlayerStateManager.CanFire(playerId: number, nowTime: number): boolean

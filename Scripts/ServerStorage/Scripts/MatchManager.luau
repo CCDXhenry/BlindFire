@@ -36,6 +36,34 @@ local roundWorkerThread: thread? = nil
 local roundStartCallback: OnRoundStartCallback? = nil
 local isStopRequested: boolean = false
 
+local function GetNonAfkPlayers(): { Player }
+	local result: { Player } = {}
+	for _, player in players:GetPlayers() do
+		if not PlayerStateManager.IsPlayerAfk(player.UserId) then
+			table.insert(result, player)
+		end
+	end
+	return result
+end
+
+local function OnRequestSetAfkState(player: Player, isAfk: boolean)
+	if currentMatchState == "GameStartCountdown" or currentMatchState == "Fighting" then
+		local roundInfo = PlayerStateManager.EnsurePlayerRoundInfo(player)
+		if roundInfo.isParticipant and roundInfo.isAlive then
+			return
+		end
+	end
+	PlayerStateManager.SetPlayerAfk(player.UserId, isAfk == true)
+	NetMsg.FireNotifyAfkState(player.UserId, isAfk == true)
+end
+
+local function OnRequestSyncAfkState(player: Player)
+	for _, otherPlayer in players:GetPlayers() do
+		local otherId = otherPlayer.UserId
+		NetMsg.FireNotifyAfkStateToPlayer(player, otherId, PlayerStateManager.IsPlayerAfk(otherId))
+	end
+end
+
 local function LogInfo(message: string)
 	--print(string.format("%s %s", LOG_PREFIX, message))
 end
@@ -330,9 +358,9 @@ local function RunMatchLoop()
 		isStopRequested = false
 		ConfigManager.ApplyAndSync()
 
-		local playerCount = #players:GetPlayers()
-		if playerCount < GameConfig.MinPlayerToStart then
-			LogInfo(string.format("WaitingPlayers current=%d required=%d", playerCount, GameConfig.MinPlayerToStart))
+		local nonAfkPlayerCount = PlayerStateManager.GetNonAfkOnlinePlayerCount()
+		if nonAfkPlayerCount < GameConfig.MinPlayerToStart then
+			LogInfo(string.format("WaitingPlayers current=%d required=%d", nonAfkPlayerCount, GameConfig.MinPlayerToStart))
 			CombatManager.SetAllVehiclesAnchored(true)
 			BroadcastMatchState("InLobby", 0)
 			task.wait(1)
@@ -343,7 +371,7 @@ local function RunMatchLoop()
 		CombatManager.SetAllVehiclesAnchored(true)
 		local matchAborted = false
 		for countdown = GameConfig.MatchCountdown, 1, -1 do
-			if #players:GetPlayers() < GameConfig.MinPlayerToStart then
+			if PlayerStateManager.GetNonAfkOnlinePlayerCount() < GameConfig.MinPlayerToStart then
 				LogInfo("MatchCountdown aborted: player count below minimum")
 				matchAborted = true
 				break
@@ -355,7 +383,13 @@ local function RunMatchLoop()
 			continue
 		end
 
-		local roundParticipantPlayers = players:GetPlayers()
+		local roundParticipantPlayers = GetNonAfkPlayers()
+		if #roundParticipantPlayers < GameConfig.MinPlayerToStart then
+			LogInfo("Match start aborted: non-afk player count below minimum")
+			BroadcastMatchState("InLobby", 0)
+			task.wait(1)
+			continue
+		end
 		LogInfo(string.format("ArenaSeatPrepare participants=%d", #roundParticipantPlayers))
 		NetMsg.FireNotifyArenaSeatPrepare(roundParticipantPlayers)
 		ArenaManager.PrepareArena(#roundParticipantPlayers)
@@ -380,7 +414,7 @@ local function RunMatchLoop()
 		LogInfo(string.format("GameStartCountdown start seconds=%d", GameConfig.RoundStartCountdown))
 		local gameStartAborted = false
 		for countdown = GameConfig.RoundStartCountdown, 1, -1 do
-			if #players:GetPlayers() <= 1 then
+			if #GetNonAfkPlayers() <= 1 then
 				LogInfo("GameStartCountdown aborted: not enough players")
 				gameStartAborted = true
 				break
@@ -442,6 +476,8 @@ end
 function MatchManager.Init(onRoundStart: OnRoundStartCallback)
 	roundStartCallback = onRoundStart
 	ArenaManager.Init()
+	NetMsg.ConnectRequestSetAfkState(OnRequestSetAfkState)
+	NetMsg.ConnectRequestSyncAfkState(OnRequestSyncAfkState)
 	if roundWorkerThread ~= nil then
 		LogInfo("Init skipped reason=already_initialized")
 		return
@@ -456,6 +492,9 @@ end
 
 function MatchManager.OnPlayerAdded(player: Player)
 	LogInfo(string.format("OnPlayerAdded userId=%d state=%s", player.UserId, currentMatchState))
+	PlayerStateManager.EnsurePlayerRoundInfo(player)
+	PlayerStateManager.SetPlayerAfk(player.UserId, false)
+	NetMsg.FireNotifyAfkState(player.UserId, false)
 	-- 无论当前处于什么阶段，新加入的玩家都先传送到大厅
 	TeleportPlayerToLobby(player)
 end

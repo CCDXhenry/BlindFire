@@ -10,6 +10,8 @@ local scripts = replicatedStorage:WaitForChild("Scripts")
 local sharedScripts = scripts:WaitForChild("Shared")
 local NetMsg = require(sharedScripts:FindFirstChild("NetMsg"))
 local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
+local clientScripts = scripts:WaitForChild("Client")
+local BulletClientManager = require(clientScripts:FindFirstChild("BulletClientManager"))
 
 local CAS_PRIORITY = 3000
 local DEFAULT_JUMP_POWER = 50
@@ -56,7 +58,7 @@ local function OnUpdate()
 			shouldSuppressByState = true
 		end
 	elseif lastMatchState == "GameStartCountdown" or lastMatchState == "Fighting" then
-		if isLocalParticipant and not isLocalDead then
+		if isLocalParticipant and not isLocalDead and not BulletClientManager.IsLocalAfk() then
 			shouldSuppressByState = true
 		end
 	end

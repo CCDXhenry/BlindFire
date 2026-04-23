@@ -11,5 +11,7 @@ local GameTexts = {
 	RoundTimeDraw = { key = "RoundTimeDraw", source = "Time! Surviving draw" },
 	KillFeedDefeated = { key = "KillFeedDefeated", source = "{1} eliminates {2}" },
 	InsufficientCoin = { key = "InsufficientCoin", source = "Insufficient Coins!" },
+	AfkOff = { key = "AfkOff", source = "[T] AFK: OFF" },
+	AfkOn = { key = "AfkOn", source = "[T] AFK: ON" },
 }
 return GameTexts

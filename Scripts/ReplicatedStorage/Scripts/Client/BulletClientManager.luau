@@ -57,6 +57,7 @@ local unitInitRetryCountMap: { [number]: number } = {}
 local lastFireTime: number = -math.huge
 local isInitialized: boolean = false
 local _hasWarnedMissingTurretActuator: boolean = false
+local isLocalAfk: boolean = false
 
 local HttpService = game:GetService("HttpService")
 
@@ -205,6 +206,7 @@ function BulletClientManager.Init()
 	NetMsg.ConnectNotifyDead(BulletClientManager.OnDead)
 	NetMsg.ConnectNotifyTeleport(BulletClientManager.OnTeleport)
 	NetMsg.ConnectNotifyMatchState(BulletClientManager.OnMatchStateChanged)
+	NetMsg.ConnectNotifyAfkState(BulletClientManager.OnNotifyAfkState)
 end
 
 local pendingUnitInits: { [number]: GameConfig.UnitInitInfo } = {}
@@ -363,6 +365,12 @@ function BulletClientManager.OnMatchStateChanged(newState: GameConfig.MatchState
 	matchState = newState
 end
 
+function BulletClientManager.OnNotifyAfkState(playerId: number, isAfk: boolean)
+	if playerId == localPlayerId then
+		isLocalAfk = isAfk
+	end
+end
+
 function BulletClientManager.FireShot()
 	if not IsFightingDriveActive() then
 		return
@@ -407,7 +415,11 @@ end
 function BulletClientManager.IsLocalInVehicle(): boolean
 	local state = unitStateMap[localPlayerId]
 	if state == nil then return false end
-	return state.hitCount < state.maxHits and state.isParticipant
+	return state.hitCount < state.maxHits and state.isParticipant and not isLocalAfk
+end
+
+function BulletClientManager.IsLocalAfk(): boolean
+	return isLocalAfk
 end
 
 return BulletClientManager
