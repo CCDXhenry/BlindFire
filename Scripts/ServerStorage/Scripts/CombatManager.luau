@@ -204,6 +204,9 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 	end
 	local unitModel: Model = vehicleTemplate:Clone()
 	unitModel.Name = "Vehicle_" .. tostring(player.UserId)
+	pcall(function()
+		unitModel.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+	end)
 	unitModel.Parent = workspace
 
 	local rootPart = unitModel:FindFirstChild("BaseDisk")
@@ -226,6 +229,22 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 			inst.Anchored = oldAnchored
 		end
 	end
+	
+	-- 监听座位变动，防止玩家入座后 Roblox 自动将网络所有权转移给客户端导致争夺和卡顿（高速抽搐/周期性停顿根源）
+	local seatInstance = unitModel:FindFirstChild("Seat", true)
+	if seatInstance and seatInstance:IsA("Seat") then
+		seatInstance:GetPropertyChangedSignal("Occupant"):Connect(function()
+			if seatInstance.Occupant ~= nil then
+				local primary = unitModel.PrimaryPart
+				if primary and not primary.Anchored then
+					pcall(function()
+						primary:SetNetworkOwner(nil)
+					end)
+				end
+			end
+		end)
+	end
+	
 	rootPart.Anchored = true
 
 	local spawnPosition = GetSpawnPosition()

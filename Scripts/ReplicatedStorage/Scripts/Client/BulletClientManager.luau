@@ -197,23 +197,33 @@ function BulletClientManager.Init()
 	NetMsg.ConnectNotifyMatchState(BulletClientManager.OnMatchStateChanged)
 end
 
+local pendingUnitInits: { [number]: GameConfig.UnitInitInfo } = {}
+
 function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 	local playerId: number = unitInitInfo.playerId
 	local isLocal: boolean = (playerId == localPlayerId)
 
+	pendingUnitInits[playerId] = unitInitInfo
+
 	local unitPart: BasePart? = FindUnitPart(playerId)
-	if unitPart == nil then
-		local retryCount = (unitInitRetryCountMap[playerId] or 0) + 1
-		unitInitRetryCountMap[playerId] = retryCount
-		if retryCount <= 5 then
-			task.delay(0.2, function()
-				BulletClientManager.OnUnitInit(unitInitInfo)
-			end)
-			return
-		end
-		warn("[BulletClientManager] Failed to find unit part for playerId: " .. tostring(playerId))
+	
+	-- If unit was removed while we were yielding in FindUnitPart, abort
+	if pendingUnitInits[playerId] == nil then
 		return
 	end
+
+	if unitPart == nil then
+		-- Vehicle might not be streamed in yet (e.g. at UNDERGROUND_Y while player is in Lobby)
+		-- We retry indefinitely until it's found or the unit is removed.
+		task.delay(0.5, function()
+			if pendingUnitInits[playerId] ~= nil then
+				BulletClientManager.OnUnitInit(unitInitInfo)
+			end
+		end)
+		return
+	end
+
+	pendingUnitInits[playerId] = nil
 	unitInitRetryCountMap[playerId] = nil
 
 	local model = unitPart.Parent
@@ -272,6 +282,7 @@ function BulletClientManager.OnDirectionFlip(playerId: number)
 end
 
 function BulletClientManager.OnUnitRemove(playerId: number)
+	pendingUnitInits[playerId] = nil
 	unitStateMap[playerId] = nil
 end
 function BulletClientManager.OnFireAccepted(playerId: number, _fireTime: number, _spawnPos: Vector3, _shotDir: Vector3, _serverTime: number, _bulletId: string)
