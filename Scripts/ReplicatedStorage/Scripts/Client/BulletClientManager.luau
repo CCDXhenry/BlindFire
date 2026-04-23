@@ -38,6 +38,7 @@ local SERVER_BULLETS_FOLDER_NAME = "ServerBullets"
 local SERVER_PROJECTILE_NAME_PREFIX = "ServerProjectile_"
 local SHOOTER_USER_ID_ATTRIBUTE = "ShooterUserId"
 local LOCAL_OWNED_PROJECTILE_COLOR = Color3.new(0, 1, 0)
+local ENEMY_PROJECTILE_COLOR = Color3.new(1, 0.2, 0.2)
 -- local UNIT_SPEED: number = GameConfig.UnitSpeed
 -- local UNIT_MAX_HORIZONTAL_SPEED: number = GameConfig.UnitMaxHorizontalSpeed
 -- local FIRE_COOLDOWN: number = GameConfig.FireCooldown
@@ -88,7 +89,7 @@ local function IsServerProjectileModelName(modelName: string): boolean
 	return string.sub(modelName, 1, #SERVER_PROJECTILE_NAME_PREFIX) == SERVER_PROJECTILE_NAME_PREFIX
 end
 
-local function TintServerProjectileForLocalPlayerIfOwner(projectileModel: Model)
+local function TintServerProjectile(projectileModel: Model)
 	if not IsServerProjectileModelName(projectileModel.Name) then
 		return
 	end
@@ -97,12 +98,20 @@ local function TintServerProjectileForLocalPlayerIfOwner(projectileModel: Model)
 		if typeof(shooterId) ~= "number" then
 			return
 		end
-		if shooterId ~= localPlayerId then
-			return
-		end
+
+		local isLocal = (shooterId == localPlayerId)
+		local tintColor = if isLocal then LOCAL_OWNED_PROJECTILE_COLOR else ENEMY_PROJECTILE_COLOR
+
 		for _, d in projectileModel:GetDescendants() do
 			if d:IsA("BasePart") then
-				d.Color = LOCAL_OWNED_PROJECTILE_COLOR
+				d.Color = tintColor
+				-- 兼容用户在 Core 下增加的 Highlight
+				local highlight = d:FindFirstChildWhichIsA("Highlight")
+				if highlight then
+					highlight.OutlineColor = tintColor
+				end
+			elseif d:IsA("Highlight") then
+				d.OutlineColor = tintColor
 			end
 		end
 	end
@@ -113,12 +122,12 @@ end
 local function BindServerProjectileLocalTintFolder(folder: Folder)
 	for _, child in folder:GetChildren() do
 		if child:IsA("Model") then
-			TintServerProjectileForLocalPlayerIfOwner(child)
+			TintServerProjectile(child)
 		end
 	end
 	folder.ChildAdded:Connect(function(child)
 		if child:IsA("Model") then
-			TintServerProjectileForLocalPlayerIfOwner(child)
+			TintServerProjectile(child)
 		end
 	end)
 end
