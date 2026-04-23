@@ -273,6 +273,8 @@ GameConfig.MatchCountdown = 10
 GameConfig.ArenaSeatPrepareDelay = 0.22
 -- 返回大厅解座等待
 GameConfig.ReturnToLobbyWait = 0.1
+-- 结算阶段时长
+GameConfig.SettlementDuration = 2
 -- 入座重试参数
 GameConfig.MaxSeatRetry = 30
 GameConfig.SeatRetryInterval = 0.2
@@ -367,7 +369,7 @@ GameConfig.HullYawVelocityEpsilonStudsPerSec = 1.5
 -- 受击后无敌时间（秒）
 GameConfig.InvincibilityDuration = 2
 
-export type MatchState = "InLobby" | "MatchCountdown" | "GameStartCountdown" | "Fighting"
+export type MatchState = "InLobby" | "MatchCountdown" | "GameStartCountdown" | "Fighting" | "Settlement"
 
 export type RoundEndReason = "LastStanding" | "TimeExpired"
 

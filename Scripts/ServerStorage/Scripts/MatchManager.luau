@@ -124,8 +124,18 @@ local function SeatPlayerOnVehicle(player: Player, targetPosition: Vector3)
 	if players:GetPlayerByUserId(player.UserId) == nil then
 		return
 	end
-	local vehicleName = VEHICLE_MODEL_NAME_PREFIX .. tostring(player.UserId)
-	local vehicleModel = workspace:FindFirstChild(vehicleName)
+	local vehicleModel: Model? = nil
+	local unitInfoMap = CombatManager.GetUnitInfoMap()
+	local unitInfo = unitInfoMap[player.UserId]
+	if unitInfo ~= nil then
+		vehicleModel = unitInfo.unitModel
+	end
+
+	if vehicleModel == nil or vehicleModel.Parent == nil then
+		local vehicleName = VEHICLE_MODEL_NAME_PREFIX .. tostring(player.UserId)
+		vehicleModel = workspace:FindFirstChild(vehicleName) :: Model?
+	end
+
 	if vehicleModel == nil or not vehicleModel:IsA("Model") then
 		local retryCount = (seatRetryCountMap[player.UserId] or 0) + 1
 		seatRetryCountMap[player.UserId] = retryCount
@@ -297,7 +307,7 @@ local function TeleportPlayerToLobby(player: Player, reloadCharacter: boolean?)
 end
 
 local function TeleportAllPlayersToLobby()
-	CombatManager.ResetAllUnitsToUnderground()
+	CombatManager.DestroyAllUnits()
 	for _, player in players:GetPlayers() do
 		task.spawn(function()
 			arenaTargetPositionMap[player.UserId] = nil
@@ -349,13 +359,6 @@ local function RunMatchLoop()
 		LogInfo(string.format("ArenaSeatPrepare participants=%d", #roundParticipantPlayers))
 		NetMsg.FireNotifyArenaSeatPrepare(roundParticipantPlayers)
 		ArenaManager.PrepareArena(#roundParticipantPlayers)
-		task.wait(GameConfig.ArenaSeatPrepareDelay)
-		TeleportAllPlayersToArena(roundParticipantPlayers)
-		-- 入场后只稳定一次，避免每秒 Stabilize 反复 Sit / 挪车导致角色反复「落地」
-		task.wait(0.35)
-		StabilizeArenaPlayers()
-		-- 入座失败等路径可能未解锚；开局倒计时前统一解锚，避免整局 BaseDisk 仍 Anchored
-		CombatManager.SetAllVehiclesAnchored(false)
 
 		if roundStartCallback ~= nil then
 			LogInfo("Invoke roundStartCallback (Early)")
@@ -365,6 +368,14 @@ local function RunMatchLoop()
 			end
 			roundStartCallback(participantIds)
 		end
+
+		task.wait(GameConfig.ArenaSeatPrepareDelay)
+		TeleportAllPlayersToArena(roundParticipantPlayers)
+		-- 入场后只稳定一次，避免每秒 Stabilize 反复 Sit / 挪车导致角色反复「落地」
+		task.wait(0.35)
+		StabilizeArenaPlayers()
+		-- 入座失败等路径可能未解锚；开局倒计时前统一解锚，避免整局 BaseDisk 仍 Anchored
+		CombatManager.SetAllVehiclesAnchored(false)
 
 		LogInfo(string.format("GameStartCountdown start seconds=%d", GameConfig.RoundStartCountdown))
 		local gameStartAborted = false
@@ -413,6 +424,10 @@ local function RunMatchLoop()
 		local aliveUserIds: { number } = PlayerStateManager.GetAliveUserIdList()
 		NetMsg.FireNotifyRoundOutcome(endReason, aliveUserIds)
 
+		-- 新增结算阶段：优胜者留在场内展示 2 秒
+		BroadcastMatchState("Settlement", GameConfig.SettlementDuration)
+		task.wait(GameConfig.SettlementDuration)
+
 		ArenaManager.ResetArena()
 		LogInfo("FightPhase ended returning players to lobby")
 		BroadcastMatchState("InLobby", 0)
@@ -441,12 +456,11 @@ end
 
 function MatchManager.OnPlayerAdded(player: Player)
 	LogInfo(string.format("OnPlayerAdded userId=%d state=%s", player.UserId, currentMatchState))
-	if currentMatchState == "InLobby" or currentMatchState == "MatchCountdown" then
-		TeleportPlayerToLobby(player)
-	end
+	-- 无论当前处于什么阶段，新加入的玩家都先传送到大厅
+	TeleportPlayerToLobby(player)
 end
 
-function MatchManager.OnPlayerDead(player: Player, isDisconnect: boolean?)
+function MatchManager.OnPlayerDead(player: Player, isDisconnect: boolean?, hitDirection: Vector3?)
 	LogInfo(string.format("OnPlayerDead userId=%d isDisconnect=%s", player.UserId, tostring(isDisconnect == true)))
 	arenaTargetPositionMap[player.UserId] = nil
 	if isDisconnect == true then
@@ -454,8 +468,67 @@ function MatchManager.OnPlayerDead(player: Player, isDisconnect: boolean?)
 		return
 	end
 	CombatManager.UnseatPlayerFromOwnedVehicle(player)
-	CombatManager.ResetUnitToUnderground(player.UserId)
-	TeleportPlayerToLobby(player, true)
+
+	-- 确保人物留在原地，不随载具消失
+	local character = player.Character
+	if character ~= nil then
+		if character.PrimaryPart ~= nil then
+			local deathPos = character.PrimaryPart.Position
+			character:PivotTo(CFrame.new(deathPos))
+		end
+
+		CombatManager.DestroyUnitForPlayer(player.UserId)
+
+		-- 死亡表现：人物肢体受力爆开并逐渐淡出
+		character:BreakJoints() -- 显式断开关节，确保肢体能分离
+
+		local explosionPower = 60
+		local upwardPower = 40
+		local spreadPower = 50
+
+		for _, part in character:GetDescendants() do
+			if part:IsA("BasePart") then
+				-- 保持 CanCollide = true 以便人物能落在地上（解体），但关闭 Touch 和 Query 以免干扰战斗
+				part.CanTouch = false
+				part.CanQuery = false
+
+				-- 应用爆炸冲量
+				local randomSpread = Vector3.new((math.random() - 0.5) * spreadPower, math.random() * upwardPower, (math.random() - 0.5) * spreadPower)
+				local hitImpulse = if hitDirection and hitDirection.Magnitude > 0 then hitDirection.Unit * explosionPower else Vector3.zero
+				part.AssemblyLinearVelocity = hitImpulse + randomSpread
+
+				-- 确保服务器拥有物理所有权，以便力能正确应用并同步给所有人
+				if not part.Anchored then
+					pcall(function()
+						part:SetNetworkOwner(nil)
+					end)
+				end
+			end
+		end
+
+		task.spawn(function()
+			local fadeDuration = 2.0
+			local steps = 20
+			for i = 1, steps do
+				task.wait(fadeDuration / steps)
+				if player.Parent ~= players or player.Character ~= character then
+					break
+				end
+				local transparency = i / steps
+				for _, part in character:GetDescendants() do
+					if part:IsA("BasePart") then
+						part.Transparency = transparency
+					elseif part:IsA("Decal") then
+						part.Transparency = transparency
+					end
+				end
+			end
+			-- 退场表现结束后再回大厅重置
+			TeleportPlayerToLobby(player, true)
+		end)
+	else
+		TeleportPlayerToLobby(player, true)
+	end
 end
 
 function MatchManager.OnPlayerRemoving(player: Player)

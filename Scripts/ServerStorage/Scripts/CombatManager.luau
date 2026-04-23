@@ -17,7 +17,7 @@ local ArenaManager = require(serverScripts:FindFirstChild("ArenaManager"))
 local ServerGameInfo = require(serverScripts:FindFirstChild("ServerGameInfo"))
 local VehicleLocomotionTool = require(sharedScripts:FindFirstChild("VehicleLocomotionTool"))
 
-type OnPlayerDeadCallback = (player: Player, isDisconnect: boolean?) -> ()
+type OnPlayerDeadCallback = (player: Player, isDisconnect: boolean?, hitDirection: Vector3?) -> ()
 
 type ServerUnitInfo = {
 	playerId: number,
@@ -406,9 +406,13 @@ function CombatManager.ResetUnitToUnderground(playerId: number)
 	ResetUnitToUnderground(playerId)
 end
 
-function CombatManager.ResetAllUnitsToUnderground()
+function CombatManager.DestroyAllUnits()
+	local ids = {}
 	for playerId in unitInfoMap do
-		ResetUnitToUnderground(playerId)
+		table.insert(ids, playerId)
+	end
+	for _, playerId in ids do
+		CombatManager.DestroyUnitForPlayer(playerId)
 	end
 end
 
@@ -612,7 +616,7 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 		local targetPlayer = players:GetPlayerByUserId(targetPlayerId)
 		if targetPlayer ~= nil and playerDeadCallback ~= nil then
 			LogInfo(string.format("NotifyPlayerDead userId=%d", targetPlayerId))
-			task.defer(playerDeadCallback, targetPlayer, false)
+			task.defer(playerDeadCallback, targetPlayer, false, hitDirection)
 		end
 	end
 end
@@ -805,13 +809,6 @@ end
 function CombatManager.OnPlayerAdded(player: Player)
 	PlayerStateManager.EnsurePlayerRoundInfo(player)
 	LogInfo(string.format("OnPlayerAdded userId=%d", player.UserId))
-
-	local unitInfo = CreateUnitModelForPlayer(player)
-	if unitInfo == nil then
-		LogInfo(string.format("OnPlayerAdded failed userId=%d reason=create_unit_failed", player.UserId))
-		return
-	end
-	BroadcastUnitInit(unitInfo)
 end
 
 function CombatManager.OnPlayerRemoving(player: Player)
@@ -982,7 +979,12 @@ function CombatManager.StartRound(participantIds: { number })
 	shooterBulletCountMap = {}
 	PlayerStateManager.ResetAllPlayerRoundInfo(participantIds)
 	for _, playerId in participantIds do
-		local unitInfo = unitInfoMap[playerId]
+		-- 无论之前有没有，都先尝试销毁旧载具并重新创建，以支持比赛间隙的载具切换
+		CombatManager.DestroyUnitForPlayer(playerId)
+
+		local player = players:GetPlayerByUserId(playerId)
+		local unitInfo = if player then CreateUnitModelForPlayer(player) else nil
+		
 		if unitInfo == nil then
 			continue
 		end
@@ -1037,6 +1039,10 @@ end
 
 function CombatManager.UnseatPlayerFromOwnedVehicle(player: Player)
 	unseatPlayerFromOwnedVehicle(player)
+end
+
+function CombatManager.GetUnitInfoMap()
+	return unitInfoMap
 end
 
 return CombatManager
