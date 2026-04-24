@@ -15,6 +15,7 @@ local serverScripts = serverStorage:WaitForChild("Scripts")
 local PlayerStateManager = require(serverScripts:FindFirstChild("PlayerStateManager"))
 local ArenaManager = require(serverScripts:FindFirstChild("ArenaManager"))
 local ServerGameInfo = require(serverScripts:FindFirstChild("ServerGameInfo"))
+local LeaderboardManager = require(serverScripts:FindFirstChild("LeaderboardManager"))
 local VehicleLocomotionTool = require(sharedScripts:FindFirstChild("VehicleLocomotionTool"))
 
 type OnPlayerDeadCallback = (player: Player, isDisconnect: boolean?, hitDirection: Vector3?) -> ()
@@ -604,6 +605,7 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 			if isDead then
 				--击杀奖励
 				ServerGameInfo.UpdatePlayerCurrency(shooterPlayer, GameConfig.CurrencyType.Coin, 2, GameConfig.ItemCountChangeReason.GainFromKill)
+				LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyKills, 1)
 			else
 				--命中奖励
 				ServerGameInfo.UpdatePlayerCurrency(shooterPlayer, GameConfig.CurrencyType.Coin, 1, GameConfig.ItemCountChangeReason.GainFromHit)

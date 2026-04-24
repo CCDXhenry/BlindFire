@@ -152,6 +152,12 @@ function ServerGameInfo.UpdatePlayerCurrency(player: Player, currencyType: numbe
 	playerInfo.currencies[currencyKey] = totalAmount
 	playerInfo.playerInfoChanged = true
 
+	-- 统计周收益
+	if changeAmount > 0 and currencyType == GameConfig.CurrencyType.Coin then
+		local LeaderboardManager = require(serverScripts:FindFirstChild("LeaderboardManager"))
+		LeaderboardManager.AddStat(player, GameConfig.LeaderboardCategory.WeeklyEarnings, changeAmount)
+	end
+
 	--通知客户端
 	NetMsg.FireNotifyPlayerCurrencyUpdate(player, currencyType, totalAmount, changeAmount, reason)
 end

@@ -57,6 +57,13 @@ GameConfig.CurrencyType = {
 	Rb = 2, --Robux
 }
 
+--消耗类型
+GameConfig.CostType = {
+	Coin = 1, --金币
+	Rb = 2, --RB
+	CoinOrRb = 3, --金币或RB
+}
+
 --物品数量改变原因
 GameConfig.ItemCountChangeReason = {
 	--获得
@@ -110,6 +117,7 @@ export type BulletData = {
 	productId: number,
 	lifetime: number,
 	cost: number,
+	costRb: number?,
 	maxBounces: number,
 	costType: number,
 	moveSpeed: number,
@@ -124,6 +132,7 @@ export type VehicleData = {
 	sortId: number,
 	productId: number,
 	cost: number,
+	costRb: number?,
 	costType: number,
 	moveSpeed: number,
 	bulletData: BulletData?,
@@ -158,6 +167,13 @@ export type PlayerSaveInfo = {
 	currencies: { [string]: number },
 	--载具信息
 	vehicleInventory: VehicleInventory,
+	--周统计信息
+	weeklyStats: {
+		kills: number,
+		wins: number,
+		earnings: number,
+		lastResetWeek: string,
+	},
 }
 export type PlayerInfo = PlayerSaveInfo & {
 	--玩家信息是否发生变化
@@ -210,6 +226,12 @@ function GameConfig.CreateDefaultPlayerSaveInfo(): PlayerSaveInfo
 			ownedList = {
 				["1"] = true,
 			},
+		},
+		weeklyStats = {
+			kills = 0,
+			wins = 0,
+			earnings = 0,
+			lastResetWeek = os.date("!%Y_%W"),
 		},
 	}
 end
@@ -297,6 +319,18 @@ GameConfig.ProjectileMaxBounces = 1
 GameConfig.FireRecoilSpeedMultiplier = 5
 -- 开火前摇时长（秒）
 GameConfig.FireCastTime = 0.2
+
+-- 排行榜分类
+GameConfig.LeaderboardCategory = {
+	WeeklyKills = "WeeklyKills",
+	WeeklyWins = "WeeklyWins",
+	WeeklyEarnings = "WeeklyEarnings",
+}
+
+-- 排行榜更新频率（秒，1小时）
+GameConfig.LeaderboardUpdateInterval = 60
+-- 排行榜显示数量
+GameConfig.LeaderboardDisplayCount = 20
 
 -- 静态卡死检测阈值
 GameConfig.StuckVelocityThreshold = 0.5
@@ -438,6 +472,7 @@ for id, data in pairs(VehiclesData) do
 		sortId = data.sortId,
 		productId = data.productId,
 		cost = data.cost,
+		costRb = data.costRb,
 		costType = data.costType,
 		moveSpeed = data.moveSpeed,
 	}

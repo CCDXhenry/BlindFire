@@ -39,6 +39,22 @@ if localPlayerInfo == nil then
 	return
 end
 
+local function IsVehicleAffordable(vehicleData: GameConfig.VehicleData): boolean
+	local coinCount = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
+	local rbCount = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Rb)] or 0
+	local rbCost = vehicleData.costRb or vehicleData.cost
+
+	if vehicleData.costType == GameConfig.CostType.Coin then
+		return coinCount >= vehicleData.cost
+	elseif vehicleData.costType == GameConfig.CostType.Rb then
+		return rbCount >= vehicleData.cost
+	elseif vehicleData.costType == GameConfig.CostType.CoinOrRb then
+		return coinCount >= vehicleData.cost or rbCount >= rbCost
+	end
+
+	return false
+end
+
 local function PlayBuyBtnIntroAnim(buyBtn: ImageButton)
 	-- 防止重复播放
 	if buyBtn:GetAttribute("IntroPlayed") then
@@ -78,18 +94,25 @@ local function RefreshInfoFrame()
 	local isOwned = localPlayerInfo.vehicleInventory.ownedList[tostring(vehicleIdLookAt)]
 
 	--修改花费类型icon
-	if vehicleData.costType == GameConfig.CurrencyType.Coin then
+	if vehicleData.costType == GameConfig.CostType.Coin then
 		coin.Image = GameConfig.CoinIconImage
-	elseif vehicleData.costType == GameConfig.CurrencyType.Rb then
+	elseif vehicleData.costType == GameConfig.CostType.Rb then
 		coin.Image = GameConfig.RbIconImage
+	elseif vehicleData.costType == GameConfig.CostType.CoinOrRb then
+		coin.Image = GameConfig.CoinIconImage
+		rb.Image = GameConfig.RbIconImage
 	end
 
 	if not isOwned then
 		buyBtn.Visible = true
 		PlayBuyBtnIntroAnim(buyBtn)
-		rb.Visible = (vehicleData.costType == GameConfig.CurrencyType.Rb)
-		coin.Visible = (vehicleData.costType == GameConfig.CurrencyType.Coin)
-		priceText.Text = NumberExtension.FormatBigNumberAA(vehicleData.cost)
+		rb.Visible = (vehicleData.costType == GameConfig.CostType.Rb or vehicleData.costType == GameConfig.CostType.CoinOrRb)
+		coin.Visible = (vehicleData.costType == GameConfig.CostType.Coin or vehicleData.costType == GameConfig.CostType.CoinOrRb)
+		if vehicleData.costType == GameConfig.CostType.CoinOrRb then
+			priceText.Text = string.format("%s / %s", NumberExtension.FormatBigNumberAA(vehicleData.cost), NumberExtension.FormatBigNumberAA(vehicleData.costRb or vehicleData.cost))
+		else
+			priceText.Text = NumberExtension.FormatBigNumberAA(vehicleData.cost)
+		end
 	else
 		buyBtn.Visible = false
 		buyBtn:SetAttribute("IntroPlayed", false)
@@ -257,15 +280,12 @@ local function InitFrame()
 			return
 		end
 		local vehicleData = GameConfig.VehicleDataMap[vehicleIdLookAt]
-		if vehicleData.costType == GameConfig.CurrencyType.Coin then
-			local coinCount = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
-			if coinCount >= vehicleData.cost then
+		if vehicleData.costType == GameConfig.CostType.Coin or vehicleData.costType == GameConfig.CostType.Rb or vehicleData.costType == GameConfig.CostType.CoinOrRb then
+			if IsVehicleAffordable(vehicleData) then
 				NetMsg.FireRequestBuyVehicle(vehicleIdLookAt)
 			else
 				ClientMsg.FireShowGameTip(GameTexts.InsufficientCoin.source, GameConfig.GameTipTweenType.FlyUp)
 			end
-		elseif vehicleData.costType == GameConfig.CurrencyType.Rb then
-			marketplaceService:PromptProductPurchase(players.LocalPlayer, vehicleData.productId)
 		end
 	end)
 

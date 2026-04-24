@@ -13,5 +13,6 @@ local GameTexts = {
 	InsufficientCoin = { key = "InsufficientCoin", source = "Insufficient Coins!" },
 	AfkOff = { key = "AfkOff", source = "[T] AFK: OFF" },
 	AfkOn = { key = "AfkOn", source = "[T] AFK: ON" },
+	LeaderboardRefreshCountdown = { key = "LeaderboardRefreshCountdown", source = "The leaderboard will refresh in {1}:{2}:{3}:{4}." },
 }
 return GameTexts

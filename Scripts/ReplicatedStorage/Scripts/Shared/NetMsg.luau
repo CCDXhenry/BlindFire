@@ -36,6 +36,8 @@ local notifyAfkStateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("Noti
 local requestBuyVehicleEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestBuyVehicle") :: RemoteEvent
 local requestUpdateVehicleUsingEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestUpdateVehicleUsing") :: RemoteEvent
 local notifyPlayerVehicleInventoryUpdateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPlayerVehicleInventoryUpdate") :: RemoteEvent
+local notifyLeaderboardUpdateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyLeaderboardUpdate") :: RemoteEvent
+local notifyLeaderboardResetTimeEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyLeaderboardResetTime") :: RemoteEvent
 
 --客户端请求设置背景音乐音量
 function NetMsg.FireRequestSetBGMVolume(volume: number)
@@ -314,6 +316,30 @@ end
 
 function NetMsg.ConnectNotifyPlayerVehicleInventoryUpdate(callback: (vehicleInventory: GameConfig.VehicleInventory) -> ())
 	notifyPlayerVehicleInventoryUpdateEvent.OnClientEvent:Connect(callback)
+end
+
+function NetMsg.FireNotifyLeaderboardUpdate(player: Player?, category: string, topList: { { userId: number, value: number, name: string } }, resetTimestamp: number)
+	if player then
+		notifyLeaderboardUpdateEvent:FireClient(player, category, topList, resetTimestamp)
+	else
+		notifyLeaderboardUpdateEvent:FireAllClients(category, topList, resetTimestamp)
+	end
+end
+
+function NetMsg.ConnectNotifyLeaderboardUpdate(callback: (category: string, topList: { { userId: number, value: number, name: string } }, resetTimestamp: number) -> ())
+	notifyLeaderboardUpdateEvent.OnClientEvent:Connect(callback)
+end
+
+function NetMsg.FireNotifyLeaderboardResetTime(player: Player?, resetTimestamp: number)
+	if player then
+		notifyLeaderboardResetTimeEvent:FireClient(player, resetTimestamp)
+	else
+		notifyLeaderboardResetTimeEvent:FireAllClients(resetTimestamp)
+	end
+end
+
+function NetMsg.ConnectNotifyLeaderboardResetTime(callback: (resetTimestamp: number) -> ())
+	notifyLeaderboardResetTimeEvent.OnClientEvent:Connect(callback)
 end
 
 return NetMsg

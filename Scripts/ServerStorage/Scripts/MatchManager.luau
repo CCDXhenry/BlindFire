@@ -14,6 +14,7 @@ local NetMsg = require(sharedScripts:FindFirstChild("NetMsg"))
 local PlayerStateManager = require(serverScripts:WaitForChild("PlayerStateManager"))
 local ConfigManager = require(serverScripts:WaitForChild("ConfigManager"))
 local ArenaManager = require(serverScripts:WaitForChild("ArenaManager"))
+local LeaderboardManager = require(serverScripts:WaitForChild("LeaderboardManager"))
 
 type OnRoundStartCallback = (participantIds: { number }) -> ()
 
@@ -458,6 +459,14 @@ local function RunMatchLoop()
 		local aliveUserIds: { number } = PlayerStateManager.GetAliveUserIdList()
 		NetMsg.FireNotifyRoundOutcome(endReason, aliveUserIds)
 
+		-- 统计胜利
+		for _, winnerId in ipairs(aliveUserIds) do
+			local winner = players:GetPlayerByUserId(winnerId)
+			if winner then
+				LeaderboardManager.AddStat(winner, GameConfig.LeaderboardCategory.WeeklyWins, 1)
+			end
+		end
+
 		-- 新增结算阶段：优胜者留在场内展示 2 秒
 		BroadcastMatchState("Settlement", GameConfig.SettlementDuration)
 		task.wait(GameConfig.SettlementDuration)
@@ -562,7 +571,9 @@ function MatchManager.OnPlayerDead(player: Player, isDisconnect: boolean?, hitDi
 				local transparency = i / steps
 				for _, part in character:GetDescendants() do
 					if part:IsA("BasePart") then
-						part.Transparency = transparency
+						if part.Name ~= "HumanoidRootPart" then
+							part.Transparency = transparency
+						end
 					elseif part:IsA("Decal") then
 						part.Transparency = transparency
 					end

@@ -45,6 +45,22 @@ local AFK_ON_COLOR = Color3.fromRGB(60, 180, 75)
 local isAfk = false
 local matchState: GameConfig.MatchState = "InLobby"
 
+local function IsVehicleAffordable(localPlayerInfo: GameConfig.ClientLocalPlayerInfo, vehicleData: GameConfig.VehicleData): boolean
+	local coinAmount: number = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
+	local rbAmount: number = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Rb)] or 0
+	local rbCost = vehicleData.costRb or vehicleData.cost
+
+	if vehicleData.costType == GameConfig.CostType.Coin then
+		return coinAmount >= vehicleData.cost
+	elseif vehicleData.costType == GameConfig.CostType.Rb then
+		return rbAmount >= vehicleData.cost
+	elseif vehicleData.costType == GameConfig.CostType.CoinOrRb then
+		return coinAmount >= vehicleData.cost or rbAmount >= rbCost
+	end
+
+	return false
+end
+
 local function IsAfkButtonHiddenByBattleState(): boolean
 	local isBattleState = (matchState == "GameStartCountdown" or matchState == "Fighting")
 	if not isBattleState then
@@ -62,15 +78,12 @@ local function RefreshVehiclesRedPoint()
 	end
 
 	local hasAffordableNew = false
-	local coinAmount: number = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
-
 	for _, vehicleData in pairs(GameConfig.VehicleDataMap) do
 		local vehicleIdStr = tostring(vehicleData.id)
 		local isOwned = localPlayerInfo.vehicleInventory.ownedList[vehicleIdStr]
 		
 		if not isOwned then
-			-- 如果是金币购买且钱够，则显示红点
-			if vehicleData.costType == GameConfig.CurrencyType.Coin and coinAmount >= vehicleData.cost then
+			if IsVehicleAffordable(localPlayerInfo, vehicleData) then
 				hasAffordableNew = true
 				break
 			end

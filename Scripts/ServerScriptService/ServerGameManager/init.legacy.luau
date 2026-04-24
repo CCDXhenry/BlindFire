@@ -12,6 +12,7 @@ local PlayerStateManager = require(serverScripts:FindFirstChild("PlayerStateMana
 local MatchManager = require(serverScripts:FindFirstChild("MatchManager"))
 local CombatManager = require(serverScripts:FindFirstChild("CombatManager"))
 local VehicleManager = require(serverScripts:FindFirstChild("VehicleManager"))
+local LeaderboardManager = require(serverScripts:FindFirstChild("LeaderboardManager"))
 local ConfigCommandManager = require(script:FindFirstChild("ConfigCommandManager"))
 
 local replicatedStorage: ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -112,6 +113,7 @@ local function SavePlayerInfo(player: Player)
 	if playerInfo ~= nil and playerInfo.playerInfoChanged then
 		local playerSaveInfo: GameConfig.PlayerSaveInfo = ServerGameInfo.CreatePlayerSaveInfoByPlayerInfo(playerInfo)
 		DataStoreTool.SafeSet(playerInfoDataStore, tostring(player.UserId), playerSaveInfo)
+		LeaderboardManager.SavePlayerStats(player)
 		playerInfo.playerInfoChanged = false
 	end
 end
@@ -166,6 +168,7 @@ local function OnPlayerAdded(player: Player)
 
 		CombatManager.OnPlayerAdded(player)
 		MatchManager.OnPlayerAdded(player)
+		LeaderboardManager.OnPlayerAdded(player)
 	end)
 end
 
@@ -201,6 +204,7 @@ local function InitGameSystems()
 	PlayerStateManager.Init()
 	CombatManager.Init(MatchManager.OnPlayerDead)
 	MatchManager.Init(CombatManager.StartRound)
+	LeaderboardManager.Init()
 	VehicleManager.Init()
 	ConfigCommandManager.Init()
 	LogInfo("Init end")

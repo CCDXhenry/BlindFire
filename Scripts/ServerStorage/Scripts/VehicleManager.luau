@@ -19,6 +19,50 @@ local function LogInfo(message: string)
 	print(string.format("%s %s", LOG_PREFIX, message))
 end
 
+local function CanAffordVehicle(playerInfo: GameConfig.PlayerInfo, vehicleData: GameConfig.VehicleData): boolean
+	local coinKey = tostring(GameConfig.CurrencyType.Coin)
+	local rbKey = tostring(GameConfig.CurrencyType.Rb)
+	local currentCoins = playerInfo.currencies[coinKey] or 0
+	local currentRb = playerInfo.currencies[rbKey] or 0
+	local coinCost = vehicleData.cost
+	local rbCost = vehicleData.costRb or vehicleData.cost
+
+	if vehicleData.costType == GameConfig.CostType.Coin then
+		return currentCoins >= coinCost
+	elseif vehicleData.costType == GameConfig.CostType.Rb then
+		return currentRb >= coinCost
+	elseif vehicleData.costType == GameConfig.CostType.CoinOrRb then
+		return currentCoins >= coinCost or currentRb >= rbCost
+	end
+
+	return false
+end
+
+local function SpendVehicleCost(player: Player, vehicleData: GameConfig.VehicleData)
+	local playerInfo = ServerGameInfo.GetPlayerInfo(player)
+	if playerInfo == nil then
+		return
+	end
+
+	local coinKey = tostring(GameConfig.CurrencyType.Coin)
+	local rbKey = tostring(GameConfig.CurrencyType.Rb)
+	local currentCoins = playerInfo.currencies[coinKey] or 0
+	local currentRb = playerInfo.currencies[rbKey] or 0
+	local rbCost = vehicleData.costRb or vehicleData.cost
+
+	if vehicleData.costType == GameConfig.CostType.Coin then
+		ServerGameInfo.UpdatePlayerCurrency(player, GameConfig.CurrencyType.Coin, -vehicleData.cost, GameConfig.ItemCountChangeReason.SpendOnUpgrade)
+	elseif vehicleData.costType == GameConfig.CostType.Rb then
+		ServerGameInfo.UpdatePlayerCurrency(player, GameConfig.CurrencyType.Rb, -vehicleData.cost, GameConfig.ItemCountChangeReason.SpendOnUpgrade)
+	elseif vehicleData.costType == GameConfig.CostType.CoinOrRb then
+		if currentCoins >= vehicleData.cost then
+			ServerGameInfo.UpdatePlayerCurrency(player, GameConfig.CurrencyType.Coin, -vehicleData.cost, GameConfig.ItemCountChangeReason.SpendOnUpgrade)
+		elseif currentRb >= rbCost then
+			ServerGameInfo.UpdatePlayerCurrency(player, GameConfig.CurrencyType.Rb, -rbCost, GameConfig.ItemCountChangeReason.SpendOnUpgrade)
+		end
+	end
+end
+
 -- 处理客户端购买载具请求
 function VehicleManager.OnRequestBuyVehicle(player: Player, vehicleId: number)
 	local playerInfo = ServerGameInfo.GetPlayerInfo(player)
@@ -38,24 +82,15 @@ function VehicleManager.OnRequestBuyVehicle(player: Player, vehicleId: number)
 		return
 	end
 
-	-- 目前只处理金币购买
-	if vehicleData.costType == GameConfig.CurrencyType.Coin then
-		local coinKey = tostring(GameConfig.CurrencyType.Coin)
-		local currentCoins = playerInfo.currencies[coinKey] or 0
-		if currentCoins >= vehicleData.cost then
-			LogInfo(string.format("BuyAccepted userId=%d vehicleId=%d cost=%d", player.UserId, vehicleId, vehicleData.cost))
-			-- 扣除金币
-			ServerGameInfo.UpdatePlayerCurrency(player, GameConfig.CurrencyType.Coin, -vehicleData.cost, GameConfig.ItemCountChangeReason.SpendOnUpgrade)
-			-- 添加载具
-			ServerGameInfo.AddPlayerVehicle(player, vehicleIdStr)
-			-- 自动装备
-			VehicleManager.OnRequestUpdateVehicleUsing(player, vehicleId)
-		else
-			LogInfo(string.format("BuyRejected userId=%d reason=insufficient_coins vehicleId=%d", player.UserId, vehicleId))
-		end
-	elseif vehicleData.costType == GameConfig.CurrencyType.Rb then
-		-- Robux 购买通过 MarketplaceService 处理，不走这个请求
-		LogInfo(string.format("BuyRejected userId=%d reason=robux_vehicle_request vehicleId=%d", player.UserId, vehicleId))
+	if CanAffordVehicle(playerInfo, vehicleData) then
+		LogInfo(string.format("BuyAccepted userId=%d vehicleId=%d coinCost=%d rbCost=%d costType=%d", player.UserId, vehicleId, vehicleData.cost, vehicleData.costRb or 0, vehicleData.costType))
+		SpendVehicleCost(player, vehicleData)
+		-- 添加载具
+		ServerGameInfo.AddPlayerVehicle(player, vehicleIdStr)
+		-- 自动装备
+		VehicleManager.OnRequestUpdateVehicleUsing(player, vehicleId)
+	else
+		LogInfo(string.format("BuyRejected userId=%d reason=insufficient_currency vehicleId=%d", player.UserId, vehicleId))
 	end
 end
 
