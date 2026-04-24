@@ -99,7 +99,7 @@ function PlayerStateManager.GetNonAfkOnlinePlayerCount(): number
 	return count
 end
 
-function PlayerStateManager.CanFire(playerId: number, nowTime: number): boolean
+function PlayerStateManager.CanFire(playerId: number, nowTime: number, cooldown: number?): boolean
 	local playerRoundInfo = playerRoundInfoMap[playerId]
 	if playerRoundInfo == nil then
 		return false
@@ -107,16 +107,18 @@ function PlayerStateManager.CanFire(playerId: number, nowTime: number): boolean
 	if not playerRoundInfo.isAlive then
 		return false
 	end
-	return nowTime - playerRoundInfo.lastFireTime >= GameConfig.FireCooldown
+	local cd = cooldown or GameConfig.FireCooldown
+	return nowTime - playerRoundInfo.lastFireTime >= cd
 end
 
-function PlayerStateManager.AddPlayerHit(playerId: number): (number, boolean)
+function PlayerStateManager.AddPlayerHit(playerId: number, maxHits: number?): (number, boolean)
 	local playerRoundInfo = playerRoundInfoMap[playerId]
 	if playerRoundInfo == nil then
 		return 0, false
 	end
 	playerRoundInfo.hitCount += 1
-	if playerRoundInfo.hitCount >= GameConfig.MaxHits then
+	local limit = maxHits or GameConfig.MaxHits
+	if playerRoundInfo.hitCount >= limit then
 		playerRoundInfo.isAlive = false
 		return playerRoundInfo.hitCount, true
 	end

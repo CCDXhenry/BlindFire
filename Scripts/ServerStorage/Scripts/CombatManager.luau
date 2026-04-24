@@ -419,16 +419,17 @@ end
 
 local function BroadcastUnitInit(unitInfo: ServerUnitInfo)
 	local playerRoundInfo = PlayerStateManager.GetAllPlayerRoundInfoMap()[unitInfo.playerId]
+	local maxHits = if unitInfo.vehicleConfig then unitInfo.vehicleConfig.maxHits else GameConfig.MaxHits
 	local unitInitInfo: GameConfig.UnitInitInfo = {
 		playerId = unitInfo.playerId,
 		moveAngle = unitInfo.moveAngle,
 		spinDir = unitInfo.spinDir,
 		spawnPosition = unitInfo.rootPart.Position,
-		maxHits = GameConfig.MaxHits,
+		maxHits = maxHits,
 		isParticipant = if playerRoundInfo then playerRoundInfo.isParticipant else false,
 	}
 	NetMsg.FireNotifyUnitInitToAll(unitInitInfo)
-	NetMsg.FireNotifyHpChanged(unitInfo.playerId, 0, GameConfig.MaxHits)
+	NetMsg.FireNotifyHpChanged(unitInfo.playerId, 0, maxHits)
 	LogInfo(
 		string.format(
 			"BroadcastUnitInit userId=%d pos=%s moveAngle=%d spinDir=%d",
@@ -551,11 +552,12 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 
 	local hitCount: number = 0
 	local isDead: boolean = false
+	local maxHits = if targetUnitInfo ~= nil then targetUnitInfo.vehicleConfig.maxHits else GameConfig.MaxHits
 	if isProtected then
 		hitCount = PlayerStateManager.GetPlayerHitCount(targetPlayerId)
 		isDead = false
 	else
-		hitCount, isDead = PlayerStateManager.AddPlayerHit(targetPlayerId)
+		hitCount, isDead = PlayerStateManager.AddPlayerHit(targetPlayerId, maxHits)
 	end
 
 	-- 仅在受到伤害且未死亡的情况下开启无敌特效
@@ -596,7 +598,7 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 		)
 	)
 	NetMsg.FireNotifyHit(targetPlayerId, shooterId, hitDirection, hitCount, bulletId, hitPosition)
-	NetMsg.FireNotifyHpChanged(targetPlayerId, hitCount, GameConfig.MaxHits)
+	NetMsg.FireNotifyHpChanged(targetPlayerId, hitCount, maxHits)
 
 	--增加金币奖励
 	if shooterId ~= targetPlayerId then
@@ -804,18 +806,19 @@ function CombatManager.SyncToPlayer(player: Player)
 		end
 
 		local otherRoundInfo = roundInfoMap[otherId]
+		local maxHits = if otherUnitInfo.vehicleConfig then otherUnitInfo.vehicleConfig.maxHits else GameConfig.MaxHits
 		NetMsg.FireNotifyUnitInit(player, {
 			playerId = otherId,
 			moveAngle = otherUnitInfo.moveAngle,
 			spinDir = otherUnitInfo.spinDir,
 			spawnPosition = otherUnitInfo.rootPart.Position,
-			maxHits = GameConfig.MaxHits,
+			maxHits = maxHits,
 			isParticipant = if otherRoundInfo then otherRoundInfo.isParticipant else false,
 		})
 
 		-- Sync current HP
 		local hitCount = PlayerStateManager.GetPlayerHitCount(otherId)
-		NetMsg.FireNotifyHpChangedToPlayer(player, otherId, hitCount, GameConfig.MaxHits)
+		NetMsg.FireNotifyHpChangedToPlayer(player, otherId, hitCount, maxHits)
 	end
 end
 
@@ -851,8 +854,11 @@ function CombatManager.OnPlayerRemoving(player: Player)
 end
 
 function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bulletId: string)
+	local unitInfo = unitInfoMap[player.UserId]
+	local cooldown = if unitInfo then unitInfo.vehicleConfig.fireCooldown else GameConfig.FireCooldown
+
 	local nowTime = os.clock()
-	local canFire = PlayerStateManager.CanFire(player.UserId, nowTime)
+	local canFire = PlayerStateManager.CanFire(player.UserId, nowTime, cooldown)
 	if not canFire then
 		LogInfo(string.format("FireRejected userId=%d reason=cooldown_or_dead now=%.2f", player.UserId, nowTime))
 		return
@@ -1009,15 +1015,16 @@ function CombatManager.StartRound(participantIds: { number })
 		unitInfo.targetVelZ = tvz
 		unitInfo.spinAngleRad = math.atan2(tvz, tvx)
 		unitInfo.unitModel:PivotTo(CFrame.new(unitInfo.rootPart.Position) * VehicleLocomotionTool.UprightGoalCFrame(unitInfo.spinAngleRad))
+		local maxHits = if unitInfo.vehicleConfig then unitInfo.vehicleConfig.maxHits else GameConfig.MaxHits
 		NetMsg.FireNotifyUnitInitToAll({
 			playerId = playerId,
 			moveAngle = unitInfo.moveAngle,
 			spinDir = unitInfo.spinDir,
 			spawnPosition = unitInfo.rootPart.Position,
-			maxHits = GameConfig.MaxHits,
+			maxHits = maxHits,
 			isParticipant = true, -- StartRound implies all passed IDs are participants
 		})
-		NetMsg.FireNotifyHpChanged(playerId, 0, GameConfig.MaxHits)
+		NetMsg.FireNotifyHpChanged(playerId, 0, maxHits)
 		LogInfo(string.format("StartRoundReset userId=%d moveAngle=%d spinDir=%d", playerId, unitInfo.moveAngle, unitInfo.spinDir))
 	end
 	LogInfo("StartRound end")

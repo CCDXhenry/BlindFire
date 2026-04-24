@@ -48,14 +48,14 @@ local matchState: GameConfig.MatchState = "InLobby"
 local function IsVehicleAffordable(localPlayerInfo: GameConfig.ClientLocalPlayerInfo, vehicleData: GameConfig.VehicleData): boolean
 	local coinAmount: number = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
 	local rbAmount: number = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Rb)] or 0
-	local rbCost = vehicleData.costRb or vehicleData.cost
+	local rbCost = vehicleData.costRb or vehicleData.costCoin
 
 	if vehicleData.costType == GameConfig.CostType.Coin then
-		return coinAmount >= vehicleData.cost
+		return coinAmount >= vehicleData.costCoin
 	elseif vehicleData.costType == GameConfig.CostType.Rb then
-		return rbAmount >= vehicleData.cost
+		return rbAmount >= vehicleData.costCoin
 	elseif vehicleData.costType == GameConfig.CostType.CoinOrRb then
-		return coinAmount >= vehicleData.cost or rbAmount >= rbCost
+		return coinAmount >= vehicleData.costCoin or rbAmount >= rbCost
 	end
 
 	return false
@@ -77,20 +77,36 @@ local function RefreshVehiclesRedPoint()
 		return
 	end
 
-	local hasAffordableNew = false
-	for _, vehicleData in pairs(GameConfig.VehicleDataMap) do
-		local vehicleIdStr = tostring(vehicleData.id)
-		local isOwned = localPlayerInfo.vehicleInventory.ownedList[vehicleIdStr]
-		
-		if not isOwned then
-			if IsVehicleAffordable(localPlayerInfo, vehicleData) then
-				hasAffordableNew = true
-				break
+	local maxOwnedId = 0
+	for idStr, owned in pairs(localPlayerInfo.vehicleInventory.ownedList) do
+		if owned then
+			local id = tonumber(idStr)
+			if id and id > maxOwnedId then
+				maxOwnedId = id
 			end
 		end
 	end
 
-	vehiclesRedPoint.Visible = hasAffordableNew
+	local hasAffordableBetter = false
+	for _, vehicleData in pairs(GameConfig.VehicleDataMap) do
+		-- 只考虑比当前最强车更强的载具
+		if vehicleData.id > maxOwnedId then
+			local isOwned = localPlayerInfo.vehicleInventory.ownedList[tostring(vehicleData.id)]
+			
+			if not isOwned then
+				-- 红点只算能够金币购买且金币数量足够的
+				if vehicleData.costType == GameConfig.CostType.Coin or vehicleData.costType == GameConfig.CostType.CoinOrRb then
+					local coinAmount: number = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
+					if coinAmount >= vehicleData.costCoin then
+						hasAffordableBetter = true
+						break
+					end
+				end
+			end
+		end
+	end
+
+	vehiclesRedPoint.Visible = hasAffordableBetter
 end
 
 local function RefreshAfkButton()

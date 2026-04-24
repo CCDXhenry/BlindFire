@@ -131,9 +131,11 @@ export type VehicleData = {
 	bulletId: number,
 	sortId: number,
 	productId: number,
-	cost: number,
+	costCoin: number,
 	costRb: number?,
 	costType: number,
+	maxHits: number,
+	fireCooldown: number,
 	moveSpeed: number,
 	bulletData: BulletData?,
 }
@@ -471,9 +473,11 @@ for id, data in pairs(VehiclesData) do
 		bulletId = data.bulletId,
 		sortId = data.sortId,
 		productId = data.productId,
-		cost = data.cost,
+		costCoin = data.costCoin or data.cost,
 		costRb = data.costRb,
 		costType = data.costType,
+		maxHits = data.maxHits or GameConfig.MaxHits,
+		fireCooldown = data.fireCooldown or GameConfig.FireCooldown,
 		moveSpeed = data.moveSpeed,
 	}
 	if vehicle.bulletId then

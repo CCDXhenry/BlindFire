@@ -42,14 +42,14 @@ end
 local function IsVehicleAffordable(vehicleData: GameConfig.VehicleData): boolean
 	local coinCount = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
 	local rbCount = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Rb)] or 0
-	local rbCost = vehicleData.costRb or vehicleData.cost
+	local rbCost = vehicleData.costRb or vehicleData.costCoin
 
 	if vehicleData.costType == GameConfig.CostType.Coin then
-		return coinCount >= vehicleData.cost
+		return coinCount >= vehicleData.costCoin
 	elseif vehicleData.costType == GameConfig.CostType.Rb then
-		return rbCount >= vehicleData.cost
+		return rbCount >= vehicleData.costCoin
 	elseif vehicleData.costType == GameConfig.CostType.CoinOrRb then
-		return coinCount >= vehicleData.cost or rbCount >= rbCost
+		return coinCount >= vehicleData.costCoin or rbCount >= rbCost
 	end
 
 	return false
@@ -63,7 +63,7 @@ local function PlayBuyBtnIntroAnim(buyBtn: ImageButton)
 	buyBtn:SetAttribute("IntroPlayed", true)
 	local scale: UIScale = buyBtn:FindFirstChildOfClass("UIScale") :: UIScale
 
-	local tween1 = tweenService:Create(scale, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true), { Scale = 1.3 })
+	local tween1 = tweenService:Create(scale, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true), { Scale = 1.1 })
 	tween1:Play()
 end
 
@@ -84,38 +84,74 @@ local function RefreshInfoFrame()
 
 	--刷新购买按钮
 	local buyBtn: ImageButton = infoFrame:FindFirstChild("BuyBtn") :: ImageButton
+	local buyBtn31: ImageButton = infoFrame:FindFirstChild("BuyBtn3-1") :: ImageButton
+	local buyBtn32: ImageButton = infoFrame:FindFirstChild("BuyBtn3-2") :: ImageButton
 	local equipBtn: ImageButton = infoFrame:FindFirstChild("EquipBtn") :: ImageButton
 	local equip: ImageLabel = equipBtn:FindFirstChild("Equip") :: ImageLabel
 	local equipped: ImageLabel = equipBtn:FindFirstChild("Equipped") :: ImageLabel
-	local rb: ImageLabel = buyBtn:FindFirstChild("Rb") :: ImageLabel
-	local coin: ImageLabel = buyBtn:FindFirstChild("Coin") :: ImageLabel
-	local priceText: TextLabel = buyBtn:FindFirstChild("Price") :: TextLabel
 
 	local isOwned = localPlayerInfo.vehicleInventory.ownedList[tostring(vehicleIdLookAt)]
 
-	--修改花费类型icon
-	if vehicleData.costType == GameConfig.CostType.Coin then
-		coin.Image = GameConfig.CoinIconImage
-	elseif vehicleData.costType == GameConfig.CostType.Rb then
-		coin.Image = GameConfig.RbIconImage
-	elseif vehicleData.costType == GameConfig.CostType.CoinOrRb then
-		coin.Image = GameConfig.CoinIconImage
-		rb.Image = GameConfig.RbIconImage
-	end
-
 	if not isOwned then
-		buyBtn.Visible = true
-		PlayBuyBtnIntroAnim(buyBtn)
-		rb.Visible = (vehicleData.costType == GameConfig.CostType.Rb or vehicleData.costType == GameConfig.CostType.CoinOrRb)
-		coin.Visible = (vehicleData.costType == GameConfig.CostType.Coin or vehicleData.costType == GameConfig.CostType.CoinOrRb)
 		if vehicleData.costType == GameConfig.CostType.CoinOrRb then
-			priceText.Text = string.format("%s / %s", NumberExtension.FormatBigNumberAA(vehicleData.cost), NumberExtension.FormatBigNumberAA(vehicleData.costRb or vehicleData.cost))
+			buyBtn.Visible = false
+			buyBtn31.Visible = true
+			buyBtn32.Visible = true
+
+			local priceText31: TextLabel = buyBtn31:FindFirstChild("Price") :: TextLabel
+			local priceText32: TextLabel = buyBtn32:FindFirstChild("Price") :: TextLabel
+			priceText31.Text = NumberExtension.FormatBigNumberAA(vehicleData.costCoin)
+			priceText32.Text = NumberExtension.FormatBigNumberAA(vehicleData.costRb or vehicleData.costCoin)
+
+			PlayBuyBtnIntroAnim(buyBtn31)
+			PlayBuyBtnIntroAnim(buyBtn32)
 		else
-			priceText.Text = NumberExtension.FormatBigNumberAA(vehicleData.cost)
+			buyBtn.Visible = true
+			buyBtn31.Visible = false
+			buyBtn32.Visible = false
+
+			local rb: ImageLabel = buyBtn:FindFirstChild("Rb") :: ImageLabel
+			local coin: ImageLabel = buyBtn:FindFirstChild("Coin") :: ImageLabel
+			local priceText: TextLabel = buyBtn:FindFirstChild("Price") :: TextLabel
+
+			rb.Visible = (vehicleData.costType == GameConfig.CostType.Rb)
+			coin.Visible = (vehicleData.costType == GameConfig.CostType.Coin)
+			if vehicleData.costType == GameConfig.CostType.Coin then
+				coin.Image = GameConfig.CoinIconImage
+				priceText.Text = NumberExtension.FormatBigNumberAA(vehicleData.costCoin)
+			else
+				coin.Image = GameConfig.RbIconImage
+				priceText.Text = NumberExtension.FormatBigNumberAA(vehicleData.costRb or 0)
+			end
+
+			PlayBuyBtnIntroAnim(buyBtn)
 		end
 	else
 		buyBtn.Visible = false
+		buyBtn31.Visible = false
+		buyBtn32.Visible = false
 		buyBtn:SetAttribute("IntroPlayed", false)
+		if buyBtn31 then buyBtn31:SetAttribute("IntroPlayed", false) end
+		if buyBtn32 then buyBtn32:SetAttribute("IntroPlayed", false) end
+
+		-- 重置缩放
+		local function ResetScale(btn: ImageButton)
+			local s = btn:FindFirstChildOfClass("UIScale")
+			if s then s.Scale = 1 end
+		end
+		ResetScale(buyBtn)
+		if buyBtn31 then ResetScale(buyBtn31) end
+		if buyBtn32 then ResetScale(buyBtn32) end
+	end
+
+	-- 刷新生命值与冷却时间显示
+	local healthValue: TextLabel = infoFrame:FindFirstChild("HealthValue") :: TextLabel
+	local fireCooldownValue: TextLabel = infoFrame:FindFirstChild("FireCooldownValue") :: TextLabel
+	if healthValue then
+		healthValue.Text = tostring(vehicleData.maxHits)
+	end
+	if fireCooldownValue then
+		fireCooldownValue.Text = string.format("%.1fs", vehicleData.fireCooldown)
 	end
 
 	--刷新装备按钮
@@ -123,13 +159,16 @@ local function RefreshInfoFrame()
 	tip.Visible = false
 	if not isOwned then
 		equipBtn.Visible = false
+		equipBtn.Active = false
 	elseif localPlayerInfo.vehicleInventory.currentId == tostring(vehicleIdLookAt) then
 		--已装备
 		equipBtn.Visible = true
+		equipBtn.Active = false
 		equip.Visible = false
 		equipped.Visible = true
 	else
 		equipBtn.Visible = true
+		equipBtn.Active = true
 		equip.Visible = true
 		equipped.Visible = false
 	end
@@ -268,6 +307,8 @@ end
 local function InitFrame()
 	local infoFrame: Frame = thisFrame:FindFirstChild("InfoFrame") :: Frame
 	local buyBtn: ImageButton = infoFrame:FindFirstChild("BuyBtn") :: ImageButton
+	local buyBtn31: ImageButton = infoFrame:FindFirstChild("BuyBtn3-1") :: ImageButton
+	local buyBtn32: ImageButton = infoFrame:FindFirstChild("BuyBtn3-2") :: ImageButton
 	local equipBtn: ImageButton = infoFrame:FindFirstChild("EquipBtn") :: ImageButton
 
 	--请求改变当前车辆
@@ -275,23 +316,86 @@ local function InitFrame()
 		ChangeVehicle()
 	end)
 
+	local function OnBuyBtnActivated(currencyType: number)
+		if vehicleIdLookAt == nil then
+			return
+		end
+		local vehicleData = GameConfig.VehicleDataMap[vehicleIdLookAt]
+		if not vehicleData then
+			return
+		end
+
+		if currencyType == GameConfig.CurrencyType.Coin then
+			if localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] >= vehicleData.costCoin then
+				NetMsg.FireRequestBuyVehicle(vehicleIdLookAt)
+			else
+				ClientMsg.FireShowGameTip(GameTexts.InsufficientCoin.source, GameConfig.GameTipTweenType.FlyUp)
+			end
+		elseif currencyType == GameConfig.CurrencyType.Rb then
+			if vehicleData.productId and vehicleData.productId > 0 then
+				marketplaceService:PromptProductPurchase(players.LocalPlayer, vehicleData.productId)
+			else
+				warn("No productId for vehicle", vehicleIdLookAt)
+			end
+		end
+	end
+
 	buyBtn.Activated:Connect(function()
 		if vehicleIdLookAt == nil then
 			return
 		end
 		local vehicleData = GameConfig.VehicleDataMap[vehicleIdLookAt]
-		if vehicleData.costType == GameConfig.CostType.Coin or vehicleData.costType == GameConfig.CostType.Rb or vehicleData.costType == GameConfig.CostType.CoinOrRb then
-			if IsVehicleAffordable(vehicleData) then
-				NetMsg.FireRequestBuyVehicle(vehicleIdLookAt)
-			else
-				ClientMsg.FireShowGameTip(GameTexts.InsufficientCoin.source, GameConfig.GameTipTweenType.FlyUp)
-			end
+		if not vehicleData then
+			return
+		end
+		if vehicleData.costType == GameConfig.CostType.Coin then
+			OnBuyBtnActivated(GameConfig.CurrencyType.Coin)
+		elseif vehicleData.costType == GameConfig.CostType.Rb then
+			OnBuyBtnActivated(GameConfig.CurrencyType.Rb)
 		end
 	end)
 
+	if buyBtn31 then
+		buyBtn31.Activated:Connect(function()
+			OnBuyBtnActivated(GameConfig.CurrencyType.Coin)
+		end)
+	end
+
+	if buyBtn32 then
+		buyBtn32.Activated:Connect(function()
+			OnBuyBtnActivated(GameConfig.CurrencyType.Rb)
+		end)
+	end
+
 	vehiclesBtnPre.Visible = false
 	vehiclesBtnPre.Parent = nil
-	vehicleIdLookAt = tonumber(localPlayerInfo.vehicleInventory.currentId) or 1
+
+	-- 自动跳转到能够购买的车辆（比自己最强车强且是能够购买中id最小的）
+	local maxOwnedId = 0
+	for idStr, owned in pairs(localPlayerInfo.vehicleInventory.ownedList) do
+		if owned then
+			local id = tonumber(idStr)
+			if id and id > maxOwnedId then
+				maxOwnedId = id
+			end
+		end
+	end
+
+	local coinAmount = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
+	local bestAffordableId: number? = nil
+
+	for id, vehicleData in pairs(GameConfig.VehicleDataMap) do
+		if id > maxOwnedId then
+			-- 检查金币是否足够
+			if (vehicleData.costType == GameConfig.CostType.Coin or vehicleData.costType == GameConfig.CostType.CoinOrRb) and coinAmount >= vehicleData.costCoin then
+				if bestAffordableId == nil or id < bestAffordableId then
+					bestAffordableId = id
+				end
+			end
+		end
+	end
+
+	vehicleIdLookAt = bestAffordableId or (tonumber(localPlayerInfo.vehicleInventory.currentId) or 1)
 	RefreshFrame()
 end
 

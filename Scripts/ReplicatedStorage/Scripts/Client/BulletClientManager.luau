@@ -9,6 +9,8 @@ local scripts = replicatedStorage:WaitForChild("Scripts")
 local sharedScripts = scripts:WaitForChild("Shared")
 local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
 local NetMsg = require(sharedScripts:FindFirstChild("NetMsg"))
+local clientScripts = scripts:WaitForChild("Client")
+local ClientGameInfo = require(clientScripts:FindFirstChild("ClientGameInfo"))
 
 type ClientUnitState = {
 	playerId: number,
@@ -379,8 +381,18 @@ function BulletClientManager.FireShot()
 	if not IsFightingDriveActive() then
 		return
 	end
+
+	local cooldown = GameConfig.FireCooldown
+	local localInfo = ClientGameInfo.GetLocalPlayerInfo()
+	if localInfo then
+		local vehicleData = GameConfig.VehicleDataMap[tonumber(localInfo.vehicleInventory.currentId) or 1]
+		if vehicleData then
+			cooldown = vehicleData.fireCooldown
+		end
+	end
+
 	local now: number = tick()
-	if now - lastFireTime < GameConfig.FireCooldown then
+	if now - lastFireTime < cooldown then
 		return
 	end
 	lastFireTime = now
@@ -405,7 +417,16 @@ function BulletClientManager.GetLocalHpInfo(): (number, number)
 end
 
 function BulletClientManager.GetLocalFireCooldownLeft(): number
-	local cooldownLeft = GameConfig.FireCooldown - (tick() - lastFireTime)
+	local cooldown = GameConfig.FireCooldown
+	local localInfo = ClientGameInfo.GetLocalPlayerInfo()
+	if localInfo then
+		local vehicleData = GameConfig.VehicleDataMap[tonumber(localInfo.vehicleInventory.currentId) or 1]
+		if vehicleData then
+			cooldown = vehicleData.fireCooldown
+		end
+	end
+	
+	local cooldownLeft = cooldown - (tick() - lastFireTime)
 	if cooldownLeft < 0 then
 		return 0
 	end

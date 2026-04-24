@@ -138,7 +138,9 @@ local function CreateUIForPlayer(playerId: number, isParticipant: boolean)
 	end
 	
 	-- Set initial state for BOTH new and reused UI
-	UpdateHpUI(playerId, 0, GameConfig.MaxHits)
+	local initialMaxHits = GameConfig.MaxHits
+	-- Try to get current max hits if possible, but usually OnHpChanged will follow shortly
+	UpdateHpUI(playerId, 0, initialMaxHits)
 	
 	-- Refresh visibility
 	if ui then
@@ -164,6 +166,7 @@ end
 function PlayerInfoUIManager.Init()
 	NetMsg.ConnectNotifyUnitInit(function(unitInitInfo)
 		CreateUIForPlayer(unitInitInfo.playerId, unitInitInfo.isParticipant)
+		UpdateHpUI(unitInitInfo.playerId, 0, unitInitInfo.maxHits)
 	end)
 
 	NetMsg.ConnectNotifyUnitRemove(function(playerId)
