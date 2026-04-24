@@ -21,7 +21,7 @@ local currentHalfSize: number = 60
 
 local shrinkThread: thread? = nil
 
-local initialHalfSizeConstant = 60
+-- local initialHalfSizeConstant = 60
 
 local function LogInfo(message: string)
 	print(string.format("%s %s", LOG_PREFIX, message))
@@ -82,18 +82,20 @@ function ArenaManager.GetArenaFloorInfo(): (Vector3, Vector3)
 	return Vector3.zero, Vector3.new(GameConfig.ArenaHalfSize * 2, 0, GameConfig.ArenaHalfSize * 2)
 end
 
-function ArenaManager.SetArenaHalfSize(halfSize: number)
+function ArenaManager.SetArenaHalfSize(halfSize: number, skipPhysical: boolean?)
 	if not arenaModel then return end
 
 	currentHalfSize = halfSize
 	-- Update GameConfig on server for other server scripts
 	GameConfig.ArenaHalfSize = halfSize
 	
-	-- Calculate ratio relative to the design-time base size (60)
-	local ratio = halfSize / initialHalfSizeConstant
-	
-	-- Use ScaleTo to scale the entire model (Floor, Walls, and SpawnPoints)
-	arenaModel:ScaleTo(ratio)
+	if not skipPhysical then
+		-- Calculate ratio relative to the design-time base size (60)
+		local ratio = halfSize / GameConfig.ArenaDesignHalfSize
+		
+		-- Use ScaleTo to scale the entire model (Floor, Walls, and SpawnPoints)
+		arenaModel:ScaleTo(ratio)
+	end
 
 	-- Replicate to attributes for client to read
 	arenaModel:SetAttribute("CurrentHalfSize", halfSize)
@@ -128,11 +130,12 @@ function ArenaManager.StartShrinking(maxDuration: number)
 		local startTime = os.clock()
 		local durationSoFar = 0
 		
-		-- 每 0.1 秒更新一次（原每帧），ScaleTo 调用减少约 85%
-		local ShrinkInterval = 0.1
-		local ShrinkMinStep = 0.05  -- 变化量低于此值时跳过 ScaleTo
+		-- 属性同步保持高频（Heartbeat/task.wait()），但真实 ScaleTo 物理更新保持较低频率
+		local PhysicalUpdateInterval = 0.1
+		local lastPhysicalUpdateTime = 0
+		
 		while durationSoFar < maxDuration do
-			local dt = task.wait(ShrinkInterval)
+			local dt = task.wait() -- 每帧检查
 			durationSoFar = os.clock() - startTime
 			
 			if durationSoFar > GameConfig.ArenaShrinkStartDelay then
@@ -141,9 +144,17 @@ function ArenaManager.StartShrinking(maxDuration: number)
 				
 				local shrinkStep = currentSpeed * dt
 				local newSize = math.max(GameConfig.ArenaMinHalfSize, currentHalfSize - shrinkStep)
-				-- 变化量低于阈值时跳过，避免亚像素级频繁缩放
-				if (currentHalfSize - newSize) >= ShrinkMinStep then
-					ArenaManager.SetArenaHalfSize(newSize)
+				
+				-- 只有当时间超过间隔时，才执行物理 ScaleTo
+				local currentTime = os.clock()
+				local needsPhysicalUpdate = (currentTime - lastPhysicalUpdateTime) >= PhysicalUpdateInterval
+				
+				if needsPhysicalUpdate then
+					ArenaManager.SetArenaHalfSize(newSize, false)
+					lastPhysicalUpdateTime = currentTime
+				else
+					-- 否则只更新属性
+					ArenaManager.SetArenaHalfSize(newSize, true)
 				end
 				
 				if newSize <= GameConfig.ArenaMinHalfSize then

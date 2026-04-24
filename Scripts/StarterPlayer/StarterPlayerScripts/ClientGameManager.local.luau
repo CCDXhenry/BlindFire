@@ -19,6 +19,7 @@ local LeaderboardClient = require(clientScripts:WaitForChild("LeaderboardClient"
 local MatchActionManager = require(clientScripts:FindFirstChild("MatchActionManager"))
 local ProximityPromptManager = require(clientScripts:FindFirstChild("ProximityPromptManager"))
 local GroupRewardClientManager = require(clientScripts:FindFirstChild("GroupRewardClientManager"))
+local ArenaClientManager = require(clientScripts:FindFirstChild("ArenaClientManager"))
 local players = game:GetService("Players")
 local starterGui: StarterGui = game:GetService("StarterGui")
 local contentProvider: ContentProvider = game:GetService("ContentProvider")
@@ -69,6 +70,7 @@ local function OnNotifyPlayerInfoInit(
 	LeaderboardClient.Init()
 	MatchActionManager.Init()
 	ProximityPromptManager.Init()
+	ArenaClientManager.Init()
 	--初始化UI
 	task.spawn(function()
 		InitUI()

@@ -288,6 +288,7 @@ GameConfig.ArenaExtraHalfSizePerPlayer = 10
 -- 场地边长一半（初始值，由 ArenaManager 动态修改）
 GameConfig.ArenaHalfSize = 60
 GameConfig.ArenaMinHalfSize = 30
+GameConfig.ArenaDesignHalfSize = 60
 GameConfig.ArenaShrinkSpeed = 1
 GameConfig.ArenaShrinkPeoplePower = 1
 GameConfig.ArenaShrinkSizePower = 0.5
