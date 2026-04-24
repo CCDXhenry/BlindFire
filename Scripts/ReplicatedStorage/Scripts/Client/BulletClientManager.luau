@@ -41,6 +41,12 @@ local SERVER_PROJECTILE_NAME_PREFIX = "ServerProjectile_"
 local SHOOTER_USER_ID_ATTRIBUTE = "ShooterUserId"
 local LOCAL_OWNED_PROJECTILE_COLOR = Color3.new(0, 1, 0)
 local ENEMY_PROJECTILE_COLOR = Color3.new(1, 0.2, 0.2)
+
+-- Recoil Animation Constants
+local RECOIL_OFFSET_STUDS = 1.4 -- 枪管后退的距离 (Studs)
+local RECOIL_IN_DURATION_SEC = 0.22 -- 枪管向后收缩的瞬间耗时 (秒)
+local RECOIL_OUT_DURATION_SEC = 0.05 -- 枪管向前平滑回弹的耗时 (秒)
+local RECOIL_MUZZLE_MAGNITUDE_THRESHOLD = 0.01 -- 枪口位置向量判定阈值，防止极小值导致的除零错误
 -- local UNIT_SPEED: number = GameConfig.UnitSpeed
 -- local UNIT_MAX_HORIZONTAL_SPEED: number = GameConfig.UnitMaxHorizontalSpeed
 -- local FIRE_COOLDOWN: number = GameConfig.FireCooldown
@@ -254,9 +260,23 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 	end
 	local turretPart: BasePart? = nil
 	if unitModel ~= nil then
-		local turret = unitModel:FindFirstChild("TurretBarrel")
-		if turret ~= nil and turret:IsA("BasePart") then
-			turretPart = turret
+		local turretGroup = unitModel:FindFirstChild("TurretBarrel")
+		if turretGroup ~= nil then
+			if turretGroup:IsA("BasePart") then
+				turretPart = turretGroup
+			else
+				local muzzle = turretGroup:FindFirstChild("MuzzleAttachment", true)
+				if muzzle and muzzle.Parent and muzzle.Parent:IsA("BasePart") then
+					turretPart = muzzle.Parent
+				else
+					for _, child in turretGroup:GetChildren() do
+						if child:IsA("BasePart") then
+							turretPart = child
+							break
+						end
+					end
+				end
+			end
 		end
 	end
 
@@ -307,6 +327,114 @@ function BulletClientManager.OnUnitRemove(playerId: number)
 	pendingUnitInits[playerId] = nil
 	unitStateMap[playerId] = nil
 end
+local TweenService = game:GetService("TweenService")
+
+function BulletClientManager.PlayRecoilAnimation(state: ClientUnitState)
+	if not state.turretPart or not state.model then
+		return
+	end
+
+	local weld = state.model:FindFirstChild("Weld_SeatToTurret", true)
+
+	if weld then
+		-- If explicitly named weld is found, ensure state.turretPart matches the correct part
+		if weld.Part0 and weld.Part0.Name ~= "Seat" then
+			state.turretPart = weld.Part0
+		elseif weld.Part1 and weld.Part1.Name ~= "Seat" then
+			state.turretPart = weld.Part1
+		end
+	else
+		weld = state.turretPart:FindFirstChildWhichIsA("Weld") or state.turretPart:FindFirstChildWhichIsA("Motor6D")
+		if not weld then
+			for _, d in state.model:GetDescendants() do
+				if (d:IsA("Weld") or d:IsA("Motor6D")) and (d.Part0 == state.turretPart or d.Part1 == state.turretPart) then
+					weld = d
+					break
+				end
+			end
+		end
+	end
+
+	-- Support WeldConstraint by dynamically converting it to a standard Weld
+	if not weld then
+		local weldConstraint = state.turretPart:FindFirstChildWhichIsA("WeldConstraint")
+		if not weldConstraint then
+			for _, d in state.model:GetDescendants() do
+				if d:IsA("WeldConstraint") and (d.Part0 == state.turretPart or d.Part1 == state.turretPart) then
+					weldConstraint = d
+					break
+				end
+			end
+		end
+
+		if weldConstraint and weldConstraint.Part0 and weldConstraint.Part1 then
+			local newWeld = Instance.new("Weld")
+			newWeld.Name = "ConvertedRecoilWeld"
+			newWeld.Part0 = weldConstraint.Part0
+			newWeld.Part1 = weldConstraint.Part1
+			newWeld.C0 = CFrame.new()
+			newWeld.C1 = weldConstraint.Part1.CFrame:ToObjectSpace(weldConstraint.Part0.CFrame)
+			newWeld.Parent = weldConstraint.Parent
+
+			weldConstraint.Enabled = false
+			weldConstraint:Destroy()
+
+			weld = newWeld
+		end
+	end
+
+	if not weld then
+		return
+	end
+
+	local isPart0 = (weld.Part0 == state.turretPart)
+	local propName = isPart0 and "C0" or "C1"
+
+	local attrName = "Original" .. propName
+	if not weld:GetAttribute(attrName) then
+		weld:SetAttribute(attrName, weld[propName])
+	end
+
+	local originalCFrame = weld:GetAttribute(attrName) :: CFrame
+	
+	local recoilOffset = CFrame.new(0, 0, RECOIL_OFFSET_STUDS)
+	local muzzle = nil
+	if state.model then
+		local turretGroup = state.model:FindFirstChild("TurretBarrel")
+		if turretGroup then
+			muzzle = turretGroup:FindFirstChild("MuzzleAttachment", true)
+		end
+	end
+	if not muzzle then
+		muzzle = state.turretPart:FindFirstChild("MuzzleAttachment", true)
+	end
+	
+	if muzzle and muzzle:IsA("Attachment") then
+		local worldBackward = -muzzle.WorldCFrame.LookVector
+		local localBackward = state.turretPart.CFrame:VectorToObjectSpace(worldBackward)
+		if localBackward.Magnitude > RECOIL_MUZZLE_MAGNITUDE_THRESHOLD then
+			recoilOffset = CFrame.new(localBackward.Unit * RECOIL_OFFSET_STUDS)
+		end
+	end
+
+	local targetCFrame = recoilOffset:Inverse() * originalCFrame
+
+	local recoilId = (weld:GetAttribute("RecoilId") or 0) + 1
+	weld:SetAttribute("RecoilId", recoilId)
+
+	local tweenInfoIn = TweenInfo.new(RECOIL_IN_DURATION_SEC, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local tweenIn = TweenService:Create(weld, tweenInfoIn, { [propName] = targetCFrame })
+	tweenIn:Play()
+
+	tweenIn.Completed:Connect(function(playbackState)
+		if playbackState == Enum.PlaybackState.Completed and weld:GetAttribute("RecoilId") == recoilId then
+			local tweenInfoOut = TweenInfo.new(RECOIL_OUT_DURATION_SEC, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+			local tweenOut = TweenService:Create(weld, tweenInfoOut, { [propName] = originalCFrame })
+			tweenOut:Play()
+		end
+	end)
+end
+
 function BulletClientManager.OnFireAccepted(playerId: number, _fireTime: number, _spawnPos: Vector3, _shotDir: Vector3, _serverTime: number, _bulletId: string)
 	if playerId == localPlayerId then
 		return
@@ -317,10 +445,18 @@ function BulletClientManager.OnFireAccepted(playerId: number, _fireTime: number,
 		state.spinDir = -state.spinDir
 		state.spinDampingUntil = os.clock() + GameConfig.SpinDampingDuration
 		state.spinImpulseRadPerSec += GameConfig.TurretSpinImpulseOnFireRadPerSec * state.spinDir
+		BulletClientManager.PlayRecoilAnimation(state)
 	end
 end
 
-function BulletClientManager.OnHit(targetPlayerId: number, _fromPlayerId: number, _hitDirection: Vector3, _hitCount: number, _bulletId: string, hitPosition: Vector3)
+function BulletClientManager.OnHit(
+	targetPlayerId: number,
+	_fromPlayerId: number,
+	_hitDirection: Vector3,
+	_hitCount: number,
+	_bulletId: string,
+	hitPosition: Vector3
+)
 	local targetState = unitStateMap[targetPlayerId]
 	if targetState == nil then
 		return
@@ -360,8 +496,7 @@ function BulletClientManager.OnDead(playerId: number)
 	state.targetVelZ = 0
 end
 
-function BulletClientManager.OnTeleport(_playerId: number, _targetPosition: Vector3)
-end
+function BulletClientManager.OnTeleport(_playerId: number, _targetPosition: Vector3) end
 
 function BulletClientManager.OnMatchStateChanged(newState: GameConfig.MatchState, _countdown: number)
 	matchState = newState
@@ -402,6 +537,7 @@ function BulletClientManager.FireShot()
 		-- spinDir 由服务端 NotifyDirectionFlip 统一翻转，避免与 FireShot 本地预测双翻
 		localState.spinDampingUntil = os.clock() + GameConfig.SpinDampingDuration
 		localState.spinImpulseRadPerSec += GameConfig.TurretSpinImpulseOnFireRadPerSec * localState.spinDir
+		BulletClientManager.PlayRecoilAnimation(localState)
 	end
 
 	local bulletId = HttpService:GenerateGUID(false)
@@ -425,7 +561,7 @@ function BulletClientManager.GetLocalFireCooldownLeft(): number
 			cooldown = vehicleData.fireCooldown
 		end
 	end
-	
+
 	local cooldownLeft = cooldown - (tick() - lastFireTime)
 	if cooldownLeft < 0 then
 		return 0
@@ -439,7 +575,9 @@ end
 
 function BulletClientManager.IsLocalInVehicle(): boolean
 	local state = unitStateMap[localPlayerId]
-	if state == nil then return false end
+	if state == nil then
+		return false
+	end
 	return state.hitCount < state.maxHits and state.isParticipant and not isLocalAfk
 end
 

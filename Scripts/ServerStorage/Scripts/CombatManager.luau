@@ -154,11 +154,11 @@ local function GetSpawnPosition(): Vector3
 end
 
 local function _GetMuzzleAttachment(unitModel: Model): Attachment?
-	local barrel = unitModel:FindFirstChild("TurretBarrel")
-	if barrel == nil or not barrel:IsA("BasePart") then
+	local barrelGroup = unitModel:FindFirstChild("TurretBarrel")
+	if barrelGroup == nil then
 		return nil
 	end
-	local muzzleAttachment = barrel:FindFirstChild("MuzzleAttachment")
+	local muzzleAttachment = barrelGroup:FindFirstChild("MuzzleAttachment", true)
 	if muzzleAttachment == nil or not muzzleAttachment:IsA("Attachment") then
 		return nil
 	end
@@ -817,15 +817,20 @@ function CombatManager.OnHeartbeat(dt: number)
 		if hitResult ~= nil then
 			local inst = hitResult.Instance
 			local targetId: number? = nil
-			local tm = inst:FindFirstAncestorOfClass("Model")
-			if tm ~= nil then
-				targetId = GetPlayerIdByVehicleModelName(tm.Name)
-				if targetId == nil then
-					local charPlayer = players:GetPlayerFromCharacter(tm)
+			local currentAncestor = inst.Parent
+			while currentAncestor and currentAncestor ~= workspace do
+				if currentAncestor:IsA("Model") then
+					targetId = GetPlayerIdByVehicleModelName(currentAncestor.Name)
+					if targetId ~= nil then
+						break
+					end
+					local charPlayer = players:GetPlayerFromCharacter(currentAncestor)
 					if charPlayer then
 						targetId = charPlayer.UserId
+						break
 					end
 				end
+				currentAncestor = currentAncestor.Parent
 			end
 
 			if targetId ~= nil then
