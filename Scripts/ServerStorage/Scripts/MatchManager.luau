@@ -20,6 +20,7 @@ type OnRoundStartCallback = (participantIds: { number }) -> ()
 
 -- local MIN_PLAYER_TO_START = GameConfig.MinPlayerToStart
 local LOBBY_SPAWN_NAME = "LobbySpawnArea"
+local LOBBY_SPAWN_POINTS_FOLDER_NAME = "SpawnPoints"
 local ARENA_SPAWN_FOLDER_NAME = "ArenaSpawnPoints"
 local LOG_PREFIX = "[MatchManager]"
 local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
@@ -304,17 +305,39 @@ local function StabilizeArenaPlayers()
 end
 
 local function TeleportPlayerToLobby(player: Player, reloadCharacter: boolean?)
-	local lobbySpawnPart = workspace:FindFirstChild(LOBBY_SPAWN_NAME)
-	if lobbySpawnPart == nil or not lobbySpawnPart:IsA("BasePart") then
-		LogInfo("Skip TeleportPlayerToLobby reason=LobbySpawnArea_missing")
-		return
+	local targetPosition: Vector3? = nil
+
+	-- Try fixed spawn points first
+	local spawnPointsFolder = workspace:FindFirstChild(LOBBY_SPAWN_POINTS_FOLDER_NAME)
+	if spawnPointsFolder then
+		local points = {}
+		for _, child in spawnPointsFolder:GetChildren() do
+			if child:IsA("BasePart") and string.find(child.Name, "Spawn_") then
+				table.insert(points, child)
+			end
+		end
+
+		if #points > 0 then
+			local chosenPart = points[math.random(1, #points)]
+			targetPosition = chosenPart.Position + Vector3.new(0, 4, 0)
+			LogInfo(string.format("Using fixed lobby spawn point: %s", chosenPart.Name))
+		end
 	end
 
-	-- Randomize within the lobby spawn area bounds
-	local size = lobbySpawnPart.Size
-	local randomX = (math.random() - 0.5) * size.X * 0.8
-	local randomZ = (math.random() - 0.5) * size.Z * 0.8
-	local targetPosition = lobbySpawnPart.Position + Vector3.new(randomX, 4, randomZ)
+	-- Fallback to random area if no fixed points found
+	if targetPosition == nil then
+		local lobbySpawnPart = workspace:FindFirstChild(LOBBY_SPAWN_NAME)
+		if lobbySpawnPart == nil or not lobbySpawnPart:IsA("BasePart") then
+			LogInfo("Skip TeleportPlayerToLobby reason=LobbySpawnArea_missing")
+			return
+		end
+
+		local size = lobbySpawnPart.Size
+		local randomX = (math.random() - 0.5) * size.X * 0.8
+		local randomZ = (math.random() - 0.5) * size.Z * 0.8
+		targetPosition = lobbySpawnPart.Position + Vector3.new(randomX, 4, randomZ)
+		LogInfo("Using random lobby spawn area")
+	end
 
 	if reloadCharacter == true then
 		player.CharacterAdded:Once(function()
