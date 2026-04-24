@@ -27,6 +27,11 @@ else
 	GameConfig.ClearDataStorePlaceId = 18733054561
 end
 
+--六次方群组id
+GameConfig.SixcubeGroupId = 33977495
+--群组奖励载具id
+GameConfig.GroupRewardVehicleId = 2
+
 --奖励信息
 export type RewardInfo = {
 	rewardType: number,
@@ -176,6 +181,8 @@ export type PlayerSaveInfo = {
 		earnings: number,
 		lastResetWeek: string,
 	},
+	-- 是否已领取过群组奖励
+	hasClaimedGroupReward: boolean,
 }
 export type PlayerInfo = PlayerSaveInfo & {
 	--玩家信息是否发生变化
@@ -192,6 +199,8 @@ export type PlayerInfo = PlayerSaveInfo & {
 	playerConfigInfo: PlayerConfigInfo,
 	--当前指引类型
 	currentGuideType: number,
+	--是否在群组中
+	isInGroup: boolean,
 }
 
 --内购订单信息
@@ -220,6 +229,7 @@ function GameConfig.CreateDefaultPlayerSaveInfo(): PlayerSaveInfo
 			vibrationOn = true,
 		},
 		ownedGamePassList = {},
+		hasClaimedGroupReward = false,
 		currencies = {
 			[tostring(GameConfig.CurrencyType.Coin)] = 0,
 		},
@@ -248,6 +258,10 @@ export type ClientLocalPlayerSaveInfo = {
 	currencies: { [string]: number },
 	--载具信息
 	vehicleInventory: VehicleInventory,
+	--是否在群组中
+	isInGroup: boolean,
+	-- 是否已领取过群组奖励
+	hasClaimedGroupReward: boolean,
 }
 export type ClientLocalPlayerInfo = ClientLocalPlayerSaveInfo & {
 	--已拥有的通行证映射

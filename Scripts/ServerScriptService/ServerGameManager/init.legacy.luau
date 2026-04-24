@@ -149,7 +149,16 @@ local function OnPlayerAdded(player: Player)
 		end
 
 		local playerConfigInfo: GameConfig.PlayerConfigInfo = {}
-		ServerGameInfo.InitPlayerInfo(player, playerSaveInfo, countryRegion, playerConfigInfo)
+		
+		local isInGroup = false
+		local successGroup, resultGroup = pcall(function()
+			return player:IsInGroupAsync(GameConfig.SixcubeGroupId)
+		end)
+		if successGroup then
+			isInGroup = resultGroup
+		end
+
+		ServerGameInfo.InitPlayerInfo(player, playerSaveInfo, countryRegion, playerConfigInfo, isInGroup)
 
 		local nowDate: DateTimeExtension.DateTimeTable = DateTimeExtension.GetNowDate()
 		CheckPlayerLoginDays(player, nowDate)

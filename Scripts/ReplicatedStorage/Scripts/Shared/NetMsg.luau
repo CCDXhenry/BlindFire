@@ -38,6 +38,8 @@ local requestUpdateVehicleUsingEvent: RemoteEvent = remoteEventsFolder:FindFirst
 local notifyPlayerVehicleInventoryUpdateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPlayerVehicleInventoryUpdate") :: RemoteEvent
 local notifyLeaderboardUpdateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyLeaderboardUpdate") :: RemoteEvent
 local notifyLeaderboardResetTimeEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyLeaderboardResetTime") :: RemoteEvent
+local requestClaimGroupRewardEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestClaimGroupReward") :: RemoteEvent
+local notifyPlayerClaimedGroupRewardEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPlayerClaimedGroupReward") :: RemoteEvent
 
 --客户端请求设置背景音乐音量
 function NetMsg.FireRequestSetBGMVolume(volume: number)
@@ -340,6 +342,24 @@ end
 
 function NetMsg.ConnectNotifyLeaderboardResetTime(callback: (resetTimestamp: number) -> ())
 	notifyLeaderboardResetTimeEvent.OnClientEvent:Connect(callback)
+end
+
+--客户端请求领取群组奖励
+function NetMsg.FireRequestClaimGroupReward(isInGroup: boolean)
+	requestClaimGroupRewardEvent:FireServer(isInGroup)
+end
+
+function NetMsg.ConnectRequestClaimGroupReward(callback: (player: Player, isInGroup: boolean) -> ())
+	requestClaimGroupRewardEvent.OnServerEvent:Connect(callback)
+end
+
+--通知客户端领取群组奖励成功
+function NetMsg.FireNotifyPlayerClaimedGroupReward(player: Player)
+	notifyPlayerClaimedGroupRewardEvent:FireClient(player)
+end
+
+function NetMsg.ConnectNotifyPlayerClaimedGroupReward(callback: () -> ())
+	notifyPlayerClaimedGroupRewardEvent.OnClientEvent:Connect(callback)
 end
 
 return NetMsg

@@ -18,6 +18,7 @@ local CombatCameraManager = require(clientScripts:FindFirstChild("CombatCameraMa
 local LeaderboardClient = require(clientScripts:WaitForChild("LeaderboardClient"))
 local MatchActionManager = require(clientScripts:FindFirstChild("MatchActionManager"))
 local ProximityPromptManager = require(clientScripts:FindFirstChild("ProximityPromptManager"))
+local GroupRewardClientManager = require(clientScripts:FindFirstChild("GroupRewardClientManager"))
 local players = game:GetService("Players")
 local starterGui: StarterGui = game:GetService("StarterGui")
 local contentProvider: ContentProvider = game:GetService("ContentProvider")
@@ -44,14 +45,17 @@ local function InitUI()
 	UIManager.CreateFrame("LobbyFrame", "LobbyFrame", gameScreenGui, 0)
 	--UI适配器初始化
 	UIAdapter.Init(DesignScreenSize, gameScreenGui.AbsoluteSize)
-	gameScreenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() 
+	gameScreenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
 		UIAdapter.OnScreenSizeChange(gameScreenGui.AbsoluteSize)
 	end)
 end
 
 --通知客户端玩家信息初始化
-local function OnNotifyPlayerInfoInit(localPlayerSaveInfo: GameConfig.ClientLocalPlayerSaveInfo, 
-	otherPlayerSaveInfoMap: {[string]: GameConfig.ClientOtherPlayerSyncInfo}, playerConfigInfo: GameConfig.PlayerConfigInfo)
+local function OnNotifyPlayerInfoInit(
+	localPlayerSaveInfo: GameConfig.ClientLocalPlayerSaveInfo,
+	otherPlayerSaveInfoMap: { [string]: GameConfig.ClientOtherPlayerSyncInfo },
+	playerConfigInfo: GameConfig.PlayerConfigInfo
+)
 	ClientGameInfo.InitPlayerInfo(localPlayerSaveInfo, otherPlayerSaveInfoMap, playerConfigInfo)
 	local localPlayerInfo: GameConfig.ClientLocalPlayerInfo? = ClientGameInfo.GetLocalPlayerInfo()
 	if localPlayerInfo ~= nil then
@@ -62,7 +66,7 @@ local function OnNotifyPlayerInfoInit(localPlayerSaveInfo: GameConfig.ClientLoca
 	-- 初始化核心玩法客户端管理器
 	BulletClientManager.Init()
 	CombatCameraManager.Init()
-LeaderboardClient.Init()
+	LeaderboardClient.Init()
 	MatchActionManager.Init()
 	ProximityPromptManager.Init()
 	--初始化UI
@@ -235,3 +239,5 @@ end)
 
 BulletClientManager.Init()
 CombatCameraManager.Init()
+ClientGameInfo.Init()
+GroupRewardClientManager.Init()

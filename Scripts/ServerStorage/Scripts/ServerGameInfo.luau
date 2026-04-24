@@ -19,7 +19,7 @@ local playerInfoMap: {[number]: GameConfig.PlayerInfo} = {}
 
 --初始化玩家信息
 function ServerGameInfo.InitPlayerInfo(player: Player, playerSaveInfo: GameConfig.PlayerSaveInfo, countryRegion: string,
-	playerConfigInfo: GameConfig.PlayerConfigInfo)
+	playerConfigInfo: GameConfig.PlayerConfigInfo, isInGroup: boolean)
 	local playerInfo: GameConfig.PlayerInfo = {
 		dataVersion = playerSaveInfo.dataVersion,
 		firstEnterTime = playerSaveInfo.firstEnterTime,
@@ -41,6 +41,9 @@ function ServerGameInfo.InitPlayerInfo(player: Player, playerSaveInfo: GameConfi
 			ownedList = { ["1"] = true },
 		},
 		currentGuideType = GameConfig.GuideType.None,
+		isInGroup = isInGroup,
+		weeklyStats = playerSaveInfo.weeklyStats,
+		hasClaimedGroupReward = playerSaveInfo.hasClaimedGroupReward or false,
 	}
 	for ownedGamePassIndex: number, ownedGamePassId: number in playerInfo.ownedGamePassList do
 		playerInfo.ownedGamePassMap[ownedGamePassId] = true
@@ -52,6 +55,8 @@ function ServerGameInfo.InitPlayerInfo(player: Player, playerSaveInfo: GameConfi
 		ownedGamePassList = playerInfo.ownedGamePassList,
 		currencies = playerInfo.currencies,
 		vehicleInventory = playerInfo.vehicleInventory,
+		isInGroup = playerInfo.isInGroup,
+		hasClaimedGroupReward = playerInfo.hasClaimedGroupReward,
 	}
 	local clientOtherPlayerSaveInfo: GameConfig.ClientOtherPlayerSyncInfo = {
 		
@@ -98,6 +103,7 @@ function ServerGameInfo.CreatePlayerSaveInfoByPlayerInfo(playerInfo: GameConfig.
 		settingInfo = playerInfo.settingInfo,
 		currencies = playerInfo.currencies,
 		vehicleInventory = playerInfo.vehicleInventory,
+		weeklyStats = playerInfo.weeklyStats,
 	}
 end
 
@@ -151,12 +157,6 @@ function ServerGameInfo.UpdatePlayerCurrency(player: Player, currencyType: numbe
 
 	playerInfo.currencies[currencyKey] = totalAmount
 	playerInfo.playerInfoChanged = true
-
-	-- 统计周收益
-	if changeAmount > 0 and currencyType == GameConfig.CurrencyType.Coin then
-		local LeaderboardManager = require(serverScripts:FindFirstChild("LeaderboardManager"))
-		LeaderboardManager.AddStat(player, GameConfig.LeaderboardCategory.WeeklyEarnings, changeAmount)
-	end
 
 	--通知客户端
 	NetMsg.FireNotifyPlayerCurrencyUpdate(player, currencyType, totalAmount, changeAmount, reason)

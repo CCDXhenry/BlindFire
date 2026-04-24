@@ -101,9 +101,35 @@ function VehicleManager.OnRequestUpdateVehicleUsing(player: Player, vehicleId: n
 	end
 end
 
+-- 处理客户端领取群组奖励请求
+function VehicleManager.OnRequestClaimGroupReward(player: Player, isInGroup: boolean)
+	if not isInGroup then
+		return
+	end
+
+	local playerInfo = ServerGameInfo.GetPlayerInfo(player)
+	if playerInfo == nil then
+		return
+	end
+
+	if playerInfo.hasClaimedGroupReward then
+		-- 已经领取过
+		return
+	end
+
+	-- 如果玩家尚未领取过群组奖励，则更新状态并补发奖励
+	if not playerInfo.hasClaimedGroupReward then
+		playerInfo.hasClaimedGroupReward = true
+		ServerGameInfo.AddPlayerVehicle(player, tostring(GameConfig.GroupRewardVehicleId))
+		NetMsg.FireNotifyPlayerClaimedGroupReward(player)
+		LogInfo(string.format("RewardClaimed userId=%d", player.UserId))
+	end
+end
+
 function VehicleManager.Init()
 	NetMsg.ConnectRequestBuyVehicle(VehicleManager.OnRequestBuyVehicle)
 	NetMsg.ConnectRequestUpdateVehicleUsing(VehicleManager.OnRequestUpdateVehicleUsing)
+	NetMsg.ConnectRequestClaimGroupReward(VehicleManager.OnRequestClaimGroupReward)
 	LogInfo("Init success")
 end
 

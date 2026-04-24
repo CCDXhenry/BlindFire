@@ -14,5 +14,12 @@ local GameTexts = {
 	AfkOff = { key = "AfkOff", source = "[T] AFK: OFF" },
 	AfkOn = { key = "AfkOn", source = "[T] AFK: ON" },
 	LeaderboardRefreshCountdown = { key = "LeaderboardRefreshCountdown", source = "The leaderboard will refresh in {1}:{2}:{3}:{4}." },
+	GroupRewardTipJoin = { key = "GroupRewardTipJoin", source = "Join the group to claim rewards!" },
+	GroupRewardTipClaimed = { key = "GroupRewardTipClaimed", source = "Joined! Reward granted." },
+	GroupRewardJoinHint = { key = "GroupRewardJoinHint", source = "Join the group to get the exclusive vehicle for free!" },
+	GroupRewardClaimSuccess = { key = "GroupRewardClaimSuccess", source = "Group reward claimed! Vehicle unlocked." },
+	GroupRewardTip1 = { key = "GroupRewardTip1", source = "1. Like our game 👍" },
+	GroupRewardTip2 = { key = "GroupRewardTip2", source = "2. Join our group!" },
+	GroupRewardTip3 = { key = "GroupRewardTip3", source = "3. Claim your secret vehicle!" },
 }
 return GameTexts

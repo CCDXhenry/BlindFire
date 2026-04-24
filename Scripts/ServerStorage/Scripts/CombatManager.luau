@@ -192,6 +192,7 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 		return nil
 	end
 	local vehicleId = tonumber(playerInfo.vehicleInventory.currentId) or 1
+	print(string.format("[CombatManager] CreateUnitModelForPlayer userId=%d currentId=%s (num=%d)", player.UserId, playerInfo.vehicleInventory.currentId, vehicleId))
 	local vehicleConfig = GameConfig.VehicleDataMap[vehicleId]
 	if vehicleConfig == nil then
 		warn("[CombatManager] Vehicle config not found for id:", vehicleId)
@@ -199,8 +200,9 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 	end
 
 	local vehicleTemplate = GetVehicleTemplate(vehicleConfig.resourceName)
+
 	if vehicleTemplate == nil then
-		warn("[CombatManager] Vehicle model template not found:", vehicleConfig.resourceName)
+		warn("[CombatManager] Vehicle model template not found for vehicleId:", vehicleId)
 		return nil
 	end
 	local unitModel: Model = vehicleTemplate:Clone()
@@ -417,7 +419,7 @@ function CombatManager.DestroyAllUnits()
 	end
 end
 
-local function BroadcastUnitInit(unitInfo: ServerUnitInfo)
+local function _BroadcastUnitInit(unitInfo: ServerUnitInfo)
 	local playerRoundInfo = PlayerStateManager.GetAllPlayerRoundInfoMap()[unitInfo.playerId]
 	local maxHits = if unitInfo.vehicleConfig then unitInfo.vehicleConfig.maxHits else GameConfig.MaxHits
 	local unitInitInfo: GameConfig.UnitInitInfo = {
@@ -608,9 +610,11 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 				--击杀奖励
 				ServerGameInfo.UpdatePlayerCurrency(shooterPlayer, GameConfig.CurrencyType.Coin, 2, GameConfig.ItemCountChangeReason.GainFromKill)
 				LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyKills, 1)
+				LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyEarnings, 2)
 			else
 				--命中奖励
 				ServerGameInfo.UpdatePlayerCurrency(shooterPlayer, GameConfig.CurrencyType.Coin, 1, GameConfig.ItemCountChangeReason.GainFromHit)
+				LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyEarnings, 1)
 			end
 		end
 	end
@@ -872,7 +876,7 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 
 	PlayerStateManager.SetLastFireTime(player.UserId, nowTime)
 
-	local unitInfo = unitInfoMap[player.UserId]
+	unitInfo = unitInfoMap[player.UserId]
 	if unitInfo == nil then
 		return
 	end
@@ -1061,8 +1065,5 @@ function CombatManager.UnseatPlayerFromOwnedVehicle(player: Player)
 	unseatPlayerFromOwnedVehicle(player)
 end
 
-function CombatManager.GetUnitInfoMap()
-	return unitInfoMap
-end
 
 return CombatManager

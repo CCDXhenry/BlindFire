@@ -17,6 +17,7 @@ local showAddRewardsTipEvent: BindableEvent = bindableEventsFolder:FindFirstChil
 local localPlayerCurrencyUpdateEvent: BindableEvent = bindableEventsFolder:FindFirstChild("LocalPlayerCurrencyUpdate") :: BindableEvent
 local currentGuideTypeChangedEvent: BindableEvent = bindableEventsFolder:FindFirstChild("CurrentGuideTypeChanged") :: BindableEvent
 local localPlayerVehicleInventoryUpdateEvent: BindableEvent = bindableEventsFolder:FindFirstChild("LocalPlayerVehicleInventoryUpdate") :: BindableEvent
+local localPlayerClaimedGroupRewardEvent: BindableEvent = bindableEventsFolder:FindFirstChild("LocalPlayerClaimedGroupReward") :: BindableEvent
 --关闭窗口事件
 function ClientMsg.FireCloseWindow(windowName: string)
 	closeWindowEvent:Fire(windowName)
@@ -106,6 +107,15 @@ end
 
 function ClientMsg.ConnectLocalPlayerVehicleInventoryUpdate(callback: () -> ())
 	localPlayerVehicleInventoryUpdateEvent.Event:Connect(callback)
+end
+
+--通知本地玩家领取群组奖励成功
+function ClientMsg.FireLocalPlayerClaimedGroupReward()
+	localPlayerClaimedGroupRewardEvent:Fire()
+end
+
+function ClientMsg.ConnectLocalPlayerClaimedGroupReward(callback: () -> ())
+	localPlayerClaimedGroupRewardEvent.Event:Connect(callback)
 end
 
 return ClientMsg

@@ -5,15 +5,19 @@ local replicatedStorage: ReplicatedStorage = game:GetService("ReplicatedStorage"
 local scripts = replicatedStorage:WaitForChild("Scripts")
 local sharedScripts = scripts:WaitForChild("Shared")
 local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
+local NetMsg = require(sharedScripts:FindFirstChild("NetMsg"))
 local clientScripts = scripts:WaitForChild("Client")
 local ClientMsg = require(clientScripts:FindFirstChild("ClientMsg"))
 
 local localPlayerInfo: GameConfig.ClientLocalPlayerInfo?
-local otherPlayerInfoMap: {[number]: GameConfig.ClientOtherPlayerInfo} = {}
+local otherPlayerInfoMap: { [number]: GameConfig.ClientOtherPlayerInfo } = {}
 
 --初始化玩家信息
-function ClientGameInfo.InitPlayerInfo(localPlayerSaveInfo: GameConfig.ClientLocalPlayerSaveInfo,
-	otherPlayerSaveInfoMap: {[string]: GameConfig.ClientOtherPlayerSyncInfo}, playerConfigInfo: GameConfig.PlayerConfigInfo)
+function ClientGameInfo.InitPlayerInfo(
+	localPlayerSaveInfo: GameConfig.ClientLocalPlayerSaveInfo,
+	otherPlayerSaveInfoMap: { [string]: GameConfig.ClientOtherPlayerSyncInfo },
+	playerConfigInfo: GameConfig.PlayerConfigInfo
+)
 	--初始化自己的玩家信息
 	localPlayerInfo = {
 		settingInfo = localPlayerSaveInfo.settingInfo,
@@ -23,6 +27,8 @@ function ClientGameInfo.InitPlayerInfo(localPlayerSaveInfo: GameConfig.ClientLoc
 		currencies = localPlayerSaveInfo.currencies,
 		vehicleInventory = localPlayerSaveInfo.vehicleInventory,
 		currentGuideType = GameConfig.GuideType.None,
+		isInGroup = localPlayerSaveInfo.isInGroup,
+		hasClaimedGroupReward = localPlayerSaveInfo.hasClaimedGroupReward,
 	}
 	if localPlayerInfo == nil then
 		return
@@ -36,9 +42,7 @@ function ClientGameInfo.InitPlayerInfo(localPlayerSaveInfo: GameConfig.ClientLoc
 		if otherPlayerId == nil then
 			continue
 		end
-		local otherPlayerInfo: GameConfig.ClientOtherPlayerInfo = {
-			
-		}
+		local otherPlayerInfo: GameConfig.ClientOtherPlayerInfo = {}
 		otherPlayerInfoMap[otherPlayerId] = otherPlayerInfo
 	end
 	--发送消息
@@ -47,9 +51,7 @@ end
 
 --初始化其他玩家信息
 function ClientGameInfo.InitOtherPlayerInfo(playerId: number, otherPlayerSaveInfo: GameConfig.ClientOtherPlayerSyncInfo)
-	local otherPlayerInfo: GameConfig.ClientOtherPlayerInfo = {
-		
-	}
+	local otherPlayerInfo: GameConfig.ClientOtherPlayerInfo = {}
 	otherPlayerInfoMap[playerId] = otherPlayerInfo
 	ClientMsg.FireOtherPlayerInfoInit(playerId)
 end
@@ -126,6 +128,19 @@ function ClientGameInfo.UpdateVehicleInventory(vehicleInventory: GameConfig.Vehi
 	end
 	localPlayerInfo.vehicleInventory = vehicleInventory
 	ClientMsg.FireLocalPlayerVehicleInventoryUpdate()
+end
+
+--更新已领取群组奖励状态
+function ClientGameInfo.SetLocalPlayerClaimedGroupReward()
+	if localPlayerInfo == nil then
+		return
+	end
+	localPlayerInfo.hasClaimedGroupReward = true
+	ClientMsg.FireLocalPlayerClaimedGroupReward()
+end
+
+function ClientGameInfo.Init()
+	NetMsg.ConnectNotifyPlayerClaimedGroupReward(ClientGameInfo.SetLocalPlayerClaimedGroupReward)
 end
 
 return ClientGameInfo
