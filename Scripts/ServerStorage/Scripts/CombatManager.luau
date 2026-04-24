@@ -332,6 +332,107 @@ function CombatManager.DestroyUnitForPlayer(playerId: number)
 	LogInfo(string.format("DestroyUnit userId=%d", playerId))
 end
 
+function CombatManager.PlayVehicleDeathEffect(playerId: number, hitDirection: Vector3?)
+	local unitInfo = unitInfoMap[playerId]
+	if unitInfo == nil then
+		return
+	end
+
+	local model = unitInfo.unitModel
+	unitInfoMap[playerId] = nil -- 立即停止模拟更新
+
+	if model == nil or model.Parent == nil then
+		return
+	end
+
+	LogInfo(string.format("PlayVehicleDeathEffect userId=%d", playerId))
+
+	-- 0. 清理物理组件和残留速度，防止死亡后继续滑行
+	for _, item in model:GetDescendants() do
+		if
+			item:IsA("VectorForce")
+			or item:IsA("AngularVelocity")
+			or item:IsA("AlignOrientation")
+			or item:IsA("LinearVelocity")
+		then
+			item:Destroy()
+		end
+	end
+
+	-- 1. 显式断开关节，确保肢体能分离（解体）
+	model:BreakJoints()
+
+	-- 2. 死亡表现参数（参考人物死亡）
+	local explosionPower = 60
+	local upwardPower = 40
+	local spreadPower = 50
+
+	local partInitialTransparencies = {}
+
+	for _, part in model:GetDescendants() do
+		if part:IsA("BasePart") then
+			-- 记录初始透明度，用于后续渐变判断
+			local initial = part.Transparency
+			partInitialTransparencies[part] = initial
+
+			-- 取消锚固并开启物理
+			part.Anchored = false
+
+			-- 如果初始透明度已经是 1（透明底盘），则关闭碰撞，避免产生隐形墙
+			if initial >= 0.99 then
+				part.CanCollide = false
+			end
+
+			-- 关闭 Touch 和 Query 以免干扰战斗
+			part.CanTouch = false
+			part.CanQuery = false
+
+			-- 清除旧的速度，应用爆炸冲量
+			part.AssemblyLinearVelocity = Vector3.zero
+			part.AssemblyAngularVelocity = Vector3.zero
+
+			-- 应用爆炸冲量
+			local randomSpread = Vector3.new(
+				(math.random() - 0.5) * spreadPower,
+				math.random() * upwardPower,
+				(math.random() - 0.5) * spreadPower
+			)
+			local hitImpulse = if hitDirection and hitDirection.Magnitude > 0 then hitDirection.Unit * explosionPower else Vector3.zero
+			part.AssemblyLinearVelocity = hitImpulse + randomSpread
+
+			-- 确保服务器拥有物理所有权
+			pcall(function()
+				part:SetNetworkOwner(nil)
+			end)
+		end
+	end
+
+	-- 3. 逐渐淡出并销毁
+	task.spawn(function()
+		local fadeDuration = 2.0
+		local steps = 20
+		for i = 1, steps do
+			task.wait(fadeDuration / steps)
+			if model.Parent == nil then
+				break
+			end
+			local alpha = i / steps
+			for _, part in model:GetDescendants() do
+				if part:IsA("BasePart") then
+					local initial = partInitialTransparencies[part] or 0
+					if initial < 0.99 then
+						-- 仅对原本可见的部件进行渐变
+						part.Transparency = initial + (1 - initial) * alpha
+					end
+				elseif part:IsA("Decal") then
+					part.Transparency = alpha
+				end
+			end
+		end
+		model:Destroy()
+	end)
+end
+
 local function ResetUnitToUnderground(playerId: number)
 	local unitInfo = unitInfoMap[playerId]
 	if unitInfo == nil then

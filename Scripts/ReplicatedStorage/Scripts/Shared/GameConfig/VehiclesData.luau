@@ -19,7 +19,7 @@ return {
 		["resourceName"] = "Cup",
 		["labelName_t"] = "Cup",
 		["id"] = 2,
-		["maxHits"] = 5,
+		["maxHits"] = 3,
 		["sortId"] = 2,
 		["costCoin"] = 1,
 		["fireCooldown"] = 3,

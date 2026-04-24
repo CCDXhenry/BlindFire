@@ -550,7 +550,7 @@ function MatchManager.OnPlayerDead(player: Player, isDisconnect: boolean?, hitDi
 			character:PivotTo(CFrame.new(deathPos))
 		end
 
-		CombatManager.DestroyUnitForPlayer(player.UserId)
+		CombatManager.PlayVehicleDeathEffect(player.UserId, hitDirection)
 
 		-- 死亡表现：人物肢体受力爆开并逐渐淡出
 		--character:BreakJoints() -- 显式断开关节，确保肢体能分离
