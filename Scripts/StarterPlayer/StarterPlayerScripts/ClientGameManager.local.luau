@@ -17,6 +17,7 @@ local BulletClientManager = require(clientScripts:FindFirstChild("BulletClientMa
 local CombatCameraManager = require(clientScripts:FindFirstChild("CombatCameraManager"))
 local LeaderboardClient = require(clientScripts:WaitForChild("LeaderboardClient"))
 local MatchActionManager = require(clientScripts:FindFirstChild("MatchActionManager"))
+local ProximityPromptManager = require(clientScripts:FindFirstChild("ProximityPromptManager"))
 local players = game:GetService("Players")
 local starterGui: StarterGui = game:GetService("StarterGui")
 local contentProvider: ContentProvider = game:GetService("ContentProvider")
@@ -63,6 +64,7 @@ local function OnNotifyPlayerInfoInit(localPlayerSaveInfo: GameConfig.ClientLoca
 	CombatCameraManager.Init()
 LeaderboardClient.Init()
 	MatchActionManager.Init()
+	ProximityPromptManager.Init()
 	--初始化UI
 	task.spawn(function()
 		InitUI()
