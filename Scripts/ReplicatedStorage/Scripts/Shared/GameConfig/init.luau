@@ -422,9 +422,26 @@ GameConfig.HullYawVelocityEpsilonStudsPerSec = 1.5
 -- 受击后无敌时间（秒）
 GameConfig.InvincibilityDuration = 2
 
-export type MatchState = "InLobby" | "MatchCountdown" | "GameStartCountdown" | "Fighting" | "Settlement"
+GameConfig.MatchState = {
+	InLobby = "InLobby",
+	MatchCountdown = "MatchCountdown",
+	GameStartCountdown = "GameStartCountdown",
+	Fighting = "Fighting",
+	Settlement = "Settlement",
+}
 
-export type RoundEndReason = "LastStanding" | "TimeExpired"
+export type MatchState = typeof(GameConfig.MatchState.InLobby)
+	| typeof(GameConfig.MatchState.MatchCountdown)
+	| typeof(GameConfig.MatchState.GameStartCountdown)
+	| typeof(GameConfig.MatchState.Fighting)
+	| typeof(GameConfig.MatchState.Settlement)
+
+GameConfig.RoundEndReason = {
+	LastStanding = "LastStanding",
+	TimeExpired = "TimeExpired",
+}
+
+export type RoundEndReason = typeof(GameConfig.RoundEndReason.LastStanding) | typeof(GameConfig.RoundEndReason.TimeExpired)
 
 -- 单位初始化信息（服务端广播给所有客户端）
 export type UnitInitInfo = {

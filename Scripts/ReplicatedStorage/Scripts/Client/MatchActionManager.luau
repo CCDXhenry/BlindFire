@@ -23,7 +23,7 @@ local disableJumpActionId: string = ""
 
 local isLocalParticipant = false
 local isLocalDead = false
-local lastMatchState: GameConfig.MatchState = "InLobby"
+local lastMatchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
 local lastCountdown = 0
 local isWaitingForRelease = false
 local wasDisabledLastFrame = false
@@ -53,11 +53,11 @@ end
 
 local function OnUpdate()
 	local shouldSuppressByState = false
-	if lastMatchState == "MatchCountdown" then
+	if lastMatchState == GameConfig.MatchState.MatchCountdown then
 		if lastCountdown <= 2 then
 			shouldSuppressByState = true
 		end
-	elseif lastMatchState == "GameStartCountdown" or lastMatchState == "Fighting" then
+	elseif lastMatchState == GameConfig.MatchState.GameStartCountdown or lastMatchState == GameConfig.MatchState.Fighting then
 		if isLocalParticipant and not isLocalDead and not BulletClientManager.IsLocalAfk() then
 			shouldSuppressByState = true
 		end
@@ -114,7 +114,7 @@ local function OnMatchStateChanged(matchState: GameConfig.MatchState, countdown:
 	lastMatchState = matchState
 	lastCountdown = countdown
 
-	if matchState == "InLobby" or matchState == "MatchCountdown" then
+	if matchState == GameConfig.MatchState.InLobby or matchState == GameConfig.MatchState.MatchCountdown then
 		isLocalDead = false
 	end
 end

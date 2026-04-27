@@ -61,7 +61,7 @@ local RECOIL_MUZZLE_MAGNITUDE_THRESHOLD = 0.01 -- 枪口位置向量判定阈值
 -- local WALL_STUCK_SPEED_MAX: number = 10
 -- local WALL_STUCK_DESIRED_DOT: number = -0.02
 
-local matchState: GameConfig.MatchState = "InLobby"
+local matchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
 
 local localPlayerId: number = 0
 local unitStateMap: { [number]: ClientUnitState } = {}
@@ -182,7 +182,7 @@ local function BindServerProjectileLocalTintFolder(folder: Folder)
 end
 
 local function IsFightingDriveActive(): boolean
-	return matchState == "Fighting"
+	return matchState == GameConfig.MatchState.Fighting
 end
 
 local function Deg2Rad(deg: number): number
@@ -553,7 +553,7 @@ function BulletClientManager.OnTeleport(_playerId: number, _targetPosition: Vect
 
 function BulletClientManager.OnMatchStateChanged(newState: GameConfig.MatchState, _countdown: number)
 	matchState = newState
-	if newState == "InLobby" then
+	if newState == GameConfig.MatchState.InLobby then
 		table.clear(unitStateMap)
 		table.clear(pendingUnitInits)
 	end

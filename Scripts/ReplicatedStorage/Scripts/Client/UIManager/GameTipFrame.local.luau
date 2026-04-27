@@ -472,13 +472,13 @@ end
 local lastNotifiedMatchState: GameConfig.MatchState? = nil
 
 local function GetMatchPhaseTipEntry(matchState: GameConfig.MatchState): ({ key: string, source: string }, Color3)
-	if matchState == "InLobby" then
+	if matchState == GameConfig.MatchState.InLobby then
 		return GameTexts.MatchPhaseInLobby, TOP_TIP_DEFAULT_COLOR
-	elseif matchState == "MatchCountdown" then
+	elseif matchState == GameConfig.MatchState.MatchCountdown then
 		return GameTexts.MatchPhaseMatchCountdown, EARTHQUAKE_WARNING_COLOR
-	elseif matchState == "GameStartCountdown" then
+	elseif matchState == GameConfig.MatchState.GameStartCountdown then
 		return GameTexts.MatchPhaseGameStartCountdown, EARTHQUAKE_WARNING_COLOR
-	elseif matchState == "Fighting" then
+	elseif matchState == GameConfig.MatchState.Fighting then
 		return GameTexts.MatchPhaseFighting, TOP_TIP_SUCCESS_COLOR
 	end
 	return GameTexts.MatchPhaseInLobby, TOP_TIP_DEFAULT_COLOR
@@ -486,22 +486,22 @@ end
 
 -- 阶段顶栏停留时长与对应阶段倒计时一致（含战斗 RoundFightDuration / 服务器 remain）
 local function GetPhaseTopTipDuration(matchState: GameConfig.MatchState, countdown: number): number
-	if matchState == "MatchCountdown" then
+	if matchState == GameConfig.MatchState.MatchCountdown then
 		if countdown > 0 then
 			return countdown
 		end
 		return GameConfig.MatchCountdown
-	elseif matchState == "GameStartCountdown" then
+	elseif matchState == GameConfig.MatchState.GameStartCountdown then
 		if countdown > 0 then
 			return countdown
 		end
 		return GameConfig.RoundStartCountdown
-	elseif matchState == "Fighting" then
+	elseif matchState == GameConfig.MatchState.Fighting then
 		if countdown > 0 then
 			return countdown
 		end
 		return GameConfig.RoundFightDuration
-	elseif matchState == "InLobby" then
+	elseif matchState == GameConfig.MatchState.InLobby then
 		return 999999
 	end
 	return MATCH_PHASE_TOP_TIP_DURATION
@@ -525,19 +525,19 @@ end
 
 local function OnNotifyRoundOutcome(endReason: GameConfig.RoundEndReason, aliveUserIds: { number })
 	local myId: number = players.LocalPlayer.UserId
-	if endReason == "LastStanding" and #aliveUserIds == 0 then
+	if endReason == GameConfig.RoundEndReason.LastStanding and #aliveUserIds == 0 then
 		ShowGameTip(GameTexts.RoundNoSurvivors.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundNoSurvivors.key, nil, TOP_TIP_DEFAULT_COLOR)
 		return
 	end
 	if not UserIdInList(aliveUserIds, myId) then
 		return
 	end
-	if endReason == "LastStanding" and #aliveUserIds == 1 then
+	if endReason == GameConfig.RoundEndReason.LastStanding and #aliveUserIds == 1 then
 		ShowGameTip(GameTexts.RoundVictory.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundVictory.key, nil, TOP_TIP_SUCCESS_COLOR)
 		if victorySoundOrigin ~= nil and victorySoundOrigin:IsA("Sound") then
 			SoundTool.PlayGlobalSoundEffect(victorySoundOrigin, false)
 		end
-	elseif endReason == "TimeExpired" then
+	elseif endReason == GameConfig.RoundEndReason.TimeExpired then
 		if #aliveUserIds == 1 then
 			ShowGameTip(GameTexts.RoundVictory.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundVictory.key, nil, TOP_TIP_SUCCESS_COLOR)
 			if victorySoundOrigin ~= nil and victorySoundOrigin:IsA("Sound") then
@@ -569,7 +569,7 @@ local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: 
 	if countdownText == nil then
 		return
 	end
-	if matchState == "MatchCountdown" or matchState == "GameStartCountdown" then
+	if matchState == GameConfig.MatchState.MatchCountdown or matchState == GameConfig.MatchState.GameStartCountdown then
 		if countdown > 0 then
 			countdownText.Visible = true
 			countdownText.TextColor3 = EARTHQUAKE_WARNING_COLOR
@@ -577,7 +577,7 @@ local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: 
 		else
 			countdownText.Visible = false
 		end
-	elseif matchState == "Fighting" then
+	elseif matchState == GameConfig.MatchState.Fighting then
 		if countdown > 0 then
 			countdownText.Visible = true
 			countdownText.TextColor3 = EARTHQUAKE_DANGER_COLOR

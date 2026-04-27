@@ -43,7 +43,8 @@ local function UpdateGameFrame()
 	local isAlive = BulletClientManager.IsLocalInVehicle()
 	
 	-- Show fire button only if alive AND during GameStartCountdown or Fighting
-	local shouldBeVisible = isAlive and (matchState == "GameStartCountdown" or matchState == "Fighting")
+	local shouldBeVisible = isAlive
+		and (matchState == GameConfig.MatchState.GameStartCountdown or matchState == GameConfig.MatchState.Fighting)
 	if fireButtonContainer then
 		fireButtonContainer.Visible = shouldBeVisible
 	end

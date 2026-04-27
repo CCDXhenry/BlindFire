@@ -318,7 +318,7 @@ function PlayerInfoUIManager.Init()
 	end)
 
 	NetMsg.ConnectNotifyMatchState(function(matchState, countdown)
-		isFighting = (matchState == "Fighting" or matchState == "GameStartCountdown")
+		isFighting = (matchState == GameConfig.MatchState.Fighting or matchState == GameConfig.MatchState.GameStartCountdown)
 		for playerId, data in playerUIMap do
 			UpdateUIVisibility(data.ui, data.isParticipant)
 		end

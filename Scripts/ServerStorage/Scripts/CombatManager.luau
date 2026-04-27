@@ -85,7 +85,7 @@ local bulletModelsFolder: Folder = modelsFolder:WaitForChild("Bullet") :: Folder
 local unitInfoMap: { [number]: ServerUnitInfo } = {}
 local playerDeadCallback: OnPlayerDeadCallback? = nil
 
-local serverMatchState: GameConfig.MatchState = "InLobby"
+local serverMatchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
 
 local function LogInfo(message: string)
 	if not DEBUG_LOG then
@@ -487,12 +487,12 @@ local function StepVehicleSimulation(dt: number)
 		local spinAV = root:FindFirstChild("SpinAngularVelocity")
 		local avValue = Vector3.zero
 
-		if serverMatchState == "GameStartCountdown" then
+		if serverMatchState == GameConfig.MatchState.GameStartCountdown then
 			ZeroHorizontalVelocity(root)
 			root.AssemblyAngularVelocity = Vector3.zero
 			-- unitInfo.spinAngleRad = VehicleLocomotionTool.BaseDiskDriveYawRadFromState(unitInfo, root)
 			VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, driveNotNull, dt, false, unitSpeed)
-		elseif serverMatchState == "Fighting" then
+		elseif serverMatchState == GameConfig.MatchState.Fighting then
 			local roundInfo = PlayerStateManager.GetAllPlayerRoundInfoMap()[playerId]
 			if roundInfo ~= nil and roundInfo.isParticipant and roundInfo.isAlive then
 				avValue = Vector3.new(0, math.rad(GameConfig.UnitRotationSpeed) * unitInfo.spinDir, 0)
@@ -510,7 +510,7 @@ local function StepVehicleSimulation(dt: number)
 		end
 	end
 
-	if serverMatchState == "Fighting" then
+	if serverMatchState == GameConfig.MatchState.Fighting then
 		VehicleLocomotionTool.ResolveAllVehicleBumps(unitInfoMap :: any, function(playerIdForBump: number): boolean
 			local roundInfoForBump = PlayerStateManager.GetAllPlayerRoundInfoMap()[playerIdForBump]
 			return roundInfoForBump ~= nil and roundInfoForBump.isParticipant and roundInfoForBump.isAlive

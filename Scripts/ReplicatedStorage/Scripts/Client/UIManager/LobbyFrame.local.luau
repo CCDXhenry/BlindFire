@@ -43,7 +43,7 @@ local AFK_OFF_COLOR = Color3.fromRGB(220, 60, 60)
 local AFK_ON_COLOR = Color3.fromRGB(60, 180, 75)
 
 local isAfk = false
-local matchState: GameConfig.MatchState = "InLobby"
+local matchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
 
 local function IsVehicleAffordable(localPlayerInfo: GameConfig.ClientLocalPlayerInfo, vehicleData: GameConfig.VehicleData): boolean
 	local coinAmount: number = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
@@ -62,7 +62,7 @@ local function IsVehicleAffordable(localPlayerInfo: GameConfig.ClientLocalPlayer
 end
 
 local function IsAfkButtonHiddenByBattleState(): boolean
-	local isBattleState = (matchState == "GameStartCountdown" or matchState == "Fighting")
+	local isBattleState = (matchState == GameConfig.MatchState.GameStartCountdown or matchState == GameConfig.MatchState.Fighting)
 	if not isBattleState then
 		return false
 	end

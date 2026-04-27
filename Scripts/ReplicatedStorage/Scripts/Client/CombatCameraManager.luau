@@ -44,7 +44,7 @@ end
 local function ShouldCombatVehicleSpaceFire(): boolean
 	if GetOwnVehicleSeat() == nil then return false end
 	local phase = BulletClientManager.GetMatchState()
-	return phase == "Fighting"
+	return phase == GameConfig.MatchState.Fighting
 end
 
 local function ShouldSuppressJumpOnOwnVehicle(): boolean
@@ -52,7 +52,7 @@ local function ShouldSuppressJumpOnOwnVehicle(): boolean
 		return false
 	end
 	local phase = BulletClientManager.GetMatchState()
-	return phase == "Fighting" or phase == "GameStartCountdown"
+	return phase == GameConfig.MatchState.Fighting or phase == GameConfig.MatchState.GameStartCountdown
 end
 
 local function RestoreJumpSuppressionIfNeeded()
@@ -67,7 +67,7 @@ end
 
 local function UpdateJumpSuppressionForCombatSeat()
 	local phase = BulletClientManager.GetMatchState()
-	if phase == "InLobby" then
+	if phase == GameConfig.MatchState.InLobby then
 		arenaSeatPrepareJumpLock = false
 	end
 	if GetOwnVehicleSeat() ~= nil then

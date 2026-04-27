@@ -33,7 +33,7 @@ local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
 local seatRetryCountMap: { [number]: number } = {}
 local arenaTargetPositionMap: { [number]: Vector3 } = {}
 
-local currentMatchState: GameConfig.MatchState = "InLobby"
+local currentMatchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
 local lastLobbySpawnIndex = 0
 local roundWorkerThread: thread? = nil
 local roundStartCallback: OnRoundStartCallback? = nil
@@ -50,7 +50,7 @@ local function GetNonAfkPlayers(): { Player }
 end
 
 local function OnRequestSetAfkState(player: Player, isAfk: boolean)
-	if currentMatchState == "GameStartCountdown" or currentMatchState == "Fighting" then
+	if currentMatchState == GameConfig.MatchState.GameStartCountdown or currentMatchState == GameConfig.MatchState.Fighting then
 		local roundInfo = PlayerStateManager.EnsurePlayerRoundInfo(player)
 		if roundInfo.isParticipant and roundInfo.isAlive then
 			return
@@ -423,7 +423,7 @@ local function RunMatchLoop()
 		if nonAfkPlayerCount < GameConfig.MinPlayerToStart then
 			LogInfo(string.format("WaitingPlayers current=%d required=%d", nonAfkPlayerCount, GameConfig.MinPlayerToStart))
 			CombatManager.SetAllVehiclesAnchored(true)
-			BroadcastMatchState("InLobby", 0)
+			BroadcastMatchState(GameConfig.MatchState.InLobby, 0)
 			task.wait(1)
 			continue
 		end
@@ -437,7 +437,7 @@ local function RunMatchLoop()
 				matchAborted = true
 				break
 			end
-			BroadcastMatchState("MatchCountdown", countdown)
+			BroadcastMatchState(GameConfig.MatchState.MatchCountdown, countdown)
 			task.wait(1)
 		end
 		if matchAborted then
@@ -447,7 +447,7 @@ local function RunMatchLoop()
 		local roundParticipantPlayers = GetNonAfkPlayers()
 		if #roundParticipantPlayers < GameConfig.MinPlayerToStart then
 			LogInfo("Match start aborted: non-afk player count below minimum")
-			BroadcastMatchState("InLobby", 0)
+			BroadcastMatchState(GameConfig.MatchState.InLobby, 0)
 			task.wait(1)
 			continue
 		end
@@ -480,13 +480,13 @@ local function RunMatchLoop()
 				gameStartAborted = true
 				break
 			end
-			BroadcastMatchState("GameStartCountdown", countdown)
+			BroadcastMatchState(GameConfig.MatchState.GameStartCountdown, countdown)
 			task.wait(1)
 		end
 
 		if gameStartAborted then
 			LogInfo("GameStart aborted, returning players to lobby")
-			BroadcastMatchState("InLobby", 0)
+			BroadcastMatchState(GameConfig.MatchState.InLobby, 0)
 			for _, player in players:GetPlayers() do
 				CombatManager.UnseatPlayerFromOwnedVehicle(player)
 			end
@@ -495,7 +495,7 @@ local function RunMatchLoop()
 			continue
 		end
 
-		BroadcastMatchState("Fighting", 0)
+		BroadcastMatchState(GameConfig.MatchState.Fighting, 0)
 		ArenaManager.StartShrinking(GameConfig.RoundFightDuration)
 		LogInfo(string.format("FightPhase start seconds=%d", GameConfig.RoundFightDuration))
 		-- 与 MatchCountdown / GameStartCountdown 一致：先广播再 wait，避免首秒无数字、客户端慢约 1s
@@ -511,11 +511,13 @@ local function RunMatchLoop()
 				LogInfo("Fighting phase ended early: at most one player remains alive.")
 				break
 			end
-			BroadcastMatchState("Fighting", remain)
+			BroadcastMatchState(GameConfig.MatchState.Fighting, remain)
 			task.wait(1)
 		end
 
-		local endReason: GameConfig.RoundEndReason = if fightEndedEarly then "LastStanding" else "TimeExpired"
+		local endReason: GameConfig.RoundEndReason = if fightEndedEarly
+			then GameConfig.RoundEndReason.LastStanding
+			else GameConfig.RoundEndReason.TimeExpired
 		local aliveUserIds: { number } = PlayerStateManager.GetAliveUserIdList()
 		NetMsg.FireNotifyRoundOutcome(endReason, aliveUserIds)
 
@@ -528,12 +530,12 @@ local function RunMatchLoop()
 		end
 
 		-- 新增结算阶段：优胜者留在场内展示 2 秒
-		BroadcastMatchState("Settlement", GameConfig.SettlementDuration)
+		BroadcastMatchState(GameConfig.MatchState.Settlement, GameConfig.SettlementDuration)
 		task.wait(GameConfig.SettlementDuration)
 
 		ArenaManager.ResetArena()
 		LogInfo("FightPhase ended returning players to lobby")
-		BroadcastMatchState("InLobby", 0)
+		BroadcastMatchState(GameConfig.MatchState.InLobby, 0)
 		for _, player in players:GetPlayers() do
 			CombatManager.UnseatPlayerFromOwnedVehicle(player)
 		end
@@ -655,13 +657,13 @@ end
 
 function MatchManager.ForceResetToLobby()
 	LogInfo("ForceResetToLobby invoked")
-	BroadcastMatchState("InLobby", 0)
+	BroadcastMatchState(GameConfig.MatchState.InLobby, 0)
 	TeleportAllPlayersToLobby()
 end
 
 -- 请求强制结束当前场次
 function MatchManager.RequestStopMatch()
-	if currentMatchState == "Fighting" then
+	if currentMatchState == GameConfig.MatchState.Fighting then
 		isStopRequested = true
 		LogInfo("RequestStopMatch registered")
 	else
