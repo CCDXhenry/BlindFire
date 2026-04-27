@@ -14,17 +14,17 @@ GameConfig.ABTestVersion = "1.0.0"
 --玩家存档数据版本
 GameConfig.PlayerSaveInfoDataVersion = 0
 --正式版游戏id
-GameConfig.GameId = 6376748064
+GameConfig.GameId = 10091007684
 if game.GameId == GameConfig.GameId then
 	--游戏场景
-	GameConfig.GamePlaceId = 17432470623
+	GameConfig.GamePlaceId = 93872575939801
 	--清除玩家数据场景
-	GameConfig.ClearDataStorePlaceId = 18733054561
+	GameConfig.ClearDataStorePlaceId = 99987902017784
 else
 	--游戏场景
-	GameConfig.GamePlaceId = 17432470623
+	GameConfig.GamePlaceId = 140465012877509
 	--清除玩家数据场景
-	GameConfig.ClearDataStorePlaceId = 18733054561
+	GameConfig.ClearDataStorePlaceId = 86129124165513
 end
 
 --六次方群组id
