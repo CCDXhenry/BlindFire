@@ -47,8 +47,12 @@ type ServerBullet = {
 	currentPos: Vector3,
 	estimatedRtt: number,
 	visualModel: Model?,
+	physicsRoot: BasePart?,
+	visualWeld: Motor6D?,
+	linearVelocity: LinearVelocity?,
 	-- 激活前是否已执行过首次 PivotTo（避免每帧重复定位）
 	visualSpawned: boolean,
+	physicsStarted: boolean,
 }
 
 local heartbeatConnection: RBXScriptConnection? = nil
@@ -63,6 +67,12 @@ local UNDERGROUND_Y = -100
 local SERVER_PROJECTILE_NAME_PREFIX = "ServerProjectile_"
 local SERVER_BULLETS_FOLDER_NAME = "ServerBullets"
 local SERVER_BULLET_SHOOTER_USER_ID_ATTR = "ShooterUserId"
+local PROJECTILE_PREPARED_ATTR = "ServerPreparedProjectileTemplate"
+local PROJECTILE_PHYSICS_ROOT_NAME = "PhysicsRoot"
+local PROJECTILE_VISUAL_WELD_NAME = "VisualWeld"
+local PROJECTILE_DRIVE_ATTACHMENT_NAME = "ProjectileDriveAttachment"
+local PROJECTILE_ALIGN_ORIENTATION_NAME = "ProjectileAlignOrientation"
+local PROJECTILE_LINEAR_VELOCITY_NAME = "ProjectileLinearVelocity"
 
 local serverBulletsFolder: Folder? = nil
 -- 缓存 Models Folder
@@ -569,49 +579,193 @@ local function IsServerProjectileModel(model: Model): boolean
 	return string.sub(model.Name, 1, #SERVER_PROJECTILE_NAME_PREFIX) == SERVER_PROJECTILE_NAME_PREFIX
 end
 
-local function CreateServerProjectileVisual(shooterId: number, spawnPos: Vector3, shotDir: Vector3, bulletId: string, modelName: string?): Model?
-	local templateName = modelName or "ProjectileModel"
+local preparedProjectileTemplateMap: { [string]: Model? } = {}
+
+local function EnsurePreparedProjectileTemplate(templateName: string): Model?
+	local cached = preparedProjectileTemplateMap[templateName]
+	if cached ~= nil and cached.Parent ~= nil then
+		return cached
+	end
+
 	local projectileTemplate = bulletModelsFolder:FindFirstChild(templateName)
 	if projectileTemplate == nil or not projectileTemplate:IsA("Model") then
 		warn("[CombatManager] ProjectileModel template not found:", templateName)
 		return nil
 	end
+
+	local visualRoot = projectileTemplate:FindFirstChild("Core")
+	if visualRoot == nil or not visualRoot:IsA("BasePart") then
+		warn("[CombatManager] ProjectileModel.Core not found:", templateName)
+		return nil
+	end
+
+	local physicsRoot = projectileTemplate:FindFirstChild(PROJECTILE_PHYSICS_ROOT_NAME)
+	if physicsRoot == nil or not physicsRoot:IsA("BasePart") then
+		local newPhysicsRoot = Instance.new("Part")
+		newPhysicsRoot.Name = PROJECTILE_PHYSICS_ROOT_NAME
+		newPhysicsRoot.Size = Vector3.new(1, 1, 1)
+		newPhysicsRoot.Transparency = 1
+		newPhysicsRoot.CanCollide = false
+		newPhysicsRoot.Massless = true
+		newPhysicsRoot.Anchored = false
+		newPhysicsRoot.Parent = projectileTemplate
+		physicsRoot = newPhysicsRoot
+	end
+	local physicsRootPart = physicsRoot :: BasePart
+	projectileTemplate.PrimaryPart = physicsRootPart
+
+	local visualWeld = physicsRootPart:FindFirstChild(PROJECTILE_VISUAL_WELD_NAME)
+	if visualWeld == nil or not visualWeld:IsA("Motor6D") then
+		local newVisualWeld = Instance.new("Motor6D")
+		newVisualWeld.Name = PROJECTILE_VISUAL_WELD_NAME
+		newVisualWeld.Part0 = physicsRootPart
+		newVisualWeld.Part1 = visualRoot
+		newVisualWeld.C0 = CFrame.new()
+		newVisualWeld.Parent = physicsRootPart
+	end
+
+	local driveAttachment = physicsRootPart:FindFirstChild(PROJECTILE_DRIVE_ATTACHMENT_NAME)
+	if driveAttachment == nil or not driveAttachment:IsA("Attachment") then
+		local newAttachment = Instance.new("Attachment")
+		newAttachment.Name = PROJECTILE_DRIVE_ATTACHMENT_NAME
+		newAttachment.Parent = physicsRootPart
+		driveAttachment = newAttachment
+	end
+	local driveAttachmentRef = driveAttachment :: Attachment
+
+	local alignOrientation = physicsRootPart:FindFirstChild(PROJECTILE_ALIGN_ORIENTATION_NAME)
+	if alignOrientation == nil or not alignOrientation:IsA("AlignOrientation") then
+		local newAlignOrientation = Instance.new("AlignOrientation")
+		newAlignOrientation.Name = PROJECTILE_ALIGN_ORIENTATION_NAME
+		newAlignOrientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
+		newAlignOrientation.Attachment0 = driveAttachmentRef
+		newAlignOrientation.RigidityEnabled = true
+		newAlignOrientation.CFrame = CFrame.new()
+		newAlignOrientation.Parent = physicsRootPart
+	end
+
+	local linearVelocity = physicsRootPart:FindFirstChild(PROJECTILE_LINEAR_VELOCITY_NAME)
+	if linearVelocity == nil or not linearVelocity:IsA("LinearVelocity") then
+		local newLinearVelocity = Instance.new("LinearVelocity")
+		newLinearVelocity.Name = PROJECTILE_LINEAR_VELOCITY_NAME
+		newLinearVelocity.Attachment0 = driveAttachmentRef
+		newLinearVelocity.MaxForce = math.huge
+		newLinearVelocity.VectorVelocity = Vector3.zero
+		newLinearVelocity.RelativeTo = Enum.ActuatorRelativeTo.World
+		newLinearVelocity.Parent = physicsRootPart
+	end
+
+	-- 模板预处理一次：视觉件全部焊到 Core，发射时不再重复创建约束
+	if projectileTemplate:GetAttribute(PROJECTILE_PREPARED_ATTR) ~= true then
+		for _, d in projectileTemplate:GetDescendants() do
+			if d:IsA("BasePart") and d ~= physicsRootPart then
+				d.Anchored = false
+				d.Massless = true
+				d.CanCollide = false
+				if d ~= visualRoot then
+					local existingWeld = d:FindFirstChild("WeldToCore")
+					if existingWeld == nil then
+						local weld = Instance.new("WeldConstraint")
+						weld.Name = "WeldToCore"
+						weld.Part0 = visualRoot
+						weld.Part1 = d
+						weld.Parent = d
+					end
+				end
+			end
+		end
+		projectileTemplate:SetAttribute(PROJECTILE_PREPARED_ATTR, true)
+	end
+
+	preparedProjectileTemplateMap[templateName] = projectileTemplate
+	return projectileTemplate
+end
+
+local function CreateServerProjectileVisual(shooterId: number, spawnPos: Vector3, shotDir: Vector3, bulletId: string, modelName: string?): (Model?, BasePart?, Motor6D?, LinearVelocity?)
+	local templateName = modelName or "ProjectileModel"
+	local projectileTemplate = EnsurePreparedProjectileTemplate(templateName)
+	if projectileTemplate == nil then
+		return nil
+	end
+
 	local projectileModel = projectileTemplate:Clone()
 	projectileModel.Name = SERVER_PROJECTILE_NAME_PREFIX .. bulletId
 	projectileModel:SetAttribute(SERVER_BULLET_SHOOTER_USER_ID_ATTR, shooterId)
 	projectileModel.Parent = EnsureServerBulletsFolder()
 
-	local projectileRoot = projectileModel:FindFirstChild("Core")
-	if projectileRoot == nil or not projectileRoot:IsA("BasePart") then
+	local visualRoot = projectileModel:FindFirstChild("Core")
+	if visualRoot == nil or not visualRoot:IsA("BasePart") then
 		projectileModel:Destroy()
 		warn("[CombatManager] ProjectileModel.Core not found.")
 		return nil
 	end
 
-	projectileModel.PrimaryPart = projectileRoot
-	projectileRoot.CanCollide = false
-	for _, d in projectileModel:GetDescendants() do
-		if d:IsA("BasePart") then
-			d.Anchored = true
-			d.AssemblyLinearVelocity = Vector3.zero
-			d.AssemblyAngularVelocity = Vector3.zero
-		end
+	local physicsRoot = projectileModel:FindFirstChild(PROJECTILE_PHYSICS_ROOT_NAME)
+	if physicsRoot == nil or not physicsRoot:IsA("BasePart") then
+		projectileModel:Destroy()
+		warn("[CombatManager] ProjectileModel.PhysicsRoot not found.")
+		return nil
 	end
+	projectileModel.PrimaryPart = physicsRoot
 
 	local flatShot = ToHorizontalDirection(shotDir)
-	local spawnCFrame = CFrame.lookAt(spawnPos, spawnPos + flatShot)
-	projectileModel:PivotTo(spawnCFrame)
+	local rootWeld = physicsRoot:FindFirstChild(PROJECTILE_VISUAL_WELD_NAME)
+	local linearVelocity = physicsRoot:FindFirstChild(PROJECTILE_LINEAR_VELOCITY_NAME)
+	if rootWeld == nil or not rootWeld:IsA("Motor6D") then
+		projectileModel:Destroy()
+		warn("[CombatManager] ProjectileModel.VisualWeld not found.")
+		return nil
+	end
+	if linearVelocity == nil or not linearVelocity:IsA("LinearVelocity") then
+		projectileModel:Destroy()
+		warn("[CombatManager] ProjectileModel.ProjectileLinearVelocity not found.")
+		return nil
+	end
+	rootWeld.Part0 = physicsRoot
+	rootWeld.Part1 = visualRoot
+	rootWeld.C0 = CFrame.lookAt(Vector3.zero, flatShot)
+	linearVelocity.VectorVelocity = Vector3.zero
+	
+	-- SAFELY move the whole assembly to spawnPos
+	projectileModel:PivotTo(CFrame.new(spawnPos))
+	
+	-- Server assumes physics ownership for reliable replication
+	pcall(function()
+		physicsRoot:SetNetworkOwner(nil)
+	end)
 
-	return projectileModel
+	return projectileModel, physicsRoot, rootWeld, linearVelocity
 end
 
-local function PivotServerProjectileToBullet(bullet: ServerBullet, displayPos: Vector3)
+local function PivotServerProjectileToBullet(bullet: ServerBullet, displayPos: Vector3, instantSnap: boolean?)
 	local vm = bullet.visualModel
 	if vm == nil or vm.Parent == nil then
 		return
 	end
 	local look = ToHorizontalDirection(bullet.shotDir)
-	vm:PivotTo(CFrame.lookAt(displayPos, displayPos + look))
+	
+	local root = bullet.physicsRoot or vm.PrimaryPart
+	if root then
+		local visualWeld = bullet.visualWeld
+		if visualWeld ~= nil and visualWeld.Parent ~= nil then
+			-- Updating C0 bypasses physics interpolation, making the rotation snap instantly on clients
+			visualWeld.C0 = CFrame.lookAt(Vector3.zero, look)
+		end
+		
+		if bullet.physicsStarted then
+			local lv = bullet.linearVelocity
+			if lv ~= nil and lv.Parent ~= nil then
+				lv.VectorVelocity = look * GameConfig.ProjectileSpeed
+			end
+			if instantSnap then
+				-- 反弹帧只强制速度/角速度与朝向，避免强改位置导致的单帧停顿感
+				root.AssemblyLinearVelocity = look * GameConfig.ProjectileSpeed
+				root.AssemblyAngularVelocity = Vector3.zero
+			end
+		else
+			root.CFrame = CFrame.new(displayPos)
+		end
+	end
 end
 
 local function DestroyServerBullet(bulletId: string)
@@ -628,6 +782,21 @@ local function DestroyServerBullet(bulletId: string)
 		shooterBulletCountMap[sid] = math.max(0, shooterBulletCountMap[sid] - 1)
 	end
 	activeServerBullets[bulletId] = nil
+end
+
+local function PrewarmProjectileTemplates()
+	local preparedNameMap: { [string]: boolean } = {}
+	preparedNameMap["ProjectileModel"] = true
+	EnsurePreparedProjectileTemplate("ProjectileModel")
+
+	for _, vehicleConfig in GameConfig.VehicleDataMap do
+		local bulletData = if vehicleConfig then vehicleConfig.bulletData else nil
+		local resourceName = if bulletData then bulletData.resourceName else nil
+		if typeof(resourceName) == "string" and resourceName ~= "" and not preparedNameMap[resourceName] then
+			preparedNameMap[resourceName] = true
+			EnsurePreparedProjectileTemplate(resourceName)
+		end
+	end
 end
 
 local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, hitDirection: Vector3, bulletId: string, hitPosition: Vector3)
@@ -743,6 +912,11 @@ function CombatManager.OnHeartbeat(dt: number)
 				bullet.visualSpawned = true
 			end
 			continue
+		end
+		
+		if not bullet.physicsStarted then
+			bullet.physicsStarted = true
+			PivotServerProjectileToBullet(bullet, bullet.currentPos)
 		end
 
 		if (currentServerTime - bullet.activeTime) > GameConfig.ProjectileLifetime then
@@ -876,7 +1050,7 @@ function CombatManager.OnHeartbeat(dt: number)
 				origin = impactCenter + nFlat * 0.05
 				remaining = distanceRemaining
 				bullet.currentPos = origin
-				PivotServerProjectileToBullet(bullet, bullet.currentPos)
+				PivotServerProjectileToBullet(bullet, bullet.currentPos, true)
 				continue
 			end
 
@@ -885,7 +1059,8 @@ function CombatManager.OnHeartbeat(dt: number)
 		end
 
 		bullet.currentPos = origin + shotDir * stepDist
-		PivotServerProjectileToBullet(bullet, bullet.currentPos)
+		-- visualModel 已经通过 LinearVelocity 自动平滑移动，无需每帧 PivotTo 造成客户端卡顿
+		-- PivotServerProjectileToBullet(bullet, bullet.currentPos)
 	end
 end
 
@@ -900,6 +1075,7 @@ function CombatManager.Init(onPlayerDead: OnPlayerDeadCallback)
 	end
 
 	EnsureServerBulletsFolder()
+	PrewarmProjectileTemplates()
 
 	LogInfo("Init success [server-authoritative mode]")
 end
@@ -1064,8 +1240,10 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 	local bulletData = if unitInfo then unitInfo.vehicleConfig.bulletData else nil
 	local bounces = if bulletData then bulletData.maxBounces else (GameConfig.ProjectileMaxBounces or 0)
 	local bulletResource = if bulletData then bulletData.resourceName else "ProjectileModel"
+	EnsurePreparedProjectileTemplate(bulletResource)
 
-	local visualModel = CreateServerProjectileVisual(player.UserId, spawnPos, shotDirection, bulletId, bulletResource)
+	local visualModel, physicsRoot, visualWeld, linearVelocity =
+		CreateServerProjectileVisual(player.UserId, spawnPos, shotDirection, bulletId, bulletResource)
 	activeServerBullets[bulletId] = {
 		shooterId = player.UserId,
 		spawnPos = spawnPos,
@@ -1075,7 +1253,11 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 		currentPos = spawnPos,
 		estimatedRtt = math.max(0, estimatedRtt),
 		visualModel = visualModel,
+		physicsRoot = physicsRoot,
+		visualWeld = visualWeld,
+		linearVelocity = linearVelocity,
 		visualSpawned = false,
+		physicsStarted = false,
 	}
 	-- 同步增加计数
 	shooterBulletCountMap[player.UserId] = (shooterBulletCountMap[player.UserId] or 0) + 1
