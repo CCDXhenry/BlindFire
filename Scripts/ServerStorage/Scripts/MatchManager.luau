@@ -621,7 +621,7 @@ function MatchManager.OnPlayerDead(player: Player, isDisconnect: boolean?, hitDi
 		end
 
 		task.spawn(function()
-			local fadeDuration = 2.0
+			local fadeDuration = 3.0
 			local steps = 20
 			for i = 1, steps do
 				task.wait(fadeDuration / steps)
