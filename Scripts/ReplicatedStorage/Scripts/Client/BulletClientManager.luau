@@ -512,11 +512,7 @@ function BulletClientManager.OnNotifyAfkState(playerId: number, isAfk: boolean)
 	end
 end
 
-function BulletClientManager.FireShot()
-	if not IsFightingDriveActive() then
-		return
-	end
-
+local function GetLocalConfiguredFireCooldown(): number
 	local cooldown = GameConfig.FireCooldown
 	local localInfo = ClientGameInfo.GetLocalPlayerInfo()
 	if localInfo then
@@ -525,6 +521,15 @@ function BulletClientManager.FireShot()
 			cooldown = vehicleData.fireCooldown
 		end
 	end
+	return cooldown
+end
+
+function BulletClientManager.FireShot()
+	if not IsFightingDriveActive() then
+		return
+	end
+
+	local cooldown = GetLocalConfiguredFireCooldown()
 
 	local now: number = tick()
 	if now - lastFireTime < cooldown then
@@ -553,20 +558,17 @@ function BulletClientManager.GetLocalHpInfo(): (number, number)
 end
 
 function BulletClientManager.GetLocalFireCooldownLeft(): number
-	local cooldown = GameConfig.FireCooldown
-	local localInfo = ClientGameInfo.GetLocalPlayerInfo()
-	if localInfo then
-		local vehicleData = GameConfig.VehicleDataMap[tonumber(localInfo.vehicleInventory.currentId) or 1]
-		if vehicleData then
-			cooldown = vehicleData.fireCooldown
-		end
-	end
+	local cooldown = GetLocalConfiguredFireCooldown()
 
 	local cooldownLeft = cooldown - (tick() - lastFireTime)
 	if cooldownLeft < 0 then
 		return 0
 	end
 	return cooldownLeft
+end
+
+function BulletClientManager.GetLocalFireCooldownSeconds(): number
+	return GetLocalConfiguredFireCooldown()
 end
 
 function BulletClientManager.GetMatchState(): GameConfig.MatchState
