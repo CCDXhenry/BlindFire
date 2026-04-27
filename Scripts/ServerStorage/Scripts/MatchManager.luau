@@ -388,17 +388,19 @@ local function TeleportAllPlayersToLobby()
 
 	local playerList = players:GetPlayers()
 	for i, player in ipairs(playerList) do
+		local playerIndex = i
+		local targetPlayer = player
 		task.spawn(function()
-			arenaTargetPositionMap[player.UserId] = nil
+			arenaTargetPositionMap[targetPlayer.UserId] = nil
 
 			local targetPos: Vector3? = nil
 			if #lobbyPoints > 0 then
-				local point = lobbyPoints[(i - 1) % #lobbyPoints + 1]
+				local point = lobbyPoints[(playerIndex - 1) % #lobbyPoints + 1]
 				local offset = Vector3.new((math.random() - 0.5) * 2, 0, (math.random() - 0.5) * 2)
 				targetPos = point.Position + Vector3.new(0, 4, 0) + offset
 			end
 
-			TeleportPlayerToLobby(player, true, targetPos)
+			TeleportPlayerToLobby(targetPlayer, true, targetPos)
 		end)
 	end
 end
