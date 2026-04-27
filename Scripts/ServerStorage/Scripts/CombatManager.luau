@@ -40,6 +40,7 @@ type ServerUnitInfo = {
 
 type ServerBullet = {
 	shooterId: number,
+	templateName: string,
 	spawnPos: Vector3,
 	shotDir: Vector3,
 	activeTime: number,
@@ -73,6 +74,7 @@ local PROJECTILE_VISUAL_WELD_NAME = "VisualWeld"
 local PROJECTILE_DRIVE_ATTACHMENT_NAME = "ProjectileDriveAttachment"
 local PROJECTILE_ALIGN_ORIENTATION_NAME = "ProjectileAlignOrientation"
 local PROJECTILE_LINEAR_VELOCITY_NAME = "ProjectileLinearVelocity"
+local PROJECTILE_POOL_LIMIT_PER_TEMPLATE = 24
 
 local serverBulletsFolder: Folder? = nil
 -- 缓存 Models Folder
@@ -580,6 +582,39 @@ local function IsServerProjectileModel(model: Model): boolean
 end
 
 local preparedProjectileTemplateMap: { [string]: Model? } = {}
+local pooledProjectileVisualMap: { [string]: { [number]: { model: Model, physicsRoot: BasePart, visualWeld: Motor6D, linearVelocity: LinearVelocity } } } = {}
+local raycastParamsPool: { RaycastParams } = {}
+local excludeListPool: { { Instance } } = {}
+
+local function AcquireRaycastParams(): RaycastParams
+	local rp = table.remove(raycastParamsPool)
+	if rp ~= nil then
+		return rp
+	end
+	local created = RaycastParams.new()
+	created.FilterType = Enum.RaycastFilterType.Exclude
+	return created
+end
+
+local function ReleaseRaycastParams(rp: RaycastParams)
+	rp.FilterType = Enum.RaycastFilterType.Exclude
+	rp.FilterDescendantsInstances = {}
+	table.insert(raycastParamsPool, rp)
+end
+
+local function AcquireExcludeList(): { Instance }
+	local list = table.remove(excludeListPool)
+	if list ~= nil then
+		table.clear(list)
+		return list
+	end
+	return {}
+end
+
+local function ReleaseExcludeList(list: { Instance })
+	table.clear(list)
+	table.insert(excludeListPool, list)
+end
 
 local function EnsurePreparedProjectileTemplate(templateName: string): Model?
 	local cached = preparedProjectileTemplateMap[templateName]
@@ -683,58 +718,129 @@ end
 
 local function CreateServerProjectileVisual(shooterId: number, spawnPos: Vector3, shotDir: Vector3, bulletId: string, modelName: string?): (Model?, BasePart?, Motor6D?, LinearVelocity?)
 	local templateName = modelName or "ProjectileModel"
-	local projectileTemplate = EnsurePreparedProjectileTemplate(templateName)
-	if projectileTemplate == nil then
-		return nil
+	local projectileModel: Model? = nil
+	local physicsRoot: BasePart? = nil
+	local rootWeld: Motor6D? = nil
+	local linearVelocity: LinearVelocity? = nil
+
+	local poolList = pooledProjectileVisualMap[templateName]
+	if poolList ~= nil and #poolList > 0 then
+		local reused = table.remove(poolList)
+		if reused ~= nil and reused.model.Parent == nil then
+			projectileModel = reused.model
+			physicsRoot = reused.physicsRoot
+			rootWeld = reused.visualWeld
+			linearVelocity = reused.linearVelocity
+		end
 	end
 
-	local projectileModel = projectileTemplate:Clone()
-	projectileModel.Name = SERVER_PROJECTILE_NAME_PREFIX .. bulletId
-	projectileModel:SetAttribute(SERVER_BULLET_SHOOTER_USER_ID_ATTR, shooterId)
-	projectileModel.Parent = EnsureServerBulletsFolder()
+	if projectileModel == nil then
+		local projectileTemplate = EnsurePreparedProjectileTemplate(templateName)
+		if projectileTemplate == nil then
+			return nil
+		end
+		local createdModel = projectileTemplate:Clone()
+		projectileModel = createdModel
+		local visualRoot = createdModel:FindFirstChild("Core")
+		if visualRoot == nil or not visualRoot:IsA("BasePart") then
+			createdModel:Destroy()
+			warn("[CombatManager] ProjectileModel.Core not found.")
+			return nil
+		end
 
-	local visualRoot = projectileModel:FindFirstChild("Core")
+		local clonedPhysicsRoot = createdModel:FindFirstChild(PROJECTILE_PHYSICS_ROOT_NAME)
+		if clonedPhysicsRoot == nil or not clonedPhysicsRoot:IsA("BasePart") then
+			createdModel:Destroy()
+			warn("[CombatManager] ProjectileModel.PhysicsRoot not found.")
+			return nil
+		end
+		createdModel.PrimaryPart = clonedPhysicsRoot
+
+		local clonedRootWeld = clonedPhysicsRoot:FindFirstChild(PROJECTILE_VISUAL_WELD_NAME)
+		local clonedLinearVelocity = clonedPhysicsRoot:FindFirstChild(PROJECTILE_LINEAR_VELOCITY_NAME)
+		if clonedRootWeld == nil or not clonedRootWeld:IsA("Motor6D") then
+			createdModel:Destroy()
+			warn("[CombatManager] ProjectileModel.VisualWeld not found.")
+			return nil
+		end
+		if clonedLinearVelocity == nil or not clonedLinearVelocity:IsA("LinearVelocity") then
+			createdModel:Destroy()
+			warn("[CombatManager] ProjectileModel.ProjectileLinearVelocity not found.")
+			return nil
+		end
+		physicsRoot = clonedPhysicsRoot
+		rootWeld = clonedRootWeld
+		linearVelocity = clonedLinearVelocity
+	end
+
+	local projectileModelRef = projectileModel :: Model
+	local physicsRootRef = physicsRoot :: BasePart
+	local rootWeldRef = rootWeld :: Motor6D
+	local linearVelocityRef = linearVelocity :: LinearVelocity
+
+	projectileModelRef.Parent = EnsureServerBulletsFolder()
+	projectileModelRef.Name = SERVER_PROJECTILE_NAME_PREFIX .. bulletId
+	projectileModelRef:SetAttribute(SERVER_BULLET_SHOOTER_USER_ID_ATTR, shooterId)
+	projectileModelRef.PrimaryPart = physicsRootRef
+
+	local visualRoot = projectileModelRef:FindFirstChild("Core")
 	if visualRoot == nil or not visualRoot:IsA("BasePart") then
-		projectileModel:Destroy()
-		warn("[CombatManager] ProjectileModel.Core not found.")
+		projectileModelRef:Destroy()
 		return nil
 	end
-
-	local physicsRoot = projectileModel:FindFirstChild(PROJECTILE_PHYSICS_ROOT_NAME)
-	if physicsRoot == nil or not physicsRoot:IsA("BasePart") then
-		projectileModel:Destroy()
-		warn("[CombatManager] ProjectileModel.PhysicsRoot not found.")
-		return nil
-	end
-	projectileModel.PrimaryPart = physicsRoot
 
 	local flatShot = ToHorizontalDirection(shotDir)
-	local rootWeld = physicsRoot:FindFirstChild(PROJECTILE_VISUAL_WELD_NAME)
-	local linearVelocity = physicsRoot:FindFirstChild(PROJECTILE_LINEAR_VELOCITY_NAME)
-	if rootWeld == nil or not rootWeld:IsA("Motor6D") then
-		projectileModel:Destroy()
-		warn("[CombatManager] ProjectileModel.VisualWeld not found.")
-		return nil
-	end
-	if linearVelocity == nil or not linearVelocity:IsA("LinearVelocity") then
-		projectileModel:Destroy()
-		warn("[CombatManager] ProjectileModel.ProjectileLinearVelocity not found.")
-		return nil
-	end
-	rootWeld.Part0 = physicsRoot
-	rootWeld.Part1 = visualRoot
-	rootWeld.C0 = CFrame.lookAt(Vector3.zero, flatShot)
-	linearVelocity.VectorVelocity = Vector3.zero
-	
+	rootWeldRef.Part0 = physicsRootRef
+	rootWeldRef.Part1 = visualRoot
+	rootWeldRef.C0 = CFrame.lookAt(Vector3.zero, flatShot)
+	linearVelocityRef.VectorVelocity = Vector3.zero
+	physicsRootRef.AssemblyLinearVelocity = Vector3.zero
+	physicsRootRef.AssemblyAngularVelocity = Vector3.zero
+
 	-- SAFELY move the whole assembly to spawnPos
-	projectileModel:PivotTo(CFrame.new(spawnPos))
-	
+	projectileModelRef:PivotTo(CFrame.new(spawnPos))
+
 	-- Server assumes physics ownership for reliable replication
 	pcall(function()
-		physicsRoot:SetNetworkOwner(nil)
+		physicsRootRef:SetNetworkOwner(nil)
 	end)
 
-	return projectileModel, physicsRoot, rootWeld, linearVelocity
+	return projectileModelRef, physicsRootRef, rootWeldRef, linearVelocityRef
+end
+
+local function RecycleServerProjectileVisual(templateName: string, model: Model?, physicsRoot: BasePart?, visualWeld: Motor6D?, linearVelocity: LinearVelocity?)
+	if model == nil or physicsRoot == nil or visualWeld == nil or linearVelocity == nil then
+		if model ~= nil then
+			model:Destroy()
+		end
+		return
+	end
+	if model.Parent == nil then
+		return
+	end
+
+	physicsRoot.AssemblyLinearVelocity = Vector3.zero
+	physicsRoot.AssemblyAngularVelocity = Vector3.zero
+	linearVelocity.VectorVelocity = Vector3.zero
+	model:SetAttribute(SERVER_BULLET_SHOOTER_USER_ID_ATTR, nil)
+	model.Name = "PooledProjectile"
+	model.Parent = nil
+
+	local poolList = pooledProjectileVisualMap[templateName]
+	if poolList == nil then
+		poolList = {}
+		pooledProjectileVisualMap[templateName] = poolList
+	end
+	if #poolList >= PROJECTILE_POOL_LIMIT_PER_TEMPLATE then
+		model:Destroy()
+		return
+	end
+	table.insert(poolList, {
+		model = model,
+		physicsRoot = physicsRoot,
+		visualWeld = visualWeld,
+		linearVelocity = linearVelocity,
+	})
 end
 
 local function PivotServerProjectileToBullet(bullet: ServerBullet, displayPos: Vector3, instantSnap: boolean?)
@@ -773,9 +879,7 @@ local function DestroyServerBullet(bulletId: string)
 	if bullet == nil then
 		return
 	end
-	if bullet.visualModel ~= nil and bullet.visualModel.Parent ~= nil then
-		bullet.visualModel:Destroy()
-	end
+	RecycleServerProjectileVisual(bullet.templateName, bullet.visualModel, bullet.physicsRoot, bullet.visualWeld, bullet.linearVelocity)
 	-- 同步减少计数
 	local sid = bullet.shooterId
 	if shooterBulletCountMap[sid] ~= nil then
@@ -929,9 +1033,12 @@ function CombatManager.OnHeartbeat(dt: number)
 		local shotDir = bullet.shotDir
 		local remaining = stepDist + GameConfig.ProjectileStepMargin
 
-		local rayParams = RaycastParams.new()
-		rayParams.FilterType = Enum.RaycastFilterType.Exclude
-		local excludeList: { Instance } = {}
+		local rayParams = AcquireRaycastParams()
+		local excludeList = AcquireExcludeList()
+		local function ReleaseRaycastContext()
+			ReleaseRaycastParams(rayParams)
+			ReleaseExcludeList(excludeList)
+		end
 
 		local shooterUnitInfo = unitInfoMap[bullet.shooterId]
 		if shooterUnitInfo and shooterUnitInfo.unitModel then
@@ -946,7 +1053,7 @@ function CombatManager.OnHeartbeat(dt: number)
 		-- Or if not configured, we keep self in exclude list.
 		if GameConfig.CanHitSelf and bullet.bouncesLeft < (GameConfig.ProjectileMaxBounces or 0) then
 			-- It bounced at least once, can hit self, so don't exclude self.
-			excludeList = {}
+			table.clear(excludeList)
 		end
 
 		rayParams.FilterDescendantsInstances = excludeList
@@ -1011,6 +1118,7 @@ function CombatManager.OnHeartbeat(dt: number)
 				if targetId ~= bullet.shooterId or GameConfig.CanHitSelf then
 					ResolveProjectileHit(bullet.shooterId, targetId, shotDir, bulletId, hitResult.Position)
 				end
+				ReleaseRaycastContext()
 				DestroyServerBullet(bulletId)
 				continue
 			end
@@ -1051,14 +1159,17 @@ function CombatManager.OnHeartbeat(dt: number)
 				remaining = distanceRemaining
 				bullet.currentPos = origin
 				PivotServerProjectileToBullet(bullet, bullet.currentPos, true)
+				ReleaseRaycastContext()
 				continue
 			end
 
+			ReleaseRaycastContext()
 			DestroyServerBullet(bulletId)
 			continue
 		end
 
 		bullet.currentPos = origin + shotDir * stepDist
+		ReleaseRaycastContext()
 		-- visualModel 已经通过 LinearVelocity 自动平滑移动，无需每帧 PivotTo 造成客户端卡顿
 		-- PivotServerProjectileToBullet(bullet, bullet.currentPos)
 	end
@@ -1246,6 +1357,7 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 		CreateServerProjectileVisual(player.UserId, spawnPos, shotDirection, bulletId, bulletResource)
 	activeServerBullets[bulletId] = {
 		shooterId = player.UserId,
+		templateName = bulletResource,
 		spawnPos = spawnPos,
 		shotDir = shotDirection,
 		activeTime = bulletLaunchTime,
