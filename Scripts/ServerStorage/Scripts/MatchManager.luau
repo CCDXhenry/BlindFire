@@ -34,6 +34,7 @@ local seatRetryCountMap: { [number]: number } = {}
 local arenaTargetPositionMap: { [number]: Vector3 } = {}
 
 local currentMatchState: GameConfig.MatchState = "InLobby"
+local lastLobbySpawnIndex = 0
 local roundWorkerThread: thread? = nil
 local roundStartCallback: OnRoundStartCallback? = nil
 local isStopRequested: boolean = false
@@ -304,27 +305,33 @@ local function StabilizeArenaPlayers()
 	end
 end
 
-local function TeleportPlayerToLobby(player: Player, reloadCharacter: boolean?)
-	local targetPosition: Vector3? = nil
+local function TeleportPlayerToLobby(player: Player, reloadCharacter: boolean?, forcedTargetPosition: Vector3?)
+	local targetPosition: Vector3? = forcedTargetPosition
 
-	-- Try fixed spawn points first
-	local spawnPointsFolder = workspace:FindFirstChild(LOBBY_SPAWN_POINTS_FOLDER_NAME)
-	if spawnPointsFolder then
-		local points = {}
-		for _, child in spawnPointsFolder:GetChildren() do
-			if child:IsA("BasePart") and string.find(child.Name, "Spawn_") then
-				table.insert(points, child)
+	if targetPosition == nil then
+		-- Try fixed spawn points first
+		local spawnPointsFolder = workspace:FindFirstChild(LOBBY_SPAWN_POINTS_FOLDER_NAME)
+		if spawnPointsFolder then
+			local points = {}
+			for _, child in spawnPointsFolder:GetChildren() do
+				if child:IsA("BasePart") and string.find(child.Name, "Spawn_") then
+					table.insert(points, child)
+				end
 			end
-		end
 
-		if #points > 0 then
-			local chosenPart = points[math.random(1, #points)]
-			targetPosition = chosenPart.Position + Vector3.new(0, 4, 0)
-			LogInfo(string.format("Using fixed lobby spawn point: %s", chosenPart.Name))
+			if #points > 0 then
+				-- Use cycling index instead of pure random for better distribution
+				lastLobbySpawnIndex = (lastLobbySpawnIndex % #points) + 1
+				local chosenPart = points[lastLobbySpawnIndex]
+				-- Add a small random offset to prevent perfect overlap even if multiple players spawn on the same point
+				local offset = Vector3.new((math.random() - 0.5) * 2, 0, (math.random() - 0.5) * 2)
+				targetPosition = chosenPart.Position + Vector3.new(0, 4, 0) + offset
+				LogInfo(string.format("Using fixed lobby spawn point: %s (cycled index %d)", chosenPart.Name, lastLobbySpawnIndex))
+			end
 		end
 	end
 
-	-- Fallback to random area if no fixed points found
+	-- Fallback to random area if no fixed points found and no target position
 	if targetPosition == nil then
 		local lobbySpawnPart = workspace:FindFirstChild(LOBBY_SPAWN_NAME)
 		if lobbySpawnPart == nil or not lobbySpawnPart:IsA("BasePart") then
@@ -360,10 +367,38 @@ end
 
 local function TeleportAllPlayersToLobby()
 	CombatManager.DestroyAllUnits()
-	for _, player in players:GetPlayers() do
+
+	local lobbyPoints: { BasePart } = {}
+	local spawnPointsFolder = workspace:FindFirstChild(LOBBY_SPAWN_POINTS_FOLDER_NAME)
+	if spawnPointsFolder then
+		for _, child in spawnPointsFolder:GetChildren() do
+			if child:IsA("BasePart") and string.find(child.Name, "Spawn_") then
+				table.insert(lobbyPoints, child)
+			end
+		end
+	end
+
+	-- Shuffle lobby points if available for variety
+	if #lobbyPoints > 0 then
+		for i = #lobbyPoints, 2, -1 do
+			local j = math.random(1, i)
+			lobbyPoints[i], lobbyPoints[j] = lobbyPoints[j], lobbyPoints[i]
+		end
+	end
+
+	local playerList = players:GetPlayers()
+	for i, player in ipairs(playerList) do
 		task.spawn(function()
 			arenaTargetPositionMap[player.UserId] = nil
-			TeleportPlayerToLobby(player, true)
+
+			local targetPos: Vector3? = nil
+			if #lobbyPoints > 0 then
+				local point = lobbyPoints[(i - 1) % #lobbyPoints + 1]
+				local offset = Vector3.new((math.random() - 0.5) * 2, 0, (math.random() - 0.5) * 2)
+				targetPos = point.Position + Vector3.new(0, 4, 0) + offset
+			end
+
+			TeleportPlayerToLobby(player, true, targetPos)
 		end)
 	end
 end
