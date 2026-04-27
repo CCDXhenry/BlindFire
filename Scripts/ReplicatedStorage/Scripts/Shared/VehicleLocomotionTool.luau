@@ -443,7 +443,8 @@ end
 ]]
 function VehicleLocomotionTool.ResolveAllVehicleBumps(
 	unitInfoMap: { [number]: VehicleBumpUnitInfo & { vehicleConfig: any? } },
-	shouldInclude: ((number) -> boolean)?
+	shouldInclude: ((number) -> boolean)?,
+	onBumpResolved: ((playerIdA: number, playerIdB: number, impactPosition: Vector3) -> ())?
 )
 	local now = os.clock()
 	local cd = GameConfig.VehicleBumpCooldown
@@ -504,6 +505,11 @@ function VehicleLocomotionTool.ResolveAllVehicleBumps(
 
 			reflectTargetVelForVehicleBump(uA, bumpDir, speedA)
 			reflectTargetVelForVehicleBump(uB, -bumpDir, speedB)
+
+			if onBumpResolved ~= nil then
+				local impactPosition = (rootA.Position + rootB.Position) * 0.5
+				onBumpResolved(idA, idB, impactPosition)
+			end
 		end
 	end
 end

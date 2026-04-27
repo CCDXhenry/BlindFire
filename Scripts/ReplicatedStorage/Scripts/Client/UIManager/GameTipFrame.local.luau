@@ -84,6 +84,14 @@ local addRewardsTipTweens: { [Frame]: { tween1: Tween, tween2: Tween } } = {}
 local addRewardTipFramePool: { Frame } = {}
 local getCoinSound: Sound = (soundFolder:FindFirstChild("GetCoinSound") :: Sound):Clone()
 getCoinSound.Parent = soundService
+local killSoundOrigin = soundFolder:FindFirstChild("KillSound")
+local victorySoundOrigin = soundFolder:FindFirstChild("VictorySound")
+if killSoundOrigin == nil then
+	warn("[GameTipFrame] KillSound not found in ReplicatedStorage.Sounds.")
+end
+if victorySoundOrigin == nil then
+	warn("[GameTipFrame] VictorySound not found in ReplicatedStorage.Sounds.")
+end
 --GameTipText
 local gameTipTextOrigin: TextLabel = gameTipFrame:FindFirstChild("GameTipText") :: TextLabel
 gameTipTextOrigin.Parent = nil
@@ -526,12 +534,27 @@ local function OnNotifyRoundOutcome(endReason: GameConfig.RoundEndReason, aliveU
 	end
 	if endReason == "LastStanding" and #aliveUserIds == 1 then
 		ShowGameTip(GameTexts.RoundVictory.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundVictory.key, nil, TOP_TIP_SUCCESS_COLOR)
+		if victorySoundOrigin ~= nil and victorySoundOrigin:IsA("Sound") then
+			SoundTool.PlayGlobalSoundEffect(victorySoundOrigin, false)
+		end
 	elseif endReason == "TimeExpired" then
 		if #aliveUserIds == 1 then
 			ShowGameTip(GameTexts.RoundVictory.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundVictory.key, nil, TOP_TIP_SUCCESS_COLOR)
+			if victorySoundOrigin ~= nil and victorySoundOrigin:IsA("Sound") then
+				SoundTool.PlayGlobalSoundEffect(victorySoundOrigin, false)
+			end
 		else
 			ShowGameTip(GameTexts.RoundTimeDraw.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundTimeDraw.key, nil, TOP_TIP_DEFAULT_COLOR)
 		end
+	end
+end
+
+local function OnNotifyDeadForKillSound(_playerId: number, killerId: number?)
+	if killerId ~= players.LocalPlayer.UserId then
+		return
+	end
+	if killSoundOrigin ~= nil and killSoundOrigin:IsA("Sound") then
+		SoundTool.PlayGlobalSoundEffect(killSoundOrigin, false)
 	end
 end
 
@@ -577,6 +600,7 @@ ClientMsg.ConnectShowTopTipText(OnShowTopTipText)
 NetMsg.ConnectNotifyMatchState(OnNotifyMatchState)
 NetMsg.ConnectNotifyRoundOutcome(OnNotifyRoundOutcome)
 NetMsg.ConnectNotifyDead(OnNotifyDeadForRoundTip)
+NetMsg.ConnectNotifyDead(OnNotifyDeadForKillSound)
 
 NetMsg.ConnectNotifyHit(function(targetPlayerId, fromPlayerId, hitDirection, hitCount)
 	if targetPlayerId == players.LocalPlayer.UserId then

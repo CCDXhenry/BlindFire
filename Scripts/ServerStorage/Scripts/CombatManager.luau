@@ -514,6 +514,8 @@ local function StepVehicleSimulation(dt: number)
 		VehicleLocomotionTool.ResolveAllVehicleBumps(unitInfoMap :: any, function(playerIdForBump: number): boolean
 			local roundInfoForBump = PlayerStateManager.GetAllPlayerRoundInfoMap()[playerIdForBump]
 			return roundInfoForBump ~= nil and roundInfoForBump.isParticipant and roundInfoForBump.isAlive
+		end, function(_playerIdA: number, _playerIdB: number, impactPosition: Vector3)
+			NetMsg.FireNotifyImpact(impactPosition)
 		end)
 	end
 end

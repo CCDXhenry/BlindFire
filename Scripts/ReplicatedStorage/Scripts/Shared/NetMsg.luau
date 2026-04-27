@@ -24,6 +24,7 @@ local notifyHitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyHit
 local notifyHpChangedEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyHpChanged") :: RemoteEvent
 local notifyDeadEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyDead") :: RemoteEvent
 local notifyRoundOutcomeEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyRoundOutcome") :: RemoteEvent
+local notifyImpactEvent: RemoteEvent? = remoteEventsFolder:FindFirstChild("NotifyImpact") :: RemoteEvent?
 local notifyMatchStateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyMatchState") :: RemoteEvent
 local notifyTeleportEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyTeleport") :: RemoteEvent
 local notifyArenaSeatPrepareEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyArenaSeatPrepare") :: RemoteEvent
@@ -235,6 +236,20 @@ end
 
 function NetMsg.ConnectNotifyRoundOutcome(callback: (endReason: GameConfig.RoundEndReason, aliveUserIds: { number }) -> ())
 	notifyRoundOutcomeEvent.OnClientEvent:Connect(callback)
+end
+
+function NetMsg.FireNotifyImpact(hitPosition: Vector3)
+	if notifyImpactEvent == nil then
+		return
+	end
+	notifyImpactEvent:FireAllClients(hitPosition)
+end
+
+function NetMsg.ConnectNotifyImpact(callback: (hitPosition: Vector3) -> ())
+	if notifyImpactEvent == nil then
+		return
+	end
+	notifyImpactEvent.OnClientEvent:Connect(callback)
 end
 
 function NetMsg.FireNotifyMatchState(matchState: GameConfig.MatchState, countdown: number)

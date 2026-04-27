@@ -9,6 +9,10 @@ local scripts = replicatedStorage:WaitForChild("Scripts")
 local sharedScripts = scripts:WaitForChild("Shared")
 local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
 local NetMsg = require(sharedScripts:FindFirstChild("NetMsg"))
+local core = replicatedStorage:WaitForChild("Core")
+local coreScripts = core:WaitForChild("Scripts")
+local coreSharedScripts = coreScripts:WaitForChild("Shared")
+local SoundTool = require(coreSharedScripts:FindFirstChild("SoundTool"))
 local clientScripts = scripts:WaitForChild("Client")
 local ClientGameInfo = require(clientScripts:FindFirstChild("ClientGameInfo"))
 
@@ -68,6 +72,42 @@ local _hasWarnedMissingTurretActuator: boolean = false
 local isLocalAfk: boolean = false
 
 local HttpService = game:GetService("HttpService")
+local soundOriginsFolder = replicatedStorage:FindFirstChild("Sounds")
+local fireSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("FireSound") else nil
+local hitSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("HitSound") else nil
+local impactSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("ImpactSound") else nil
+local deathSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("DeathSound") else nil
+
+if soundOriginsFolder == nil then
+	warn("[BulletClientManager] Sounds folder not found in ReplicatedStorage.")
+else
+	if fireSoundOrigin == nil then
+		warn("[BulletClientManager] FireSound not found in ReplicatedStorage.Sounds.")
+	end
+	if hitSoundOrigin == nil then
+		warn("[BulletClientManager] HitSound not found in ReplicatedStorage.Sounds.")
+	end
+	if impactSoundOrigin == nil then
+		warn("[BulletClientManager] ImpactSound not found in ReplicatedStorage.Sounds.")
+	end
+	if deathSoundOrigin == nil then
+		warn("[BulletClientManager] DeathSound not found in ReplicatedStorage.Sounds.")
+	end
+end
+
+local function PlayLocalCombatSound(soundOrigin: Instance?, worldPosition: Vector3)
+	if soundOrigin == nil or not soundOrigin:IsA("Sound") then
+		return
+	end
+	SoundTool.PlayLocalSoundEffect(soundOrigin, worldPosition, false)
+end
+
+local function PlayGlobalCombatSound(soundOrigin: Instance?)
+	if soundOrigin == nil or not soundOrigin:IsA("Sound") then
+		return
+	end
+	SoundTool.PlayGlobalSoundEffect(soundOrigin, false)
+end
 
 local function GetModelsFolder(): Folder
 	return replicatedStorage:WaitForChild("Models") :: Folder
@@ -212,6 +252,7 @@ function BulletClientManager.Init()
 	NetMsg.ConnectNotifyHit(BulletClientManager.OnHit)
 	NetMsg.ConnectNotifyHpChanged(BulletClientManager.OnHpChanged)
 	NetMsg.ConnectNotifyDead(BulletClientManager.OnDead)
+	NetMsg.ConnectNotifyImpact(BulletClientManager.OnImpact)
 	NetMsg.ConnectNotifyTeleport(BulletClientManager.OnTeleport)
 	NetMsg.ConnectNotifyMatchState(BulletClientManager.OnMatchStateChanged)
 	NetMsg.ConnectNotifyAfkState(BulletClientManager.OnNotifyAfkState)
@@ -436,11 +477,15 @@ function BulletClientManager.PlayRecoilAnimation(state: ClientUnitState)
 end
 
 function BulletClientManager.OnFireAccepted(playerId: number, _fireTime: number, _spawnPos: Vector3, _shotDir: Vector3, _serverTime: number, _bulletId: string)
+	local state = unitStateMap[playerId]
+	if state ~= nil then
+		PlayLocalCombatSound(fireSoundOrigin, state.unitPart.Position)
+	end
+
 	if playerId == localPlayerId then
 		return
 	end
 
-	local state = unitStateMap[playerId]
 	if state ~= nil then
 		state.spinDir = -state.spinDir
 		state.spinDampingUntil = os.clock() + GameConfig.SpinDampingDuration
@@ -461,6 +506,7 @@ function BulletClientManager.OnHit(
 	if targetState == nil then
 		return
 	end
+	PlayGlobalCombatSound(hitSoundOrigin)
 	targetState.spinDir = (math.random(0, 1) == 0) and 1 or -1
 	local sign = (math.random(0, 1) == 0) and 1 or -1
 	targetState.spinImpulseRadPerSec += GameConfig.TurretSpinImpulseOnHitRadPerSec * sign
@@ -494,6 +540,13 @@ function BulletClientManager.OnDead(playerId: number)
 	end
 	state.targetVelX = 0
 	state.targetVelZ = 0
+	if playerId == localPlayerId then
+		PlayGlobalCombatSound(deathSoundOrigin)
+	end
+end
+
+function BulletClientManager.OnImpact(hitPosition: Vector3)
+	PlayLocalCombatSound(impactSoundOrigin, hitPosition)
 end
 
 function BulletClientManager.OnTeleport(_playerId: number, _targetPosition: Vector3) end
