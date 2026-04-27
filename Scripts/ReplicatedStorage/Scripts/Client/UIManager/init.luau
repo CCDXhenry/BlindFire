@@ -9,7 +9,9 @@ local UserInutExtension = require(coreClientScripts:FindFirstChild("UserInutExte
 local uiOriginsFolder: Folder = replicatedStorage:FindFirstChild("UI") :: Folder
 local scripts = replicatedStorage:WaitForChild("Scripts")
 local clientScripts = scripts:WaitForChild("Client")
+local sharedScripts = scripts:WaitForChild("Shared")
 local BillboardManager = require(clientScripts:WaitForChild("BillboardManager"))
+local GameConfig = require(sharedScripts:WaitForChild("GameConfig"))
 local PlayerInfoUIManager = require(script:WaitForChild("PlayerInfoUIManager"))
 local ConfigUIManager = require(script:WaitForChild("ConfigUIManager"))
 local KillFeedManager = require(script:WaitForChild("KillFeedManager"))
@@ -131,7 +133,9 @@ function UIManager.Init(gameScreenGuiNew: ScreenGui)
 	--玩家血条管理
 	PlayerInfoUIManager.Init()
 	--参数配置 UI 管理
-	ConfigUIManager.Init()
+	if game.GameId ~= GameConfig.GameId then
+		ConfigUIManager.Init()
+	end
 	--角落击败显示栏 UI 管理
 	KillFeedManager.Init(gameScreenGui)
 end
