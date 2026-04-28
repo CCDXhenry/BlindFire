@@ -125,6 +125,17 @@ local function GetVehicleTemplate(modelName: string): Model?
 	return vehicleTemplate
 end
 
+local function getVehicleIdFromUnitInfo(unitInfo: ServerUnitInfo): number
+	local cfg = unitInfo.vehicleConfig
+	if typeof(cfg) == "table" and cfg ~= nil then
+		local id = (cfg :: any).id
+		if typeof(id) == "number" then
+			return id
+		end
+	end
+	return 1
+end
+
 local function GetRandomMoveAngle(): number
 	return math.random(0, 359)
 end
@@ -544,6 +555,7 @@ local function _BroadcastUnitInit(unitInfo: ServerUnitInfo)
 		spawnPosition = unitInfo.rootPart.Position,
 		maxHits = maxHits,
 		isParticipant = if playerRoundInfo then playerRoundInfo.isParticipant else false,
+		vehicleId = getVehicleIdFromUnitInfo(unitInfo),
 	}
 	NetMsg.FireNotifyUnitInitToAll(unitInitInfo)
 	NetMsg.FireNotifyHpChanged(unitInfo.playerId, 0, maxHits)
@@ -1213,6 +1225,7 @@ function CombatManager.SyncToPlayer(player: Player)
 			spawnPosition = otherUnitInfo.rootPart.Position,
 			maxHits = maxHits,
 			isParticipant = if otherRoundInfo then otherRoundInfo.isParticipant else false,
+			vehicleId = getVehicleIdFromUnitInfo(otherUnitInfo),
 		})
 
 		-- Sync current HP
@@ -1429,6 +1442,7 @@ function CombatManager.StartRound(participantIds: { number })
 			spawnPosition = unitInfo.rootPart.Position,
 			maxHits = maxHits,
 			isParticipant = true, -- StartRound implies all passed IDs are participants
+			vehicleId = getVehicleIdFromUnitInfo(unitInfo),
 		})
 		NetMsg.FireNotifyHpChanged(playerId, 0, maxHits)
 		LogInfo(string.format("StartRoundReset userId=%d moveAngle=%d spinDir=%d", playerId, unitInfo.moveAngle, unitInfo.spinDir))

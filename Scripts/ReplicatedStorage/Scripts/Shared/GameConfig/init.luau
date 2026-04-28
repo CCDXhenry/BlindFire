@@ -143,6 +143,8 @@ export type VehicleData = {
 	fireCooldown: number,
 	moveSpeed: number,
 	bulletData: BulletData?,
+	-- 来自载具模板 Attribute PlayerInfoUIOffset；客户端为在 PlayerInfoUI 模板 StudsOffset 上的附加偏移
+	playerInfoUIOffset: Vector3,
 }
 
 export type VehicleInventory = {
@@ -457,6 +459,8 @@ export type UnitInitInfo = {
 	maxHits: number,
 	-- 是否为当前回合参赛者
 	isParticipant: boolean,
+	-- 当前单位所用载具配置 id（用于客户端查 VehicleDataMap 等）
+	vehicleId: number,
 }
 
 GameConfig.VisibleParameters = {
@@ -496,6 +500,27 @@ local VehiclesData = require(script.VehiclesData)
 GameConfig.BulletDataMap = BulletData :: { [number]: BulletData }
 GameConfig.VehicleDataMap = {} :: { [number]: VehicleData }
 
+local PlayerInfoUiOffsetAttributeName = "PlayerInfoUIOffset"
+local modelsFolderForVehicleTemplates = replicatedStorage:FindFirstChild("Models") :: Folder?
+local vehicleTemplatesFolder = if modelsFolderForVehicleTemplates
+	then modelsFolderForVehicleTemplates:FindFirstChild("Vehicles") :: Folder?
+	else nil
+
+local function readPlayerInfoUiOffsetFromVehicleTemplate(resourceName: string): Vector3
+	if vehicleTemplatesFolder == nil then
+		return Vector3.zero
+	end
+	local template = vehicleTemplatesFolder:FindFirstChild(resourceName)
+	if template == nil or not template:IsA("Model") then
+		return Vector3.zero
+	end
+	local raw = template:GetAttribute(PlayerInfoUiOffsetAttributeName)
+	if typeof(raw) == "Vector3" then
+		return raw
+	end
+	return Vector3.zero
+end
+
 for id, data in pairs(VehiclesData) do
 	local vehicle: VehicleData = {
 		id = data.id,
@@ -511,6 +536,7 @@ for id, data in pairs(VehiclesData) do
 		maxHits = data.maxHits or GameConfig.MaxHits,
 		fireCooldown = data.fireCooldown or GameConfig.FireCooldown,
 		moveSpeed = data.moveSpeed,
+		playerInfoUIOffset = readPlayerInfoUiOffsetFromVehicleTemplate(data.resourceName),
 	}
 	if vehicle.bulletId then
 		vehicle.bulletData = BulletData[vehicle.bulletId]

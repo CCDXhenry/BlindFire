@@ -13,10 +13,12 @@ local BillboardManager = require(clientScripts:WaitForChild("BillboardManager"))
 local BulletClientManager = require(clientScripts:WaitForChild("BulletClientManager"))
 
 local playerInfoUITemplate = replicatedStorage:WaitForChild("UI"):WaitForChild("PlayerInfoUI") :: BillboardGui
+local PlayerInfoUiTemplateStudsOffset: Vector3 = playerInfoUITemplate.StudsOffset
 
 type PlayerInfoUIRecord = {
 	ui: BillboardGui,
 	isParticipant: boolean,
+	vehicleId: number,
 	fireRingCooldownText: TextLabel?,
 	fireRingSegments: { Frame }?,
 	fireRingWasCoolingDown: boolean,
@@ -202,12 +204,24 @@ local function UpdateUIVisibility(ui: BillboardGui, isParticipant: boolean)
 	end
 end
 
-local function CreateUIForPlayer(playerId: number, isParticipant: boolean)
+-- PlayerInfoUIOffset 为在模板 BillboardGui.StudsOffset 基础上的附加偏移；仅在 CreateUIForPlayer 时按载具设一次
+local function updatePlayerInfoUiStudsOffsetFromVehicle(playerId: number)
+	local data = playerUIMap[playerId]
+	if data == nil then
+		return
+	end
+	local vehicleData = GameConfig.VehicleDataMap[data.vehicleId]
+	local extra = if vehicleData then vehicleData.playerInfoUIOffset else Vector3.zero
+	data.ui.StudsOffset = PlayerInfoUiTemplateStudsOffset + extra
+end
+
+local function CreateUIForPlayer(playerId: number, isParticipant: boolean, vehicleId: number)
 	local existingRecord = playerUIMap[playerId]
 	local ui: BillboardGui?
 	
 	if existingRecord and existingRecord.ui.Parent ~= nil then
 		existingRecord.isParticipant = isParticipant
+		existingRecord.vehicleId = vehicleId
 		ui = existingRecord.ui
 	else
 		-- If UI was destroyed but still in map, clean up before recreating
@@ -264,6 +278,7 @@ local function CreateUIForPlayer(playerId: number, isParticipant: boolean)
 		playerUIMap[playerId] = {
 			ui = ui :: BillboardGui,
 			isParticipant = isParticipant,
+			vehicleId = vehicleId,
 			fireRingCooldownText = nil,
 			fireRingSegments = nil,
 			fireRingWasCoolingDown = false,
@@ -282,6 +297,7 @@ local function CreateUIForPlayer(playerId: number, isParticipant: boolean)
 	end
 
 	ConfigureFireCooldownRing(playerId)
+	updatePlayerInfoUiStudsOffsetFromVehicle(playerId)
 end
 
 RemoveUIForPlayer = function(playerId: number)
@@ -301,7 +317,7 @@ end
 
 function PlayerInfoUIManager.Init()
 	NetMsg.ConnectNotifyUnitInit(function(unitInitInfo)
-		CreateUIForPlayer(unitInitInfo.playerId, unitInitInfo.isParticipant)
+		CreateUIForPlayer(unitInitInfo.playerId, unitInitInfo.isParticipant, unitInitInfo.vehicleId)
 		UpdateHpUI(unitInitInfo.playerId, 0, unitInitInfo.maxHits)
 	end)
 
