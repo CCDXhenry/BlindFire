@@ -1127,7 +1127,7 @@ function CombatManager.OnHeartbeat(dt: number)
 			local inst = res.Instance
 			local shouldPass = false
 			if inst:IsA("BasePart") then
-				if inst.Name == "ArenaFloor" then
+				if inst.Name == "ArenaFloor" or inst.Name == "Ground" then
 					shouldPass = true
 				else
 					local tm = inst:FindFirstAncestorOfClass("Model")
@@ -1397,7 +1397,7 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 				break
 			end
 
-			if res.Instance.Name == "ArenaFloor" then
+			if res.Instance.Name == "ArenaFloor" or res.Instance.Name == "Ground" then
 				table.insert(excludeList, res.Instance)
 				rayParams.FilterDescendantsInstances = excludeList
 				curOrigin = res.Position + dir * 0.01
