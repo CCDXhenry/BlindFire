@@ -77,6 +77,8 @@ local fireSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstC
 local hitSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("HitSound") else nil
 local impactSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("ImpactSound") else nil
 local deathSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("DeathSound") else nil
+local unitFireSoundCache: { [Model]: Instance } = {}
+local unitMissingFireSoundCache: { [Model]: boolean } = {}
 
 if soundOriginsFolder == nil then
 	warn("[BulletClientManager] Sounds folder not found in ReplicatedStorage.")
@@ -107,6 +109,40 @@ local function PlayGlobalCombatSound(soundOrigin: Instance?)
 		return
 	end
 	SoundTool.PlayGlobalSoundEffect(soundOrigin, false)
+end
+
+local function ClearCachedFireSoundForModel(unitModel: Model?)
+	if unitModel == nil then
+		return
+	end
+	unitFireSoundCache[unitModel] = nil
+	unitMissingFireSoundCache[unitModel] = nil
+end
+
+local function ResolveFireSound(unitModel: Model?): Instance?
+	if unitModel == nil then
+		return fireSoundOrigin
+	end
+
+	local cachedFireSound = unitFireSoundCache[unitModel]
+	if cachedFireSound ~= nil then
+		return cachedFireSound
+	end
+	if unitMissingFireSoundCache[unitModel] then
+		return fireSoundOrigin
+	end
+
+	local modelFireSound = unitModel:FindFirstChild("FireSound", true)
+	if modelFireSound ~= nil then
+		if modelFireSound:IsA("Sound") then
+			unitFireSoundCache[unitModel] = modelFireSound
+			return modelFireSound
+		end
+		warn(string.format("[BulletClientManager] FireSound under model %s is not a Sound.", unitModel.Name))
+	end
+
+	unitMissingFireSoundCache[unitModel] = true
+	return fireSoundOrigin
 end
 
 local function GetModelsFolder(): Folder
@@ -270,6 +306,9 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 	local existingState = unitStateMap[playerId]
 	if existingState ~= nil then
 		existingState.isParticipant = unitInitInfo.isParticipant == true
+		if existingState.model ~= nil then
+			ClearCachedFireSoundForModel(existingState.model)
+		end
 	end
 
 	local unitPart: BasePart? = FindUnitPart(playerId)
@@ -365,6 +404,10 @@ function BulletClientManager.OnDirectionFlip(playerId: number)
 end
 
 function BulletClientManager.OnUnitRemove(playerId: number)
+	local state = unitStateMap[playerId]
+	if state ~= nil then
+		ClearCachedFireSoundForModel(state.model)
+	end
 	pendingUnitInits[playerId] = nil
 	unitStateMap[playerId] = nil
 end
@@ -479,7 +522,8 @@ end
 function BulletClientManager.OnFireAccepted(playerId: number, _fireTime: number, _spawnPos: Vector3, _shotDir: Vector3, _serverTime: number, _bulletId: string)
 	local state = unitStateMap[playerId]
 	if state ~= nil then
-		PlayLocalCombatSound(fireSoundOrigin, state.unitPart.Position)
+		local resolvedFireSound = ResolveFireSound(state.model)
+		PlayLocalCombatSound(resolvedFireSound, state.unitPart.Position)
 	end
 
 	if playerId == localPlayerId then
@@ -556,6 +600,8 @@ function BulletClientManager.OnMatchStateChanged(newState: GameConfig.MatchState
 	if newState == GameConfig.MatchState.InLobby then
 		table.clear(unitStateMap)
 		table.clear(pendingUnitInits)
+		table.clear(unitFireSoundCache)
+		table.clear(unitMissingFireSoundCache)
 	end
 end
 
