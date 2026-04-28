@@ -1,9 +1,9 @@
 --!strict
-local runService = game:GetService("RunService")
-
 local BillboardManager = {}
 local infoGuis: { BillboardGui } = {}
 local infoGuiIndexMap: { [BillboardGui]: number } = {}
+local connectionMap: { [BillboardGui]: { RBXScriptConnection } } = {}
+local SCALE_EPSILON = 0.001
 
 local function RemoveInfoGuiByIndex(index: number)
 	local lastIndex = #infoGuis
@@ -22,6 +22,13 @@ local function RemoveInfoGui(gui: BillboardGui)
 	if index == nil then
 		return
 	end
+	local connections = connectionMap[gui]
+	if connections ~= nil then
+		for _, connection in connections do
+			connection:Disconnect()
+		end
+		connectionMap[gui] = nil
+	end
 	RemoveInfoGuiByIndex(index)
 end
 
@@ -39,31 +46,14 @@ local function UpdateSingleInfoScale(infoUI: BillboardGui)
 	if controllerWidth <= 0 or controllerHeight <= 0 then
 		return
 	end
-	uiScale.Scale = math.min(
+	local nextScale = math.min(
 		infoUI.AbsoluteSize.X / controllerWidth,
 		infoUI.AbsoluteSize.Y / controllerHeight
 	)
-end
-
-local function UpdateAllInfoScales()
-	local index = 1
-	while index <= #infoGuis do
-		local infoUI = infoGuis[index]
-		if infoUI.Parent == nil then
-			RemoveInfoGuiByIndex(index)
-			continue
-		end
-
-		local adornee = infoUI.Adornee
-		if adornee == nil or adornee.Parent == nil then
-			infoUI.Enabled = false
-			index += 1
-			continue
-		end
-
-		UpdateSingleInfoScale(infoUI)
-		index += 1
+	if math.abs(uiScale.Scale - nextScale) < SCALE_EPSILON then
+		return
 	end
+	uiScale.Scale = nextScale
 end
 
 function BillboardManager.Track(gui: BillboardGui)
@@ -73,12 +63,25 @@ function BillboardManager.Track(gui: BillboardGui)
 	table.insert(infoGuis, gui)
 	infoGuiIndexMap[gui] = #infoGuis
 	UpdateSingleInfoScale(gui)
+	connectionMap[gui] = {
+		gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+			UpdateSingleInfoScale(gui)
+		end),
+		gui:GetPropertyChangedSignal("Adornee"):Connect(function()
+			local adornee = gui.Adornee
+			gui.Enabled = adornee.Parent ~= nil
+			UpdateSingleInfoScale(gui)
+		end),
+		gui.AncestryChanged:Connect(function()
+			if gui.Parent == nil then
+				RemoveInfoGui(gui)
+			end
+		end),
+	}
 end
 
 function BillboardManager.Untrack(gui: BillboardGui)
 	RemoveInfoGui(gui)
 end
-
-runService.RenderStepped:Connect(UpdateAllInfoScales)
 
 return BillboardManager

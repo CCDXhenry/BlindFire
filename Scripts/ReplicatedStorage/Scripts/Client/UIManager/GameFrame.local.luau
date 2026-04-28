@@ -17,6 +17,7 @@ local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
 local gameFrame: Frame = script.Parent
 
 local FIRE_BUTTON_SIZE = UDim2.new(0, 140, 0, 140)
+local UI_UPDATE_INTERVAL_SEC = 1 / 20
 
 
 local fireButtonContainer: Frame? = nil
@@ -24,6 +25,9 @@ local fireButton: TextButton? = nil
 local flashOverlay: Frame? = nil
 
 local isCoolingDown = false
+local updateAccumSec = 0
+local lastButtonVisible: boolean? = nil
+local lastButtonCooling: boolean? = nil
 
 local function PlayFlashEffect()
 	if not flashOverlay or not fireButton then return end
@@ -38,37 +42,61 @@ local function PlayFlashEffect()
 	tweenService:Create(fireButton, tweenInfo, {BackgroundColor3 = originalColor}):Play()
 end
 
-local function UpdateGameFrame()
+local function ApplyFireButtonVisible(shouldBeVisible: boolean)
+	if lastButtonVisible == shouldBeVisible then
+		return
+	end
+	lastButtonVisible = shouldBeVisible
+	if fireButtonContainer then
+		fireButtonContainer.Visible = shouldBeVisible
+	end
+end
+
+local function ApplyFireButtonCooling(coolingDown: boolean)
+	if lastButtonCooling == coolingDown then
+		return
+	end
+	lastButtonCooling = coolingDown
+	if fireButton == nil then
+		return
+	end
+
+	if coolingDown then
+		isCoolingDown = true
+		fireButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+		fireButton.TextTransparency = 0.5
+	else
+		if isCoolingDown then
+			PlayFlashEffect()
+		end
+		isCoolingDown = false
+		fireButton.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+		fireButton.TextTransparency = 0
+	end
+end
+
+local function UpdateGameFrame(deltaTime: number)
+	updateAccumSec += deltaTime
+	if updateAccumSec < UI_UPDATE_INTERVAL_SEC then
+		return
+	end
+	updateAccumSec = 0
+
 	local matchState = BulletClientManager.GetMatchState()
 	local isAlive = BulletClientManager.IsLocalInVehicle()
 	
 	-- Show fire button only if alive AND during GameStartCountdown or Fighting
 	local shouldBeVisible = isAlive
 		and (matchState == GameConfig.MatchState.GameStartCountdown or matchState == GameConfig.MatchState.Fighting)
-	if fireButtonContainer then
-		fireButtonContainer.Visible = shouldBeVisible
-	end
+	ApplyFireButtonVisible(shouldBeVisible)
 	
 	if not shouldBeVisible or fireButton == nil then
+		ApplyFireButtonCooling(false)
 		return
 	end
 
 	local cooldownLeft = BulletClientManager.GetLocalFireCooldownLeft()
-
-
-	-- State feedback
-	if cooldownLeft > 0 then
-		isCoolingDown = true
-		fireButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
-		fireButton.TextTransparency = 0.5
-	else
-		if isCoolingDown then
-			isCoolingDown = false
-			PlayFlashEffect()
-		end
-		fireButton.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
-		fireButton.TextTransparency = 0
-	end
+	ApplyFireButtonCooling(cooldownLeft > 0)
 end
 
 
@@ -122,4 +150,4 @@ local function InitUI()
 end
 
 InitUI()
-runService.RenderStepped:Connect(UpdateGameFrame)
+runService.Heartbeat:Connect(UpdateGameFrame)

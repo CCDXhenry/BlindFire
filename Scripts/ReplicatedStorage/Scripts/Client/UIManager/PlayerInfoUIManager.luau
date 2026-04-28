@@ -23,6 +23,9 @@ type PlayerInfoUIRecord = {
 	fireRingSegments: { Frame }?,
 	fireRingWasCoolingDown: boolean,
 	fireRingHighlightRemaining: number,
+	lastFireRingActiveCount: number?,
+	lastFireRingText: string?,
+	lastFireRingReadyHighlighted: boolean?,
 }
 
 local PlayerInfoUIManager = {}
@@ -39,6 +42,8 @@ local RingTransparencyOff: number = 0.35
 local RingReadyColor: Color3 = Color3.fromRGB(60, 255, 120)
 local RingHighlightColor: Color3 = Color3.fromRGB(170, 255, 190)
 local RingHighlightDurationSeconds: number = 0.25
+local FireRingUpdateIntervalSec: number = 1 / 20
+local fireRingUpdateAccumSec: number = 0
 
 local RemoveUIForPlayer: (number) -> ()
 
@@ -78,10 +83,10 @@ local function UpdateLocalFireCooldownRingDisplay(deltaTime: number)
 	local isCoolingDown = actualLeft > 0
 
 	if cooldownTextLabel then
-		if isCoolingDown then
-			cooldownTextLabel.Text = string.format("%.1f", actualLeft)
-		else
-			cooldownTextLabel.Text = ""
+		local nextText = if isCoolingDown then string.format("%.1f", actualLeft) else ""
+		if data.lastFireRingText ~= nextText then
+			data.lastFireRingText = nextText
+			cooldownTextLabel.Text = nextText
 		end
 	end
 
@@ -91,10 +96,14 @@ local function UpdateLocalFireCooldownRingDisplay(deltaTime: number)
 		local progress = 1 - (actualLeft / totalSeconds)
 		progress = math.clamp(progress, 0, 1)
 		local activeCount = math.floor(progress * segmentCount + 0.5)
-		for index, segmentFrame in ipairs(segmentList) do
-			local isLit = index <= activeCount
-			segmentFrame.BackgroundColor3 = if isLit then RingColorOn else RingColorOff
-			segmentFrame.BackgroundTransparency = if isLit then RingTransparencyOn else RingTransparencyOff
+		if data.lastFireRingActiveCount ~= activeCount or data.lastFireRingReadyHighlighted ~= nil then
+			for index, segmentFrame in ipairs(segmentList) do
+				local isLit = index <= activeCount
+				segmentFrame.BackgroundColor3 = if isLit then RingColorOn else RingColorOff
+				segmentFrame.BackgroundTransparency = if isLit then RingTransparencyOn else RingTransparencyOff
+			end
+			data.lastFireRingActiveCount = activeCount
+			data.lastFireRingReadyHighlighted = nil
 		end
 		data.fireRingWasCoolingDown = true
 	else
@@ -104,9 +113,17 @@ local function UpdateLocalFireCooldownRingDisplay(deltaTime: number)
 		end
 		if data.fireRingHighlightRemaining > 0 then
 			data.fireRingHighlightRemaining = math.max(data.fireRingHighlightRemaining - deltaTime, 0)
-			SetFireRingReadySegments(segmentList, true)
+			if data.lastFireRingReadyHighlighted ~= true then
+				SetFireRingReadySegments(segmentList, true)
+				data.lastFireRingReadyHighlighted = true
+				data.lastFireRingActiveCount = nil
+			end
 		else
-			SetFireRingReadySegments(segmentList, false)
+			if data.lastFireRingReadyHighlighted ~= false then
+				SetFireRingReadySegments(segmentList, false)
+				data.lastFireRingReadyHighlighted = false
+				data.lastFireRingActiveCount = nil
+			end
 		end
 	end
 end
@@ -155,6 +172,9 @@ local function ConfigureFireCooldownRing(playerId: number)
 	data.fireRingSegments = if #segmentList > 0 then segmentList else nil
 	data.fireRingWasCoolingDown = false
 	data.fireRingHighlightRemaining = 0
+	data.lastFireRingActiveCount = nil
+	data.lastFireRingText = nil
+	data.lastFireRingReadyHighlighted = nil
 end
 
 local function UpdateHpUI(playerId: number, hitCount: number, maxHits: number)
@@ -283,6 +303,9 @@ local function CreateUIForPlayer(playerId: number, isParticipant: boolean, vehic
 			fireRingSegments = nil,
 			fireRingWasCoolingDown = false,
 			fireRingHighlightRemaining = 0,
+			lastFireRingActiveCount = nil,
+			lastFireRingText = nil,
+			lastFireRingReadyHighlighted = nil,
 		}
 	end
 	
@@ -357,8 +380,14 @@ function PlayerInfoUIManager.Init()
 		NetMsg.FireRequestSyncUnit()
 	end)
 
-	runService.RenderStepped:Connect(function(deltaTime: number)
-		UpdateLocalFireCooldownRingDisplay(deltaTime)
+	runService.Heartbeat:Connect(function(deltaTime: number)
+		fireRingUpdateAccumSec += deltaTime
+		if fireRingUpdateAccumSec < FireRingUpdateIntervalSec then
+			return
+		end
+		local updateDeltaTime = fireRingUpdateAccumSec
+		fireRingUpdateAccumSec = 0
+		UpdateLocalFireCooldownRingDisplay(updateDeltaTime)
 	end)
 
 	print("[PlayerInfoUIManager] Initialized")
