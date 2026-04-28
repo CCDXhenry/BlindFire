@@ -1,6 +1,6 @@
 return {
 	[1] = {
-		["iconImage"] = "rbxassetid://136238225935105",
+		["iconImage"] = "rbxassetid://77237454054488",
 		["resourceName"] = "Cup",
 		["labelName_t"] = "Cup",
 		["id"] = 1,
@@ -15,7 +15,7 @@ return {
 		["bulletId"] = 2,
 	},
 	[2] = {
-		["iconImage"] = "rbxassetid://136238225935105",
+		["iconImage"] = "rbxassetid://84937202782567",
 		["resourceName"] = "Crossbow",
 		["labelName_t"] = "Crossbow",
 		["id"] = 2,
@@ -30,7 +30,7 @@ return {
 		["bulletId"] = 1,
 	},
 	[3] = {
-		["iconImage"] = "rbxassetid://136238225935105",
+		["iconImage"] = "rbxassetid://123629158340626",
 		["resourceName"] = "Duck",
 		["labelName_t"] = "Duck",
 		["id"] = 3,
@@ -45,7 +45,7 @@ return {
 		["bulletId"] = 1,
 	},
 	[4] = {
-		["iconImage"] = "rbxassetid://136238225935105",
+		["iconImage"] = "rbxassetid://73654340359701",
 		["resourceName"] = "WineBarrel",
 		["labelName_t"] = "WineBarrel",
 		["id"] = 4,
@@ -60,7 +60,7 @@ return {
 		["bulletId"] = 1,
 	},
 	[5] = {
-		["iconImage"] = "rbxassetid://136238225935105",
+		["iconImage"] = "rbxassetid://111738999236641",
 		["resourceName"] = "Recordplayer",
 		["labelName_t"] = "Recordplayer",
 		["id"] = 5,
@@ -75,7 +75,7 @@ return {
 		["bulletId"] = 1,
 	},
 	[6] = {
-		["iconImage"] = "rbxassetid://136238225935105",
+		["iconImage"] = "rbxassetid://130982871230256",
 		["resourceName"] = "RobotVacuum",
 		["labelName_t"] = "RobotVacuum",
 		["id"] = 6,
@@ -90,7 +90,7 @@ return {
 		["bulletId"] = 1,
 	},
 	[7] = {
-		["iconImage"] = "rbxassetid://136238225935105",
+		["iconImage"] = "rbxassetid://122021225109989",
 		["resourceName"] = "NaoZhong",
 		["labelName_t"] = "NaoZhong",
 		["id"] = 7,
@@ -105,7 +105,7 @@ return {
 		["bulletId"] = 1,
 	},
 	[8] = {
-		["iconImage"] = "rbxassetid://136238225935105",
+		["iconImage"] = "rbxassetid://139845344719427",
 		["resourceName"] = "TheFidgetSpinner",
 		["labelName_t"] = "TheFidgetSpinner",
 		["id"] = 8,
@@ -120,7 +120,7 @@ return {
 		["bulletId"] = 1,
 	},
 	[9] = {
-		["iconImage"] = "rbxassetid://136238225935105",
+		["iconImage"] = "rbxassetid://120130845891093",
 		["resourceName"] = "Swivelchair",
 		["labelName_t"] = "Swivelchair",
 		["id"] = 9,
