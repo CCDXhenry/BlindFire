@@ -12,7 +12,7 @@ return {
 		["costRb"] = 0,
 		["moveSpeed"] = 30,
 		["costType"] = 1,
-		["bulletId"] = 2,
+		["bulletId"] = 1,
 	},
 	[2] = {
 		["iconImage"] = "rbxassetid://84937202782567",
@@ -27,7 +27,7 @@ return {
 		["costRb"] = 99,
 		["moveSpeed"] = 30,
 		["costType"] = 3,
-		["bulletId"] = 1,
+		["bulletId"] = 2,
 	},
 	[3] = {
 		["iconImage"] = "rbxassetid://123629158340626",
@@ -42,7 +42,7 @@ return {
 		["costRb"] = 299,
 		["moveSpeed"] = 30,
 		["costType"] = 2,
-		["bulletId"] = 1,
+		["bulletId"] = 3,
 	},
 	[4] = {
 		["iconImage"] = "rbxassetid://73654340359701",
@@ -57,7 +57,7 @@ return {
 		["costRb"] = 99,
 		["moveSpeed"] = 30,
 		["costType"] = 3,
-		["bulletId"] = 1,
+		["bulletId"] = 4,
 	},
 	[5] = {
 		["iconImage"] = "rbxassetid://111738999236641",
@@ -72,7 +72,7 @@ return {
 		["costRb"] = 99,
 		["moveSpeed"] = 30,
 		["costType"] = 3,
-		["bulletId"] = 1,
+		["bulletId"] = 5,
 	},
 	[6] = {
 		["iconImage"] = "rbxassetid://130982871230256",
@@ -87,7 +87,7 @@ return {
 		["costRb"] = 99,
 		["moveSpeed"] = 30,
 		["costType"] = 3,
-		["bulletId"] = 1,
+		["bulletId"] = 6,
 	},
 	[7] = {
 		["iconImage"] = "rbxassetid://122021225109989",
@@ -102,7 +102,7 @@ return {
 		["costRb"] = 99,
 		["moveSpeed"] = 30,
 		["costType"] = 3,
-		["bulletId"] = 1,
+		["bulletId"] = 7,
 	},
 	[8] = {
 		["iconImage"] = "rbxassetid://139845344719427",
@@ -117,7 +117,7 @@ return {
 		["costRb"] = 99,
 		["moveSpeed"] = 30,
 		["costType"] = 3,
-		["bulletId"] = 1,
+		["bulletId"] = 8,
 	},
 	[9] = {
 		["iconImage"] = "rbxassetid://120130845891093",
@@ -132,6 +132,6 @@ return {
 		["costRb"] = 99,
 		["moveSpeed"] = 30,
 		["costType"] = 3,
-		["bulletId"] = 1,
+		["bulletId"] = 9,
 	},
 }

@@ -44,6 +44,12 @@ type ServerBullet = {
 	spawnPos: Vector3,
 	shotDir: Vector3,
 	activeTime: number,
+	speed: number,
+	lifetime: number,
+	maxDistance: number,
+	maxBounces: number,
+	distanceTraveled: number,
+	hitRadius: number,
 	bouncesLeft: number,
 	currentPos: Vector3,
 	estimatedRtt: number,
@@ -75,6 +81,7 @@ local PROJECTILE_DRIVE_ATTACHMENT_NAME = "ProjectileDriveAttachment"
 local PROJECTILE_ALIGN_ORIENTATION_NAME = "ProjectileAlignOrientation"
 local PROJECTILE_LINEAR_VELOCITY_NAME = "ProjectileLinearVelocity"
 local PROJECTILE_POOL_LIMIT_PER_TEMPLATE = 24
+local PROJECTILE_BOUNCE_SEPARATION_BIAS = 0.05
 
 local serverBulletsFolder: Folder? = nil
 -- 缓存 Models Folder
@@ -570,9 +577,36 @@ local function _BroadcastUnitInit(unitInfo: ServerUnitInfo)
 	)
 end
 
-local function GetProjectileRadius(): number
-	-- Defaulting to 1.5, matching client
-	return 1.5
+local DEFAULT_PROJECTILE_RADIUS = 1.5
+local projectileRadiusByTemplateMap: { [string]: number } = {}
+local function GetProjectileRadius(templateName: string): number
+	local cachedRadius = projectileRadiusByTemplateMap[templateName]
+	if cachedRadius ~= nil then
+		return cachedRadius
+	end
+
+	local projectileTemplate = bulletModelsFolder:FindFirstChild(templateName)
+	if projectileTemplate == nil or not projectileTemplate:IsA("Model") then
+		warn(string.format("[CombatManager] Projectile template not found when reading radius: %s", templateName))
+		projectileRadiusByTemplateMap[templateName] = DEFAULT_PROJECTILE_RADIUS
+		return DEFAULT_PROJECTILE_RADIUS
+	end
+
+	local corePart = projectileTemplate:FindFirstChild("Core")
+	if corePart == nil or not corePart:IsA("BasePart") then
+		warn(string.format("[CombatManager] Projectile Core not found when reading radius: %s", templateName))
+		projectileRadiusByTemplateMap[templateName] = DEFAULT_PROJECTILE_RADIUS
+		return DEFAULT_PROJECTILE_RADIUS
+	end
+
+	local size = corePart.Size
+	local maxAxis = math.max(size.X, size.Y, size.Z)
+	local computedRadius = maxAxis * 0.5
+	if computedRadius <= 0 then
+		computedRadius = DEFAULT_PROJECTILE_RADIUS
+	end
+	projectileRadiusByTemplateMap[templateName] = computedRadius
+	return computedRadius
 end
 
 local function EnsureServerBulletsFolder(): Folder
@@ -875,11 +909,11 @@ local function PivotServerProjectileToBullet(bullet: ServerBullet, displayPos: V
 		if bullet.physicsStarted then
 			local lv = bullet.linearVelocity
 			if lv ~= nil and lv.Parent ~= nil then
-				lv.VectorVelocity = look * GameConfig.ProjectileSpeed
+				lv.VectorVelocity = look * bullet.speed
 			end
 			if instantSnap then
 				-- 反弹帧只强制速度/角速度与朝向，避免强改位置导致的单帧停顿感
-				root.AssemblyLinearVelocity = look * GameConfig.ProjectileSpeed
+				root.AssemblyLinearVelocity = look * bullet.speed
 				root.AssemblyAngularVelocity = Vector3.zero
 			end
 		else
@@ -1037,13 +1071,18 @@ function CombatManager.OnHeartbeat(dt: number)
 			PivotServerProjectileToBullet(bullet, bullet.currentPos)
 		end
 
-		if (currentServerTime - bullet.activeTime) > GameConfig.ProjectileLifetime then
+		if (currentServerTime - bullet.activeTime) > bullet.lifetime then
+			DestroyServerBullet(bulletId)
+			continue
+		end
+		if bullet.distanceTraveled >= bullet.maxDistance then
 			DestroyServerBullet(bulletId)
 			continue
 		end
 
-		local stepDist = GameConfig.ProjectileSpeed * dt
+		local stepDist = bullet.speed * dt
 		local origin = bullet.currentPos
+		local frameStartPos = bullet.currentPos
 		local shotDir = bullet.shotDir
 		local remaining = stepDist + GameConfig.ProjectileStepMargin
 
@@ -1065,7 +1104,7 @@ function CombatManager.OnHeartbeat(dt: number)
 
 		-- Allow hitting self if configured and bounces ran out (simulating that the bullet already bounced so self is exposed)
 		-- Or if not configured, we keep self in exclude list.
-		if GameConfig.CanHitSelf and bullet.bouncesLeft < (GameConfig.ProjectileMaxBounces or 0) then
+		if GameConfig.CanHitSelf and bullet.bouncesLeft < bullet.maxBounces then
 			-- It bounced at least once, can hit self, so don't exclude self.
 			table.clear(excludeList)
 		end
@@ -1073,8 +1112,8 @@ function CombatManager.OnHeartbeat(dt: number)
 		rayParams.FilterDescendantsInstances = excludeList
 
 		local hitResult: RaycastResult? = nil
-		-- Added a slight 1.25 multiplier to serve as ping/lag compensation leeway
-		local radius = GetProjectileRadius() * 1.25
+		-- Use visual-matched radius to avoid early wall bounces before visible contact
+		local radius = bullet.hitRadius
 
 		for _ = 1, 10 do
 			if remaining < 1e-4 then
@@ -1168,10 +1207,17 @@ function CombatManager.OnHeartbeat(dt: number)
 				-- 反弹后继续对剩余路径做子步骤检测，防止高速子弹穿模
 				local distanceRemaining = math.max(0, stepDist - hitResult.Distance)
 				
-				-- 稍微沿法线推开，避免浮点误差或共面拼接导致下一次 Spherecast 误判为初始相交而忽略碰撞（即穿模）
-				origin = impactCenter + nFlat * 0.05
+				-- 反弹后按当前子弹半径推离墙体，避免大尺寸子弹下一帧仍处于接触区而被误判为再次撞墙
+				local separationDistance = math.max(PROJECTILE_BOUNCE_SEPARATION_BIAS, radius + PROJECTILE_BOUNCE_SEPARATION_BIAS)
+				origin = impactCenter + nFlat * separationDistance
 				remaining = distanceRemaining
 				bullet.currentPos = origin
+				bullet.distanceTraveled += (bullet.currentPos - frameStartPos).Magnitude
+				if bullet.distanceTraveled >= bullet.maxDistance then
+					ReleaseRaycastContext()
+					DestroyServerBullet(bulletId)
+					continue
+				end
 				PivotServerProjectileToBullet(bullet, bullet.currentPos, true)
 				ReleaseRaycastContext()
 				continue
@@ -1183,7 +1229,12 @@ function CombatManager.OnHeartbeat(dt: number)
 		end
 
 		bullet.currentPos = origin + shotDir * stepDist
+		bullet.distanceTraveled += (bullet.currentPos - frameStartPos).Magnitude
 		ReleaseRaycastContext()
+		if bullet.distanceTraveled >= bullet.maxDistance then
+			DestroyServerBullet(bulletId)
+			continue
+		end
 		-- visualModel 已经通过 LinearVelocity 自动平滑移动，无需每帧 PivotTo 造成客户端卡顿
 		-- PivotServerProjectileToBullet(bullet, bullet.currentPos)
 	end
@@ -1288,6 +1339,17 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 	if unitInfo == nil then
 		return
 	end
+	local bulletData = if unitInfo then unitInfo.vehicleConfig.bulletData else nil
+	local bounces = if bulletData then bulletData.maxBounces else (GameConfig.ProjectileMaxBounces or 0)
+	local bulletResource = if bulletData then bulletData.resourceName else "ProjectileModel"
+	local bulletSpeed = if bulletData then bulletData.moveSpeed else GameConfig.ProjectileSpeed
+	local bulletLifetime = if bulletData then bulletData.lifetime else GameConfig.ProjectileLifetime
+	local bulletMaxDistance = if bulletData then bulletData.maxDistance else GameConfig.MaxProjectileDistance
+	bulletSpeed = math.max(0.01, bulletSpeed)
+	bulletLifetime = math.max(0.01, bulletLifetime)
+	bulletMaxDistance = math.max(0.01, bulletMaxDistance)
+	EnsurePreparedProjectileTemplate(bulletResource)
+	local bulletRadius = GetProjectileRadius(bulletResource)
 
 	local spawnPos = Vector3.zero
 	local shotDirection = Vector3.new(0, 0, -1)
@@ -1347,7 +1409,7 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 		end
 
 		if hitPoint ~= nil then
-			local projRadius = GetProjectileRadius()
+			local projRadius = bulletRadius
 			local safeDist = math.max(0, (hitPoint - rayOrigin).Magnitude - (projRadius * 2 + 0.1))
 			spawnPos = rayOrigin + (dir * safeDist)
 		end
@@ -1363,11 +1425,6 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 	)
 	local bulletLaunchTime = clientTimestamp + GameConfig.FireCastTime
 
-	local bulletData = if unitInfo then unitInfo.vehicleConfig.bulletData else nil
-	local bounces = if bulletData then bulletData.maxBounces else (GameConfig.ProjectileMaxBounces or 0)
-	local bulletResource = if bulletData then bulletData.resourceName else "ProjectileModel"
-	EnsurePreparedProjectileTemplate(bulletResource)
-
 	local visualModel, physicsRoot, visualWeld, linearVelocity =
 		CreateServerProjectileVisual(player.UserId, spawnPos, shotDirection, bulletId, bulletResource)
 	activeServerBullets[bulletId] = {
@@ -1376,6 +1433,12 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 		spawnPos = spawnPos,
 		shotDir = shotDirection,
 		activeTime = bulletLaunchTime,
+		speed = bulletSpeed,
+		lifetime = bulletLifetime,
+		maxDistance = bulletMaxDistance,
+		maxBounces = bounces,
+		distanceTraveled = 0,
+		hitRadius = bulletRadius,
 		bouncesLeft = bounces,
 		currentPos = spawnPos,
 		estimatedRtt = math.max(0, estimatedRtt),

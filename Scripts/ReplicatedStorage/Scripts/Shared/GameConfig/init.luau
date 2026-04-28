@@ -119,12 +119,8 @@ export type BulletData = {
 	labelName_t: string,
 	sortId: number,
 	maxDistance: number,
-	productId: number,
 	lifetime: number,
-	cost: number,
-	costRb: number?,
 	maxBounces: number,
-	costType: number,
 	moveSpeed: number,
 }
 

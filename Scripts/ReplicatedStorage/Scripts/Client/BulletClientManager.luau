@@ -186,18 +186,10 @@ local function TintServerProjectile(projectileModel: Model)
 
 		local isLocal = (shooterId == localPlayerId)
 		local tintColor = if isLocal then LOCAL_OWNED_PROJECTILE_COLOR else ENEMY_PROJECTILE_COLOR
-
-		for _, d in projectileModel:GetDescendants() do
-			if d:IsA("BasePart") then
-				d.Color = tintColor
-				-- 兼容用户在 Core 下增加的 Highlight
-				local highlight = d:FindFirstChildWhichIsA("Highlight")
-				if highlight then
-					highlight.OutlineColor = tintColor
-				end
-			elseif d:IsA("Highlight") then
-				d.OutlineColor = tintColor
-			end
+		-- 规范：子弹模型的 Highlight 必须挂在模型根节点
+		local rootHighlight = projectileModel:FindFirstChildWhichIsA("Highlight")
+		if rootHighlight ~= nil then
+			rootHighlight.OutlineColor = tintColor
 		end
 	end
 	tryTint()
