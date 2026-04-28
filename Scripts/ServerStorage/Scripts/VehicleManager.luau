@@ -5,7 +5,7 @@ local serverStorage = game:GetService("ServerStorage")
 local serverScripts = serverStorage:WaitForChild("Scripts")
 local ServerGameInfo = require(serverScripts:FindFirstChild("ServerGameInfo"))
 local CombatManager = require(serverScripts:FindFirstChild("CombatManager"))
-local MatchManager = require(serverScripts:FindFirstChild("MatchManager"))
+local PlayerStateManager = require(serverScripts:FindFirstChild("PlayerStateManager"))
 
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local scripts = replicatedStorage:WaitForChild("Scripts")
@@ -89,6 +89,14 @@ function VehicleManager.OnRequestUpdateVehicleUsing(player: Player, vehicleId: n
 
 	LogInfo(string.format("EquipAccepted userId=%d vehicleId=%d", player.UserId, vehicleId))
 	ServerGameInfo.SetPlayerCurrentVehicle(player, vehicleIdStr)
+
+	local roundInfoMap = PlayerStateManager.GetAllPlayerRoundInfoMap()
+	local roundInfo = roundInfoMap[player.UserId]
+	local isRoundLocked = roundInfo ~= nil and roundInfo.isParticipant == true
+	if isRoundLocked then
+		LogInfo(string.format("EquipDeferred userId=%d vehicleId=%d reason=round_locked", player.UserId, vehicleId))
+		return
+	end
 
 	-- 检查是否未入座（人物没坐到载具上前都能切换并即时刷新）
 	local character = player.Character
