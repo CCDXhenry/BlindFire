@@ -86,10 +86,19 @@ GameConfig.ItemCountChangeReason = {
 GameConfig.GuideType = {
 	None = 0,
 	TutorialBasic = 1,
+	TutorialFireBySpace = 2,
+	TutorialFireByButton = 3,
 }
 
 GameConfig.GuideTextKeyMap = {
 	[GameConfig.GuideType.TutorialBasic] = "GuideTutorialBasic",
+	[GameConfig.GuideType.TutorialFireBySpace] = "GuideTutorialFireBySpace",
+	[GameConfig.GuideType.TutorialFireByButton] = "GuideTutorialFireByButton",
+}
+
+export type GuideProgressInfo = {
+	FireBySpace: boolean,
+	FireByButton: boolean,
 }
 
 GameConfig.CoinIconImage = "rbxassetid://138756794615498"
@@ -182,6 +191,8 @@ export type PlayerSaveInfo = {
 	},
 	-- 是否已领取过群组奖励
 	hasClaimedGroupReward: boolean,
+	-- 新手引导进度
+	guideProgress: GuideProgressInfo,
 }
 export type PlayerInfo = PlayerSaveInfo & {
 	--玩家信息是否发生变化
@@ -229,6 +240,10 @@ function GameConfig.CreateDefaultPlayerSaveInfo(): PlayerSaveInfo
 		},
 		ownedGamePassList = {},
 		hasClaimedGroupReward = false,
+		guideProgress = {
+			FireBySpace = false,
+			FireByButton = false,
+		},
 		currencies = {
 			[tostring(GameConfig.CurrencyType.Coin)] = 0,
 		},
@@ -261,6 +276,8 @@ export type ClientLocalPlayerSaveInfo = {
 	isInGroup: boolean,
 	-- 是否已领取过群组奖励
 	hasClaimedGroupReward: boolean,
+	-- 新手引导进度
+	guideProgress: GuideProgressInfo,
 }
 export type ClientLocalPlayerInfo = ClientLocalPlayerSaveInfo & {
 	--已拥有的通行证映射

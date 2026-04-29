@@ -2,6 +2,7 @@
 local NetMsg = {}
 
 local replicatedStorage: ReplicatedStorage = game:GetService("ReplicatedStorage")
+local runService = game:GetService("RunService")
 local scripts = replicatedStorage:WaitForChild("Scripts")
 local sharedScripts = scripts:WaitForChild("Shared")
 local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
@@ -41,6 +42,27 @@ local notifyLeaderboardUpdateEvent: RemoteEvent = remoteEventsFolder:FindFirstCh
 local notifyLeaderboardResetTimeEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyLeaderboardResetTime") :: RemoteEvent
 local requestClaimGroupRewardEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestClaimGroupReward") :: RemoteEvent
 local notifyPlayerClaimedGroupRewardEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPlayerClaimedGroupReward") :: RemoteEvent
+
+local function EnsureRemoteEvent(remoteEventName: string): RemoteEvent
+	local remoteEvent = remoteEventsFolder:FindFirstChild(remoteEventName)
+	if remoteEvent ~= nil and remoteEvent:IsA("RemoteEvent") then
+		return remoteEvent
+	end
+	if runService:IsServer() then
+		local newRemoteEvent = Instance.new("RemoteEvent")
+		newRemoteEvent.Name = remoteEventName
+		newRemoteEvent.Parent = remoteEventsFolder
+		return newRemoteEvent
+	end
+	local waitedRemoteEvent = remoteEventsFolder:WaitForChild(remoteEventName, 5)
+	if waitedRemoteEvent ~= nil and waitedRemoteEvent:IsA("RemoteEvent") then
+		return waitedRemoteEvent
+	end
+	error(string.format("[NetMsg] RemoteEvent %s not found", remoteEventName))
+end
+
+local requestGuideProgressEvent: RemoteEvent = EnsureRemoteEvent("RequestGuideProgress")
+local notifyGuideProgressUpdatedEvent: RemoteEvent = EnsureRemoteEvent("NotifyGuideProgressUpdated")
 
 --客户端请求设置背景音乐音量
 function NetMsg.FireRequestSetBGMVolume(volume: number)
@@ -375,6 +397,22 @@ end
 
 function NetMsg.ConnectNotifyPlayerClaimedGroupReward(callback: () -> ())
 	notifyPlayerClaimedGroupRewardEvent.OnClientEvent:Connect(callback)
+end
+
+function NetMsg.FireRequestGuideProgress(guideType: number)
+	requestGuideProgressEvent:FireServer(guideType)
+end
+
+function NetMsg.ConnectRequestGuideProgress(callback: (player: Player, guideType: number) -> ())
+	requestGuideProgressEvent.OnServerEvent:Connect(callback)
+end
+
+function NetMsg.FireNotifyGuideProgressUpdated(player: Player, guideType: number)
+	notifyGuideProgressUpdatedEvent:FireClient(player, guideType)
+end
+
+function NetMsg.ConnectNotifyGuideProgressUpdated(callback: (guideType: number) -> ())
+	notifyGuideProgressUpdatedEvent.OnClientEvent:Connect(callback)
 end
 
 return NetMsg

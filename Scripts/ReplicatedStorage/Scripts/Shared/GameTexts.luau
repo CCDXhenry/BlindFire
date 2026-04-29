@@ -21,5 +21,8 @@ local GameTexts = {
 	GroupRewardTip1 = { key = "GroupRewardTip1", source = "1. Like our game 👍" },
 	GroupRewardTip2 = { key = "GroupRewardTip2", source = "2. Join our group!" },
 	GroupRewardTip3 = { key = "GroupRewardTip3", source = "3. Claim group bumpers!" },
+	GuideTutorialBasic = { key = "GuideTutorialBasic", source = "Use controls to survive and win." },
+	GuideTutorialFireBySpace = { key = "GuideTutorialFireBySpace", source = "Press [Space] to fire." },
+	GuideTutorialFireByButton = { key = "GuideTutorialFireByButton", source = "Tap Fire button to shoot." },
 }
 return GameTexts

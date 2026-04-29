@@ -44,6 +44,10 @@ function ServerGameInfo.InitPlayerInfo(player: Player, playerSaveInfo: GameConfi
 		isInGroup = isInGroup,
 		weeklyStats = playerSaveInfo.weeklyStats,
 		hasClaimedGroupReward = playerSaveInfo.hasClaimedGroupReward or false,
+		guideProgress = playerSaveInfo.guideProgress or {
+			FireBySpace = false,
+			FireByButton = false,
+		},
 	}
 	for ownedGamePassIndex: number, ownedGamePassId: number in playerInfo.ownedGamePassList do
 		playerInfo.ownedGamePassMap[ownedGamePassId] = true
@@ -57,6 +61,7 @@ function ServerGameInfo.InitPlayerInfo(player: Player, playerSaveInfo: GameConfi
 		vehicleInventory = playerInfo.vehicleInventory,
 		isInGroup = playerInfo.isInGroup,
 		hasClaimedGroupReward = playerInfo.hasClaimedGroupReward,
+		guideProgress = playerInfo.guideProgress,
 	}
 	local clientOtherPlayerSaveInfo: GameConfig.ClientOtherPlayerSyncInfo = {
 		
@@ -104,7 +109,33 @@ function ServerGameInfo.CreatePlayerSaveInfoByPlayerInfo(playerInfo: GameConfig.
 		currencies = playerInfo.currencies,
 		vehicleInventory = playerInfo.vehicleInventory,
 		weeklyStats = playerInfo.weeklyStats,
+		hasClaimedGroupReward = playerInfo.hasClaimedGroupReward,
+		guideProgress = playerInfo.guideProgress,
 	}
+end
+
+function ServerGameInfo.SetGuideProgress(player: Player, guideType: number)
+	local playerInfo: GameConfig.PlayerInfo = playerInfoMap[player.UserId]
+	if playerInfo == nil then
+		return false, playerInfo
+	end
+	if guideType == GameConfig.GuideType.TutorialFireBySpace then
+		if playerInfo.guideProgress.FireBySpace then
+			return false, playerInfo
+		end
+		playerInfo.guideProgress.FireBySpace = true
+		playerInfo.playerInfoChanged = true
+		return true, playerInfo
+	end
+	if guideType == GameConfig.GuideType.TutorialFireByButton then
+		if playerInfo.guideProgress.FireByButton then
+			return false, playerInfo
+		end
+		playerInfo.guideProgress.FireByButton = true
+		playerInfo.playerInfoChanged = true
+		return true, playerInfo
+	end
+	return false, playerInfo
 end
 
 --增加玩家游戏时间

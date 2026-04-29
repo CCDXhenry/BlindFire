@@ -24,6 +24,7 @@ local DateTimeExtension = require(coreSharedScripts:FindFirstChild("DateTimeExte
 local scripts = replicatedStorage:WaitForChild("Scripts")
 local sharedScripts = scripts:WaitForChild("Shared")
 local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
+local NetMsg = require(sharedScripts:FindFirstChild("NetMsg"))
 
 local dataStoreService: DataStoreService = game:GetService("DataStoreService")
 local playerInfoDataStore: DataStore = dataStoreService:GetDataStore("PlayerInfo")
@@ -208,6 +209,16 @@ local function OnHeartbeat(deltaTime: number)
 	end
 end
 
+local function OnRequestGuideProgress(player: Player, guideType: number)
+	if guideType ~= GameConfig.GuideType.TutorialFireBySpace and guideType ~= GameConfig.GuideType.TutorialFireByButton then
+		return
+	end
+	local changed, _ = ServerGameInfo.SetGuideProgress(player, guideType)
+	if changed then
+		NetMsg.FireNotifyGuideProgressUpdated(player, guideType)
+	end
+end
+
 local function InitGameSystems()
 	LogInfo("Init begin")
 	PlayerStateManager.Init()
@@ -235,3 +246,4 @@ BootstrapOnlinePlayers()
 players.PlayerAdded:Connect(OnPlayerAdded)
 players.PlayerRemoving:Connect(OnPlayerRemoving)
 runService.Heartbeat:Connect(OnHeartbeat)
+NetMsg.ConnectRequestGuideProgress(OnRequestGuideProgress)
