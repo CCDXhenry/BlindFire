@@ -57,7 +57,8 @@ local function IsVehicleAffordable(localPlayerInfo: GameConfig.ClientLocalPlayer
 	elseif vehicleData.costType == GameConfig.CostType.CoinOrRb then
 		return coinAmount >= vehicleData.costCoin or rbAmount >= rbCost
 	elseif vehicleData.costType == GameConfig.CostType.GroupReward then
-		return localPlayerInfo.isInGroup and not localPlayerInfo.hasClaimedGroupReward
+		-- 群组奖励载具不参与大厅载具红点判定
+		return false
 	end
 
 	return false
