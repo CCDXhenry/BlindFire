@@ -81,6 +81,7 @@ local HttpService = game:GetService("HttpService")
 local soundOriginsFolder = replicatedStorage:FindFirstChild("Sounds")
 local fireSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("FireSound") else nil
 local hitSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("HitSound") else nil
+local struckSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("StruckSound") else nil
 local impactSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("ImpactSound") else nil
 local deathSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("DeathSound") else nil
 local unitFireSoundCache: { [Model]: Instance } = {}
@@ -94,6 +95,9 @@ else
 	end
 	if hitSoundOrigin == nil then
 		warn("[BulletClientManager] HitSound not found in ReplicatedStorage.Sounds.")
+	end
+	if struckSoundOrigin == nil then
+		warn("[BulletClientManager] StruckSound not found in ReplicatedStorage.Sounds.")
 	end
 	if impactSoundOrigin == nil then
 		warn("[BulletClientManager] ImpactSound not found in ReplicatedStorage.Sounds.")
@@ -704,6 +708,9 @@ function BulletClientManager.OnHit(
 		return
 	end
 	PlayGlobalCombatSound(hitSoundOrigin)
+	if targetPlayerId == localPlayerId then
+		PlayGlobalCombatSound(struckSoundOrigin)
+	end
 	targetState.spinDir = (math.random(0, 1) == 0) and 1 or -1
 	local sign = (math.random(0, 1) == 0) and 1 or -1
 	targetState.spinImpulseRadPerSec += GameConfig.TurretSpinImpulseOnHitRadPerSec * sign
