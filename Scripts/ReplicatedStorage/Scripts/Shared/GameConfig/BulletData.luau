@@ -2,7 +2,7 @@ return {
 	[1] = {
 		["iconImage"] = "rbxassetid://136238225935105",
 		["resourceName"] = "ProjectileModel",
-		["labelName_t"] = "ProjectileModel",
+		["labelName_t"] = "Cup",
 		["id"] = 1,
 		["sortId"] = 1,
 		["maxDistance"] = 500,
