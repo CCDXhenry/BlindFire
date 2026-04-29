@@ -69,6 +69,8 @@ local shooterBulletCountMap: { [number]: number } = {}
 
 local LOG_PREFIX = "[CombatManager]"
 local DEBUG_LOG = false -- 生产环境设为 false 关闭高频日志
+-- 炮弹命中后「解析目标玩家」诊断：无 targetId 仍销毁、贴墙嵌入销毁、无敌帧跳过伤害等（复现问题后可改 false）
+local DEBUG_LOG_PROJECTILE_HIT_RESOLVE = true
 local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
 local UNDERGROUND_Y = -100
 local SERVER_PROJECTILE_NAME_PREFIX = "ServerProjectile_"
@@ -82,6 +84,7 @@ local PROJECTILE_ALIGN_ORIENTATION_NAME = "ProjectileAlignOrientation"
 local PROJECTILE_LINEAR_VELOCITY_NAME = "ProjectileLinearVelocity"
 local PROJECTILE_POOL_LIMIT_PER_TEMPLATE = 24
 local PROJECTILE_BOUNCE_SEPARATION_BIAS = 0.05
+local PROJECTILE_EMBED_CHECK_BIAS = 0.05
 
 local serverBulletsFolder: Folder? = nil
 -- 缓存 Models Folder
@@ -99,6 +102,13 @@ local function LogInfo(message: string)
 		return
 	end
 	print(string.format("%s %s", LOG_PREFIX, message))
+end
+
+local function LogProjectileHitResolve(message: string)
+	if not DEBUG_LOG_PROJECTILE_HIT_RESOLVE then
+		return
+	end
+	print(string.format("%s[ProjectileHitResolve] %s", LOG_PREFIX, message))
 end
 
 local function _LogWarn(message: string)
@@ -201,6 +211,36 @@ local function GetPlayerIdByVehicleModelName(modelName: string): number?
 	end
 	local userIdText = string.gsub(modelName, VEHICLE_MODEL_NAME_PREFIX, "")
 	return tonumber(userIdText)
+end
+
+local function GetUnderRegisteredUnitPlayerIdForHit(hitInst: Instance): number?
+	for pid, uinfo in unitInfoMap do
+		if hitInst:IsDescendantOf(uinfo.unitModel) then
+			return pid
+		end
+	end
+	return nil
+end
+
+-- 由命中实例解析「被击中玩家」UserId：祖先链 Vehicle_* / Character，再回退到已登记 unitModel（与 Spherecast 一致）
+local function GetProjectileTargetPlayerIdFromHitInstance(inst: Instance): number?
+	local targetId: number? = nil
+	local currentAncestor: Instance? = inst.Parent
+	while currentAncestor ~= nil and currentAncestor ~= workspace do
+		if currentAncestor:IsA("Model") then
+			local m = currentAncestor :: Model
+			targetId = GetPlayerIdByVehicleModelName(m.Name)
+			if targetId ~= nil then
+				return targetId
+			end
+			local charPlayer = players:GetPlayerFromCharacter(m)
+			if charPlayer then
+				return charPlayer.UserId
+			end
+		end
+		currentAncestor = currentAncestor.Parent
+	end
+	return GetUnderRegisteredUnitPlayerIdForHit(inst)
 end
 
 local function MoveModelKeepRotation(model: Model, targetPosition: Vector3)
@@ -629,6 +669,82 @@ local function IsServerProjectileModel(model: Model): boolean
 	return string.sub(model.Name, 1, #SERVER_PROJECTILE_NAME_PREFIX) == SERVER_PROJECTILE_NAME_PREFIX
 end
 
+local function ShouldProjectilePassThroughInstance(inst: Instance): boolean
+	if inst:IsA("BasePart") then
+		if inst.Name == "ArenaFloor" or inst.Name == "Ground" then
+			return true
+		end
+		local tm = inst:FindFirstAncestorOfClass("Model")
+		if tm ~= nil then
+			if tm.Name == "LocalProjectile" or IsServerProjectileModel(tm) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function CollectBlockingPartsOverlappingBullet(
+	position: Vector3,
+	radius: number,
+	excludeList: { Instance }
+): { BasePart }
+	local overlapParams = OverlapParams.new()
+	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+	overlapParams.FilterDescendantsInstances = excludeList
+	overlapParams.MaxParts = 16
+	local parts = workspace:GetPartBoundsInRadius(position, radius + PROJECTILE_EMBED_CHECK_BIAS, overlapParams)
+	local list: { BasePart } = {}
+	for _, part in parts do
+		if not ShouldProjectilePassThroughInstance(part) then
+			table.insert(list, part)
+		end
+	end
+	return list
+end
+
+-- 重叠区内可能同时包含己方盘与敌方载具；API 返回顺序不定，须优先敌方再墙体，最后才是己方 hull
+local function PickEmbeddedBlockingPartForProjectile(
+	blockingParts: { BasePart },
+	shooterId: number,
+	shooterUnitForEmbed: ServerUnitInfo?
+): BasePart
+	for _, part in blockingParts do
+		local tid = GetProjectileTargetPlayerIdFromHitInstance(part)
+		if tid ~= nil and tid ~= shooterId then
+			return part
+		end
+	end
+	for _, part in blockingParts do
+		if GetProjectileTargetPlayerIdFromHitInstance(part) == nil then
+			return part
+		end
+	end
+	for _, part in blockingParts do
+		local tid = GetProjectileTargetPlayerIdFromHitInstance(part)
+		local onShooterUnit = shooterUnitForEmbed ~= nil and part:IsDescendantOf(shooterUnitForEmbed.unitModel)
+		if tid == shooterId and not onShooterUnit then
+			return part
+		end
+	end
+	return blockingParts[1]
+end
+
+-- 命中非玩家且 bouncesLeft==0 时销毁子弹是预期；以下静态件不应刷屏 SPHERECAST_NO_TARGET / EMBEDDED_NO_BOUNCE 诊断
+-- 若 underRegisteredUnitPlayerId ~= nil 仍打印（车体在 unit 内但名称解析失败等）
+local STATIC_ARENA_NO_TARGET_LOG_SUPPRESS_NAMES: { [string]: boolean } = {
+	ArenaWall = true,
+	ArenaFloor = true,
+	Ground = true,
+}
+
+local function ShouldSuppressNoPlayerTargetProjectileLog(hitInst: Instance, underRegisteredUnitPlayerId: number?): boolean
+	if underRegisteredUnitPlayerId ~= nil then
+		return false
+	end
+	return STATIC_ARENA_NO_TARGET_LOG_SUPPRESS_NAMES[hitInst.Name] == true
+end
+
 local preparedProjectileTemplateMap: { [string]: Model? } = {}
 local pooledProjectileVisualMap: { [string]: { [number]: { model: Model, physicsRoot: BasePart, visualWeld: Motor6D, linearVelocity: LinearVelocity } } } = {}
 local raycastParamsPool: { RaycastParams } = {}
@@ -966,6 +1082,17 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 		if now < targetUnitInfo.invincibleUntil then
 			isProtected = true
 			LogInfo(string.format("ProjectileHit damage ignored targetId=%d reason=invincible", targetPlayerId))
+			LogProjectileHitResolve(
+				string.format(
+					"INVULN_SKIP_DAMAGE bullet=%s shooter=%d target=%d invincibleUntil=%.3f now=%.3f hitPos=%s",
+					bulletId,
+					shooterId,
+					targetPlayerId,
+					targetUnitInfo.invincibleUntil,
+					now,
+					FormatVector3(hitPosition)
+				)
+			)
 		else
 			targetUnitInfo.invincibleUntil = now + GameConfig.InvincibilityDuration
 		end
@@ -982,6 +1109,16 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 		isDead = false
 	else
 		hitCount, isDead = PlayerStateManager.AddPlayerHit(targetPlayerId, maxHits)
+		if hitCount == 0 and not isDead then
+			LogProjectileHitResolve(
+				string.format(
+					"ADD_HIT_NOOP bullet=%s shooter=%d target=%d (PlayerRoundInfo missing or AddPlayerHit no-op)",
+					bulletId,
+					shooterId,
+					targetPlayerId
+				)
+			)
+		end
 	end
 
 	-- 仅在受到伤害且未死亡的情况下开启无敌特效
@@ -1115,6 +1252,114 @@ function CombatManager.OnHeartbeat(dt: number)
 		-- Use visual-matched radius to avoid early wall bounces before visible contact
 		local radius = bullet.hitRadius
 
+		-- 若起点已与阻挡体重叠（贴墙开火或网络抖动导致），先按撞墙反弹处理，避免继续前进造成穿墙
+		local blockingEmbedParts = CollectBlockingPartsOverlappingBullet(origin, radius, excludeList)
+		if #blockingEmbedParts > 0 then
+			local shooterUnitForEmbed = unitInfoMap[bullet.shooterId]
+			local embeddedPart = PickEmbeddedBlockingPartForProjectile(
+				blockingEmbedParts,
+				bullet.shooterId,
+				shooterUnitForEmbed
+			)
+
+			local embedTargetId = GetProjectileTargetPlayerIdFromHitInstance(embeddedPart)
+			local hitPosEmbed = if embeddedPart:IsA("BasePart")
+				then (embeddedPart :: BasePart):GetClosestPointOnSurface(origin)
+				else origin
+			local embeddedInShooterVehicle = shooterUnitForEmbed ~= nil
+				and embeddedPart:IsDescendantOf(shooterUnitForEmbed.unitModel)
+
+			-- 重叠区内优先 Pick 到敌方载具；若有剩余反弹次数，旧逻辑会误走「墙反弹」导致在敌人身上弹开
+			if embedTargetId ~= nil then
+				ReleaseRaycastContext()
+				local skipDamageEmbedOwnHull = embedTargetId == bullet.shooterId and embeddedInShooterVehicle
+				if skipDamageEmbedOwnHull then
+					LogProjectileHitResolve(
+						string.format(
+							"EMBEDDED_SHOOTER_HULL destroy bullet=%s shooter=%d embeddedPart=%s origin=%s (no self-damage)",
+							bulletId,
+							bullet.shooterId,
+							embeddedPart:GetFullName(),
+							FormatVector3(origin)
+						)
+					)
+					DestroyServerBullet(bulletId)
+					continue
+				end
+				if embedTargetId ~= bullet.shooterId or GameConfig.CanHitSelf then
+					ResolveProjectileHit(bullet.shooterId, embedTargetId, shotDir, bulletId, hitPosEmbed)
+				else
+					LogProjectileHitResolve(
+						string.format(
+							"SELF_HIT_SKIPPED_EMBED destroy bullet=%s shooter=%d target=%s CanHitSelf=false",
+							bulletId,
+							bullet.shooterId,
+							tostring(embedTargetId)
+						)
+					)
+				end
+				DestroyServerBullet(bulletId)
+				continue
+			end
+
+			if bullet.bouncesLeft > 0 then
+				bullet.bouncesLeft -= 1
+
+				local closestPoint = embeddedPart:GetClosestPointOnSurface(origin)
+				local nFlat = Vector3.new(origin.X - closestPoint.X, 0, origin.Z - closestPoint.Z)
+				if nFlat.Magnitude > 0.01 then
+					nFlat = nFlat.Unit
+				else
+					nFlat = -shotDir
+				end
+
+				local dot = shotDir:Dot(nFlat)
+				if dot < 0 then
+					shotDir = shotDir - 2 * dot * nFlat
+				end
+
+				local flatDir = Vector3.new(shotDir.X, 0, shotDir.Z)
+				if flatDir.Magnitude > 0.01 then
+					shotDir = flatDir.Unit
+				end
+
+				if shotDir:Dot(nFlat) < 0.05 then
+					shotDir = (shotDir + nFlat * 0.05).Unit
+				end
+
+				bullet.shotDir = shotDir
+				local separationDistance = math.max(PROJECTILE_BOUNCE_SEPARATION_BIAS, radius + PROJECTILE_BOUNCE_SEPARATION_BIAS)
+				origin = origin + nFlat * separationDistance
+				bullet.currentPos = origin
+				bullet.distanceTraveled += (bullet.currentPos - frameStartPos).Magnitude
+				if bullet.distanceTraveled >= bullet.maxDistance then
+					ReleaseRaycastContext()
+					DestroyServerBullet(bulletId)
+					continue
+				end
+				PivotServerProjectileToBullet(bullet, bullet.currentPos, true)
+				ReleaseRaycastContext()
+				continue
+			end
+
+			ReleaseRaycastContext()
+			local underEmbedRegistered = GetUnderRegisteredUnitPlayerIdForHit(embeddedPart)
+			if not ShouldSuppressNoPlayerTargetProjectileLog(embeddedPart, underEmbedRegistered) then
+				LogProjectileHitResolve(
+					string.format(
+						"EMBEDDED_NO_BOUNCE destroy bullet=%s shooter=%d embeddedPart=%s origin=%s bouncesLeft=%d",
+						bulletId,
+						bullet.shooterId,
+						embeddedPart:GetFullName(),
+						FormatVector3(origin),
+						bullet.bouncesLeft
+					)
+				)
+			end
+			DestroyServerBullet(bulletId)
+			continue
+		end
+
 		for _ = 1, 10 do
 			if remaining < 1e-4 then
 				break
@@ -1125,19 +1370,7 @@ function CombatManager.OnHeartbeat(dt: number)
 			end
 
 			local inst = res.Instance
-			local shouldPass = false
-			if inst:IsA("BasePart") then
-				if inst.Name == "ArenaFloor" or inst.Name == "Ground" then
-					shouldPass = true
-				else
-					local tm = inst:FindFirstAncestorOfClass("Model")
-					if tm ~= nil then
-						if tm.Name == "LocalProjectile" or IsServerProjectileModel(tm) then
-							shouldPass = true
-						end
-					end
-				end
-			end
+			local shouldPass = ShouldProjectilePassThroughInstance(inst)
 
 			if shouldPass then
 				table.insert(excludeList, inst)
@@ -1150,26 +1383,21 @@ function CombatManager.OnHeartbeat(dt: number)
 
 		if hitResult ~= nil then
 			local inst = hitResult.Instance
-			local targetId: number? = nil
-			local currentAncestor = inst.Parent
-			while currentAncestor and currentAncestor ~= workspace do
-				if currentAncestor:IsA("Model") then
-					targetId = GetPlayerIdByVehicleModelName(currentAncestor.Name)
-					if targetId ~= nil then
-						break
-					end
-					local charPlayer = players:GetPlayerFromCharacter(currentAncestor)
-					if charPlayer then
-						targetId = charPlayer.UserId
-						break
-					end
-				end
-				currentAncestor = currentAncestor.Parent
-			end
+			local targetId: number? = GetProjectileTargetPlayerIdFromHitInstance(inst)
 
 			if targetId ~= nil then
 				if targetId ~= bullet.shooterId or GameConfig.CanHitSelf then
 					ResolveProjectileHit(bullet.shooterId, targetId, shotDir, bulletId, hitResult.Position)
+				else
+					LogProjectileHitResolve(
+						string.format(
+							"SELF_HIT_SKIPPED destroy bullet=%s shooter=%d target=%s CanHitSelf=false hitPos=%s",
+							bulletId,
+							bullet.shooterId,
+							tostring(targetId),
+							FormatVector3(hitResult.Position)
+						)
+					)
 				end
 				ReleaseRaycastContext()
 				DestroyServerBullet(bulletId)
@@ -1224,6 +1452,28 @@ function CombatManager.OnHeartbeat(dt: number)
 			end
 
 			ReleaseRaycastContext()
+			do
+				local hitInst = hitResult.Instance
+				local part: BasePart? = if hitInst:IsA("BasePart") then hitInst else nil
+				local colGroup = if part then part.CollisionGroup else "n/a"
+				local underUnitPlayerId = GetUnderRegisteredUnitPlayerIdForHit(hitInst)
+				if not ShouldSuppressNoPlayerTargetProjectileLog(hitInst, underUnitPlayerId) then
+					LogProjectileHitResolve(
+						string.format(
+							"SPHERECAST_NO_TARGET destroy bullet=%s shooter=%d hit=%s class=%s colGroup=%s hitPos=%s dist=%.4f bouncesLeft=%d underRegisteredUnitPlayerId=%s",
+							bulletId,
+							bullet.shooterId,
+							hitInst:GetFullName(),
+							hitInst.ClassName,
+							colGroup,
+							FormatVector3(hitResult.Position),
+							hitResult.Distance,
+							bullet.bouncesLeft,
+							if underUnitPlayerId ~= nil then tostring(underUnitPlayerId) else "nil"
+						)
+					)
+				end
+			end
 			DestroyServerBullet(bulletId)
 			continue
 		end
