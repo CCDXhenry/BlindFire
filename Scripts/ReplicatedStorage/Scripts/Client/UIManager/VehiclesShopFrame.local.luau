@@ -299,28 +299,36 @@ local function RefreshSelectFrame()
 		end
 	end
 
-	local sortedVehicles = {}
-	for _, data in pairs(GameConfig.VehicleDataMap) do
-		table.insert(sortedVehicles, data)
+	local sortedVehicles = {} :: { { vehicleId: number, vehicleData: GameConfig.VehicleData } }
+	for vehicleId, vehicleData in pairs(GameConfig.VehicleDataMap) do
+		table.insert(sortedVehicles, {
+			vehicleId = vehicleId,
+			vehicleData = vehicleData,
+		})
 	end
 	table.sort(sortedVehicles, function(a, b)
-		return a.sortId < b.sortId
+		if a.vehicleData.sortId ~= b.vehicleData.sortId then
+			return a.vehicleData.sortId < b.vehicleData.sortId
+		end
+		return a.vehicleId < b.vehicleId
 	end)
 
 	local vehicleCount: number = 0
 	local selectedBtn: ImageButton = nil
 	local usingVehicleId = localPlayerInfo.vehicleInventory.currentId
 
-	for _, vehicleData in ipairs(sortedVehicles) do
+	for _, sortedVehicle in ipairs(sortedVehicles) do
+		local vehicleId = sortedVehicle.vehicleId
+		local vehicleData = sortedVehicle.vehicleData
 		-- Robux车辆且未拥有则不显示（根据原逻辑）
 		-- if vehicleData.costType == 2 and not localPlayerInfo.vehicleInventory.ownedList[tostring(vehicleData.id)] then
 		-- 	continue
 		-- end
 
-		local btn: ImageButton = CreateSelectVehicleBtn(vehicleData.id, vehicleData)
+		local btn: ImageButton = CreateSelectVehicleBtn(vehicleId, vehicleData)
 		vehicleCount += 1
 		--找到当前使用中的车
-		if tostring(vehicleData.id) == usingVehicleId then
+		if tostring(vehicleId) == usingVehicleId then
 			selectedBtn = btn
 		end
 	end
