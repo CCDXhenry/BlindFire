@@ -76,6 +76,7 @@ local UNDERGROUND_Y = -100
 local SERVER_PROJECTILE_NAME_PREFIX = "ServerProjectile_"
 local SERVER_BULLETS_FOLDER_NAME = "ServerBullets"
 local SERVER_BULLET_SHOOTER_USER_ID_ATTR = "ShooterUserId"
+local SERVER_BULLET_TEMPLATE_NAME_ATTR = "TemplateName"
 local PROJECTILE_PREPARED_ATTR = "ServerPreparedProjectileTemplate"
 local PROJECTILE_PHYSICS_ROOT_NAME = "PhysicsRoot"
 local PROJECTILE_VISUAL_WELD_NAME = "VisualWeld"
@@ -945,6 +946,7 @@ local function CreateServerProjectileVisual(shooterId: number, spawnPos: Vector3
 	projectileModelRef.Parent = EnsureServerBulletsFolder()
 	projectileModelRef.Name = SERVER_PROJECTILE_NAME_PREFIX .. bulletId
 	projectileModelRef:SetAttribute(SERVER_BULLET_SHOOTER_USER_ID_ATTR, shooterId)
+	projectileModelRef:SetAttribute(SERVER_BULLET_TEMPLATE_NAME_ATTR, templateName)
 	projectileModelRef.PrimaryPart = physicsRootRef
 
 	local visualRoot = projectileModelRef:FindFirstChild("Core")
@@ -987,6 +989,7 @@ local function RecycleServerProjectileVisual(templateName: string, model: Model?
 	physicsRoot.AssemblyAngularVelocity = Vector3.zero
 	linearVelocity.VectorVelocity = Vector3.zero
 	model:SetAttribute(SERVER_BULLET_SHOOTER_USER_ID_ATTR, nil)
+	model:SetAttribute(SERVER_BULLET_TEMPLATE_NAME_ATTR, nil)
 	model.Name = "PooledProjectile"
 	model.Parent = nil
 

@@ -43,8 +43,12 @@ local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
 local SERVER_BULLETS_FOLDER_NAME = "ServerBullets"
 local SERVER_PROJECTILE_NAME_PREFIX = "ServerProjectile_"
 local SHOOTER_USER_ID_ATTRIBUTE = "ShooterUserId"
+local TEMPLATE_NAME_ATTRIBUTE = "TemplateName"
+local PROJECTILE_MODEL_TEMPLATE_NAME = "ProjectileModel"
 local LOCAL_OWNED_PROJECTILE_COLOR = Color3.new(0, 1, 0)
 local ENEMY_PROJECTILE_COLOR = Color3.new(1, 0.2, 0.2)
+local LOCAL_OWNED_PROJECTILE_BRICK_COLOR = BrickColor.new("Lime green")
+local ENEMY_PROJECTILE_BRICK_COLOR = BrickColor.new("Bright red")
 local CLIENT_BULLET_PREWARM_FOLDER_NAME = "ClientBulletPrewarm"
 local PREWARM_UNDERGROUND_Y = -200
 local PREWARM_CLEAR_DELAY_SEC = 1.5
@@ -353,10 +357,19 @@ local function TintServerProjectile(projectileModel: Model)
 
 		local isLocal = (shooterId == localPlayerId)
 		local tintColor = if isLocal then LOCAL_OWNED_PROJECTILE_COLOR else ENEMY_PROJECTILE_COLOR
+		local brickColor = if isLocal then LOCAL_OWNED_PROJECTILE_BRICK_COLOR else ENEMY_PROJECTILE_BRICK_COLOR
 		-- 规范：子弹模型的 Highlight 必须挂在模型根节点
 		local rootHighlight = projectileModel:FindFirstChildWhichIsA("Highlight")
 		if rootHighlight ~= nil then
 			rootHighlight.OutlineColor = tintColor
+		end
+		local templateName = projectileModel:GetAttribute(TEMPLATE_NAME_ATTRIBUTE)
+		if templateName ~= PROJECTILE_MODEL_TEMPLATE_NAME then
+			return
+		end
+		local projectileCore = projectileModel:FindFirstChild("Core")
+		if projectileCore ~= nil and projectileCore:IsA("BasePart") then
+			projectileCore.BrickColor = brickColor
 		end
 	end
 	tryTint()
