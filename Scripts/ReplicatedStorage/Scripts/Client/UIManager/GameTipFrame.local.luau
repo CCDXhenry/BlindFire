@@ -63,6 +63,27 @@ local lastShowedAddRewardsTipTime: number = -1
 local isShowRewardFrame: boolean = false
 
 local gameTipFrame: Frame = script.Parent
+local GameTipBaseZIndex = 1000
+
+local function ElevateGameTipGuiObject(guiObject: GuiObject)
+	if guiObject.ZIndex < GameTipBaseZIndex then
+		guiObject.ZIndex = GameTipBaseZIndex + guiObject.ZIndex
+	end
+end
+
+local function OnGameTipDescendantAdded(descendant: Instance)
+	if descendant:IsA("GuiObject") then
+		ElevateGameTipGuiObject(descendant)
+	end
+end
+
+local function EnsureGameTipOnTop()
+	ElevateGameTipGuiObject(gameTipFrame)
+	for _, descendant in gameTipFrame:GetDescendants() do
+		OnGameTipDescendantAdded(descendant)
+	end
+	gameTipFrame.DescendantAdded:Connect(OnGameTipDescendantAdded)
+end
 
 -- 常量定义
 local GIFT_CONFIRM_TITLE_COLOR = Color3.fromRGB(0, 255, 0) -- 绿色
@@ -590,6 +611,7 @@ local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: 
 	end
 end
 
+EnsureGameTipOnTop()
 UIAdapter.AddAdaptiveFrame(gameTipFrame, UIAdapter.AdaptiveType.FullScreen)
 
 runService:BindToRenderStep("GameTipFrame.RenderStepped", Enum.RenderPriority.Camera.Value + 2, OnRenderStepped)

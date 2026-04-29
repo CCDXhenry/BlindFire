@@ -25,7 +25,10 @@ local function CanAffordVehicle(playerInfo: GameConfig.PlayerInfo, vehicleData: 
 	local coinCost = vehicleData.costCoin
 
 	-- 服务端仅处理金币购买请求（Rb 通过 MarketplaceService 走 ProcessReceipt）
-	return currentCoins >= coinCost
+	if vehicleData.costType == GameConfig.CostType.Coin or vehicleData.costType == GameConfig.CostType.CoinOrRb then
+		return currentCoins >= coinCost
+	end
+	return false
 end
 
 local function SpendVehicleCost(player: Player, vehicleData: GameConfig.VehicleData)
@@ -38,7 +41,10 @@ local function SpendVehicleCost(player: Player, vehicleData: GameConfig.VehicleD
 	local currentCoins = playerInfo.currencies[coinKey] or 0
 	local coinCost = vehicleData.costCoin
 
-	if currentCoins >= coinCost then
+	if
+		(vehicleData.costType == GameConfig.CostType.Coin or vehicleData.costType == GameConfig.CostType.CoinOrRb)
+		and currentCoins >= coinCost
+	then
 		ServerGameInfo.UpdatePlayerCurrency(player, GameConfig.CurrencyType.Coin, -coinCost, GameConfig.ItemCountChangeReason.SpendOnUpgrade)
 	end
 end
@@ -70,7 +76,13 @@ function VehicleManager.OnRequestBuyVehicle(player: Player, vehicleId: number)
 		-- 自动装备
 		VehicleManager.OnRequestUpdateVehicleUsing(player, vehicleId)
 	else
-		LogInfo(string.format("BuyRejected userId=%d reason=insufficient_currency vehicleId=%d", player.UserId, vehicleId))
+		local rejectReason = "insufficient_currency"
+		if vehicleData.costType == GameConfig.CostType.Rb then
+			rejectReason = "rb_purchase_only"
+		elseif vehicleData.costType == GameConfig.CostType.GroupReward then
+			rejectReason = "group_reward_only"
+		end
+		LogInfo(string.format("BuyRejected userId=%d reason=%s vehicleId=%d", player.UserId, rejectReason, vehicleId))
 	end
 end
 

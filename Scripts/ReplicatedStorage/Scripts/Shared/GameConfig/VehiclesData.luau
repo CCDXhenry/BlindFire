@@ -41,7 +41,7 @@ return {
 		["productId"] = 3580614658,
 		["costRb"] = 299,
 		["moveSpeed"] = 26,
-		["costType"] = 2,
+		["costType"] = 4,
 		["bulletId"] = 3,
 	},
 	[4] = {

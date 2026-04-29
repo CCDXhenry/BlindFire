@@ -30,7 +30,7 @@ end
 --六次方群组id
 GameConfig.SixcubeGroupId = 33977495
 --群组奖励载具id
-GameConfig.GroupRewardVehicleId = 2
+GameConfig.GroupRewardVehicleId = 3
 
 --奖励信息
 export type RewardInfo = {
@@ -67,6 +67,7 @@ GameConfig.CostType = {
 	Coin = 1, --金币
 	Rb = 2, --RB
 	CoinOrRb = 3, --金币或RB
+	GroupReward = 4, --群组奖励
 }
 
 --物品数量改变原因

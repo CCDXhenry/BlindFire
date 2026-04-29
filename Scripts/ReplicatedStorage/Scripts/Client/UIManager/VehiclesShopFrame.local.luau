@@ -47,9 +47,11 @@ local function IsVehicleAffordable(vehicleData: GameConfig.VehicleData): boolean
 	if vehicleData.costType == GameConfig.CostType.Coin then
 		return coinCount >= vehicleData.costCoin
 	elseif vehicleData.costType == GameConfig.CostType.Rb then
-		return rbCount >= vehicleData.costCoin
+		return rbCount >= rbCost
 	elseif vehicleData.costType == GameConfig.CostType.CoinOrRb then
 		return coinCount >= vehicleData.costCoin or rbCount >= rbCost
+	elseif vehicleData.costType == GameConfig.CostType.GroupReward then
+		return localPlayerInfo.isInGroup and not localPlayerInfo.hasClaimedGroupReward
 	end
 
 	return false
@@ -81,11 +83,17 @@ local function RefreshInfoFrame()
 	vehiclesName.Text = vehicleData.labelName_t
 	local icon: ImageLabel = infoFrame:FindFirstChild("Icon") :: ImageLabel
 	icon.Image = vehicleData.iconImage
+	local speedValue: TextLabel = infoFrame:FindFirstChild("SpeedValue") :: TextLabel
+	if speedValue then
+		speedValue.Text = tostring(vehicleData.moveSpeed)
+	end
 
 	--刷新购买按钮
 	local buyBtn: ImageButton = infoFrame:FindFirstChild("BuyBtn") :: ImageButton
 	local buyBtn31: ImageButton = infoFrame:FindFirstChild("BuyBtn3-1") :: ImageButton
 	local buyBtn32: ImageButton = infoFrame:FindFirstChild("BuyBtn3-2") :: ImageButton
+	local groupRewardText: TextLabel = infoFrame:FindFirstChild("GroupRewardText") :: TextLabel
+	local groupRewardBtn: ImageButton = infoFrame:FindFirstChild("GroupRewardBtn") :: ImageButton
 	local equipBtn: ImageButton = infoFrame:FindFirstChild("EquipBtn") :: ImageButton
 	local equip: ImageLabel = equipBtn:FindFirstChild("Equip") :: ImageLabel
 	local equipped: ImageLabel = equipBtn:FindFirstChild("Equipped") :: ImageLabel
@@ -93,10 +101,18 @@ local function RefreshInfoFrame()
 	local isOwned = localPlayerInfo.vehicleInventory.ownedList[tostring(vehicleIdLookAt)]
 
 	if not isOwned then
-		if vehicleData.costType == GameConfig.CostType.CoinOrRb then
+		if vehicleData.costType == GameConfig.CostType.GroupReward then
+			buyBtn.Visible = false
+			buyBtn31.Visible = false
+			buyBtn32.Visible = false
+			groupRewardText.Visible = true
+			groupRewardBtn.Visible = true
+		elseif vehicleData.costType == GameConfig.CostType.CoinOrRb then
 			buyBtn.Visible = false
 			buyBtn31.Visible = true
 			buyBtn32.Visible = true
+			groupRewardText.Visible = false
+			groupRewardBtn.Visible = false
 
 			local priceText31: TextLabel = buyBtn31:FindFirstChild("Price") :: TextLabel
 			local priceText32: TextLabel = buyBtn32:FindFirstChild("Price") :: TextLabel
@@ -109,6 +125,8 @@ local function RefreshInfoFrame()
 			buyBtn.Visible = true
 			buyBtn31.Visible = false
 			buyBtn32.Visible = false
+			groupRewardText.Visible = false
+			groupRewardBtn.Visible = false
 
 			local rb: ImageLabel = buyBtn:FindFirstChild("Rb") :: ImageLabel
 			local coin: ImageLabel = buyBtn:FindFirstChild("Coin") :: ImageLabel
@@ -130,6 +148,8 @@ local function RefreshInfoFrame()
 		buyBtn.Visible = false
 		buyBtn31.Visible = false
 		buyBtn32.Visible = false
+		groupRewardText.Visible = false
+		groupRewardBtn.Visible = false
 		buyBtn:SetAttribute("IntroPlayed", false)
 		if buyBtn31 then buyBtn31:SetAttribute("IntroPlayed", false) end
 		if buyBtn32 then buyBtn32:SetAttribute("IntroPlayed", false) end
@@ -227,6 +247,37 @@ local function CreateSelectVehicleBtn(vehicleId: number, vehicleData: GameConfig
 	name.Text = vehicleData.labelName_t
 	local icon: ImageLabel = vehicleBtn:FindFirstChild("Icon") :: ImageLabel
 	icon.Image = vehicleData.iconImage
+	local costFrame: Frame = vehicleBtn:FindFirstChild("CostFrame") :: Frame
+	if costFrame then
+		local coin: ImageLabel = costFrame:FindFirstChild("Coin") :: ImageLabel
+		local rb: ImageLabel = costFrame:FindFirstChild("Rb") :: ImageLabel
+		local price: TextLabel = costFrame:FindFirstChild("Price") :: TextLabel
+		local groupReward: TextLabel = costFrame:FindFirstChild("GroupReward") :: TextLabel
+
+		costFrame.Visible = not isOwned
+		if not isOwned then
+			coin.Visible = false
+			rb.Visible = false
+			price.Visible = false
+			groupReward.Visible = false
+
+			if vehicleData.costType == GameConfig.CostType.Coin then
+				coin.Visible = true
+				price.Visible = true
+				price.Text = NumberExtension.FormatBigNumberAA(vehicleData.costCoin)
+			elseif vehicleData.costType == GameConfig.CostType.Rb then
+				rb.Visible = true
+				price.Visible = true
+				price.Text = NumberExtension.FormatBigNumberAA(vehicleData.costRb or 0)
+			elseif vehicleData.costType == GameConfig.CostType.GroupReward then
+				groupReward.Visible = true
+			else
+				coin.Visible = true
+				price.Visible = true
+				price.Text = NumberExtension.FormatBigNumberAA(vehicleData.costCoin)
+			end
+		end
+	end
 
 	vehicleBtn.Activated:Connect(function()
 		vehicleIdLookAt = vehicleId
@@ -309,6 +360,7 @@ local function InitFrame()
 	local buyBtn: ImageButton = infoFrame:FindFirstChild("BuyBtn") :: ImageButton
 	local buyBtn31: ImageButton = infoFrame:FindFirstChild("BuyBtn3-1") :: ImageButton
 	local buyBtn32: ImageButton = infoFrame:FindFirstChild("BuyBtn3-2") :: ImageButton
+	local groupRewardBtn: ImageButton = infoFrame:FindFirstChild("GroupRewardBtn") :: ImageButton
 	local equipBtn: ImageButton = infoFrame:FindFirstChild("EquipBtn") :: ImageButton
 
 	--请求改变当前车辆
@@ -340,6 +392,27 @@ local function InitFrame()
 		end
 	end
 
+	local function OnGroupRewardBtnActivated()
+		if vehicleIdLookAt == nil then
+			return
+		end
+		local vehicleData = GameConfig.VehicleDataMap[vehicleIdLookAt]
+		if not vehicleData or vehicleData.costType ~= GameConfig.CostType.GroupReward then
+			return
+		end
+
+		task.spawn(function()
+			local success, isInGroup = pcall(function()
+				return players.LocalPlayer:IsInGroupAsync(GameConfig.SixcubeGroupId)
+			end)
+			local canClaim = success and isInGroup
+			NetMsg.FireRequestClaimGroupReward(canClaim)
+			if not canClaim then
+				ClientMsg.FireShowGameTip(GameTexts.GroupRewardJoinHint.source, GameConfig.GameTipTweenType.FlyUp, GameTexts.GroupRewardJoinHint.key)
+			end
+		end)
+	end
+
 	buyBtn.Activated:Connect(function()
 		if vehicleIdLookAt == nil then
 			return
@@ -365,6 +438,10 @@ local function InitFrame()
 		buyBtn32.Activated:Connect(function()
 			OnBuyBtnActivated(GameConfig.CurrencyType.Rb)
 		end)
+	end
+
+	if groupRewardBtn then
+		groupRewardBtn.Activated:Connect(OnGroupRewardBtnActivated)
 	end
 
 	vehiclesBtnPre.Visible = false
