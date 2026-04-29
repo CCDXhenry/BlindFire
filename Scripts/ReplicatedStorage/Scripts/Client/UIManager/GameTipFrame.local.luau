@@ -97,6 +97,8 @@ local GIFT_TOP_TIP_DURATION = 5
 local TOP_TIP_FADE_DURATION = 0.5
 local MATCH_PHASE_TOP_TIP_DURATION = 3
 local ROUND_OUTCOME_GAME_TIP_TWEEN: number = GameConfig.GameTipTweenType.StayFlyUp
+local DefaultPhaseTextScale = 1
+local FightingPhaseTextScale = 0.8
 
 --AddRewardTipFrame
 local addRewardTipFrameOrigin: Frame = gameTipFrame:FindFirstChild("AddRewardTipFrame") :: Frame
@@ -412,6 +414,24 @@ local function ApplyCountdownFormatToLabel(targetLabel: TextLabel, seconds: numb
 	)
 end
 
+local function ApplyPhaseTextScale(targetLabel: TextLabel?, scaleValue: number)
+	if targetLabel == nil then
+		return
+	end
+	local scaleNode = targetLabel:FindFirstChildOfClass("UIScale")
+	if scaleNode == nil then
+		scaleNode = Instance.new("UIScale")
+		scaleNode.Parent = targetLabel
+	end
+	scaleNode.Scale = scaleValue
+end
+
+local function ApplyMatchStateTextScale(matchState: GameConfig.MatchState)
+	local targetScale = if matchState == GameConfig.MatchState.Fighting then FightingPhaseTextScale else DefaultPhaseTextScale
+	ApplyPhaseTextScale(topTipText, targetScale)
+	ApplyPhaseTextScale(countdownText, targetScale)
+end
+
 local function StartPopUpCountdown(targetTimeLabel: TextLabel?, totalSeconds: number, timeoutCallback: () -> ())
 	if targetTimeLabel == nil then
 		return
@@ -580,6 +600,8 @@ local function OnNotifyDeadForKillSound(_playerId: number, killerId: number?)
 end
 
 local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: number)
+	ApplyMatchStateTextScale(matchState)
+
 	if matchState ~= lastNotifiedMatchState then
 		local entry, tipColor = GetMatchPhaseTipEntry(matchState)
 		local tipDuration = GetPhaseTopTipDuration(matchState, countdown)
