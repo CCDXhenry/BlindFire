@@ -29,8 +29,6 @@ end
 
 --六次方群组id
 GameConfig.SixcubeGroupId = 33977495
---群组奖励载具id
-GameConfig.GroupRewardVehicleId = 3
 
 --奖励信息
 export type RewardInfo = {
@@ -513,6 +511,7 @@ local VehiclesData = require(script.VehiclesData)
 
 GameConfig.BulletDataMap = BulletData :: { [number]: BulletData }
 GameConfig.VehicleDataMap = {} :: { [number]: VehicleData }
+local groupRewardVehicleIdListCache: { number }? = nil
 
 local PlayerInfoUiOffsetAttributeName = "PlayerInfoUIOffset"
 local modelsFolderForVehicleTemplates = replicatedStorage:FindFirstChild("Models") :: Folder?
@@ -556,6 +555,34 @@ for id, data in pairs(VehiclesData) do
 		vehicle.bulletData = BulletData[vehicle.bulletId]
 	end
 	GameConfig.VehicleDataMap[id] = vehicle
+end
+
+function GameConfig.GetGroupRewardVehicleIdList(): { number }
+	if groupRewardVehicleIdListCache ~= nil then
+		return table.clone(groupRewardVehicleIdListCache)
+	end
+
+	local groupRewardVehicleIdList = {} :: { number }
+	for vehicleId, vehicleData in pairs(GameConfig.VehicleDataMap) do
+		if vehicleData.costType == GameConfig.CostType.GroupReward then
+			table.insert(groupRewardVehicleIdList, vehicleId)
+		end
+	end
+
+	table.sort(groupRewardVehicleIdList, function(leftVehicleId, rightVehicleId)
+		local leftVehicleData = GameConfig.VehicleDataMap[leftVehicleId]
+		local rightVehicleData = GameConfig.VehicleDataMap[rightVehicleId]
+		if leftVehicleData == nil or rightVehicleData == nil then
+			return leftVehicleId < rightVehicleId
+		end
+		if leftVehicleData.sortId ~= rightVehicleData.sortId then
+			return leftVehicleData.sortId < rightVehicleData.sortId
+		end
+		return leftVehicleId < rightVehicleId
+	end)
+
+	groupRewardVehicleIdListCache = groupRewardVehicleIdList
+	return table.clone(groupRewardVehicleIdListCache)
 end
 
 return GameConfig

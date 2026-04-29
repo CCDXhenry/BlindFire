@@ -167,9 +167,22 @@ local function InitDisplayModel()
 		return
 	end
 
-	local rewardVehicleId = GameConfig.GroupRewardVehicleId
-	local vehicleData = GameConfig.VehicleDataMap[rewardVehicleId]
+	local groupRewardVehicleIdList = GameConfig.GetGroupRewardVehicleIdList()
+	if #groupRewardVehicleIdList == 0 then
+		warn("[GroupRewardClientManager] Group reward vehicle list is empty")
+		return
+	end
+
+	local vehicleData: GameConfig.VehicleData? = nil
+	for _, rewardVehicleId in ipairs(groupRewardVehicleIdList) do
+		vehicleData = GameConfig.VehicleDataMap[rewardVehicleId]
+		if vehicleData ~= nil then
+			break
+		end
+	end
+
 	if not vehicleData then
+		warn("[GroupRewardClientManager] Group reward vehicle data not found")
 		return
 	end
 

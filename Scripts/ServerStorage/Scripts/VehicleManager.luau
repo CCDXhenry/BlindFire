@@ -139,8 +139,16 @@ function VehicleManager.OnRequestClaimGroupReward(player: Player, isInGroup: boo
 
 	-- 如果玩家尚未领取过群组奖励，则更新状态并补发奖励
 	if not playerInfo.hasClaimedGroupReward then
+		local groupRewardVehicleIdList = GameConfig.GetGroupRewardVehicleIdList()
+		if #groupRewardVehicleIdList == 0 then
+			warn(string.format("%s Group reward vehicle list is empty", LOG_PREFIX))
+			return
+		end
+
 		playerInfo.hasClaimedGroupReward = true
-		ServerGameInfo.AddPlayerVehicle(player, tostring(GameConfig.GroupRewardVehicleId))
+		for _, rewardVehicleId in ipairs(groupRewardVehicleIdList) do
+			ServerGameInfo.AddPlayerVehicle(player, tostring(rewardVehicleId))
+		end
 		NetMsg.FireNotifyPlayerClaimedGroupReward(player)
 		LogInfo(string.format("RewardClaimed userId=%d", player.UserId))
 	end
