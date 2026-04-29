@@ -100,7 +100,7 @@ local TOP_TIP_FADE_DURATION = 0.5
 local MATCH_PHASE_TOP_TIP_DURATION = 3
 local ROUND_OUTCOME_GAME_TIP_TWEEN: number = GameConfig.GameTipTweenType.StayFlyUp
 local DefaultPhaseTextScale = 1
-local FightingPhaseTextScale = 0.8
+local FightingPhaseTextScale = 0.5
 
 --AddRewardTipFrame
 local addRewardTipFrameOrigin: Frame = gameTipFrame:FindFirstChild("AddRewardTipFrame") :: Frame
@@ -454,6 +454,22 @@ local function ApplyMatchStateTextScale(matchState: GameConfig.MatchState)
 	ApplyPhaseTextScale(countdownText, targetScale)
 end
 
+local function ApplyFightingTopTipCountdownText(countdown: number)
+	if topTipText == nil then
+		return
+	end
+	topTipText.Visible = true
+	topTipText.TextColor3 = TOP_TIP_SUCCESS_COLOR
+	topTipText.TextTransparency = 0
+	local stroke = topTipText:FindFirstChild("UIStroke") :: UIStroke?
+	if stroke ~= nil then
+		stroke.Transparency = 0
+	end
+	local countdownSeconds = math.max(countdown, 0)
+	local countdownSource = string.gsub(GameTexts.CountdownFormat.source, "{1}", tostring(countdownSeconds))
+	topTipText.Text = string.format("%s %s", GameTexts.MatchPhaseFighting.source, countdownSource)
+end
+
 local function StartPopUpCountdown(targetTimeLabel: TextLabel?, totalSeconds: number, timeoutCallback: () -> ())
 	if targetTimeLabel == nil then
 		return
@@ -696,6 +712,14 @@ local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: 
 		lastNotifiedMatchState = matchState
 	end
 
+	if matchState == GameConfig.MatchState.Fighting then
+		if countdownText ~= nil then
+			countdownText.Visible = false
+		end
+		ApplyFightingTopTipCountdownText(countdown)
+		return
+	end
+
 	if countdownText == nil then
 		return
 	end
@@ -703,14 +727,6 @@ local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: 
 		if countdown > 0 then
 			countdownText.Visible = true
 			countdownText.TextColor3 = EARTHQUAKE_WARNING_COLOR
-			ApplyCountdownFormatToLabel(countdownText, countdown)
-		else
-			countdownText.Visible = false
-		end
-	elseif matchState == GameConfig.MatchState.Fighting then
-		if countdown > 0 then
-			countdownText.Visible = true
-			countdownText.TextColor3 = EARTHQUAKE_DANGER_COLOR
 			ApplyCountdownFormatToLabel(countdownText, countdown)
 		else
 			countdownText.Visible = false
