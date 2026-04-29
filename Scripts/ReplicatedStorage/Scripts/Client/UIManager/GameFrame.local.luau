@@ -1,7 +1,6 @@
 --!strict
 local replicatedStorage: ReplicatedStorage = game:GetService("ReplicatedStorage")
 local runService = game:GetService("RunService")
-local tweenService = game:GetService("TweenService")
 
 local core = replicatedStorage:WaitForChild("Core")
 local coreScripts = core:WaitForChild("Scripts")
@@ -16,31 +15,15 @@ local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
 
 local gameFrame: Frame = script.Parent
 
-local FIRE_BUTTON_SIZE = UDim2.new(0, 140, 0, 140)
 local UI_UPDATE_INTERVAL_SEC = 1 / 20
 
 
 local fireButtonContainer: Frame? = nil
-local fireButton: TextButton? = nil
-local flashOverlay: Frame? = nil
+local shootButton: ImageButton? = nil
 
-local isCoolingDown = false
 local updateAccumSec = 0
 local lastButtonVisible: boolean? = nil
-local lastButtonCooling: boolean? = nil
-
-local function PlayFlashEffect()
-	if not flashOverlay or not fireButton then return end
-	
-	flashOverlay.BackgroundTransparency = 0.3
-	local tweenInfo = TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-	tweenService:Create(flashOverlay, tweenInfo, {BackgroundTransparency = 1}):Play()
-	
-	-- Button brightness bump
-	local originalColor = Color3.fromRGB(220, 60, 60)
-	fireButton.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
-	tweenService:Create(fireButton, tweenInfo, {BackgroundColor3 = originalColor}):Play()
-end
+local lastShootButtonActive: boolean? = nil
 
 local function ApplyFireButtonVisible(shouldBeVisible: boolean)
 	if lastButtonVisible == shouldBeVisible then
@@ -52,27 +35,16 @@ local function ApplyFireButtonVisible(shouldBeVisible: boolean)
 	end
 end
 
-local function ApplyFireButtonCooling(coolingDown: boolean)
-	if lastButtonCooling == coolingDown then
+local function ApplyShootButtonActive(canShoot: boolean)
+	if lastShootButtonActive == canShoot then
 		return
 	end
-	lastButtonCooling = coolingDown
-	if fireButton == nil then
+	lastShootButtonActive = canShoot
+	if shootButton == nil then
 		return
 	end
-
-	if coolingDown then
-		isCoolingDown = true
-		fireButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
-		fireButton.TextTransparency = 0.5
-	else
-		if isCoolingDown then
-			PlayFlashEffect()
-		end
-		isCoolingDown = false
-		fireButton.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
-		fireButton.TextTransparency = 0
-	end
+	shootButton.Active = canShoot
+	shootButton.AutoButtonColor = canShoot
 end
 
 local function UpdateGameFrame(deltaTime: number)
@@ -90,28 +62,17 @@ local function UpdateGameFrame(deltaTime: number)
 		and (matchState == GameConfig.MatchState.GameStartCountdown or matchState == GameConfig.MatchState.Fighting)
 	ApplyFireButtonVisible(shouldBeVisible)
 	
-	if not shouldBeVisible or fireButton == nil then
-		ApplyFireButtonCooling(false)
+	if not shouldBeVisible or shootButton == nil then
+		ApplyShootButtonActive(false)
 		return
 	end
 
 	local cooldownLeft = BulletClientManager.GetLocalFireCooldownLeft()
-	ApplyFireButtonCooling(cooldownLeft > 0)
+	local canShoot = cooldownLeft <= 0
+	ApplyShootButtonActive(canShoot)
 end
 
-
-local function OnFireButtonPressed()
-	if fireButton == nil or isCoolingDown then return end
-	fireButton.Size = UDim2.new(0, 130, 0, 130)
-end
-
-local function OnFireButtonReleased()
-	if fireButton == nil then return end
-	fireButton.Size = FIRE_BUTTON_SIZE
-end
-
-local function OnFireButtonClicked()
-	if isCoolingDown then return end
+local function OnShootButtonClicked()
 	BulletClientManager.FireShot()
 end
 
@@ -122,26 +83,13 @@ local function SetupFireButton()
 		return 
 	end
 
-	-- Find the button (could be TextButton or ImageButton)
-	fireButton = (fireButtonContainer:FindFirstChild("FireButton") or fireButtonContainer:FindFirstChildOfClass("TextButton") or fireButtonContainer:FindFirstChildOfClass("ImageButton")) :: any
-	
-	if fireButton then
-		flashOverlay = fireButton:FindFirstChild("FlashOverlay") :: Frame
-		
-		fireButton.MouseButton1Down:Connect(OnFireButtonPressed)
-		fireButton.MouseButton1Up:Connect(OnFireButtonReleased)
-		fireButton.Activated:Connect(OnFireButtonClicked)
+	shootButton = fireButtonContainer:FindFirstChild("ShootButton") :: ImageButton?
+	if shootButton == nil then
+		warn("[GameFrame] ShootButton not found in FireButtonContainer")
+		return
 	end
 
-	local rightHalf = fireButtonContainer:FindFirstChild("RightHalf")
-	if rightHalf then
-		(rightHalf :: any).Visible = false
-	end
-
-	local leftHalf = fireButtonContainer:FindFirstChild("LeftHalf")
-	if leftHalf then
-		(leftHalf :: any).Visible = false
-	end
+	shootButton.Activated:Connect(OnShootButtonClicked)
 end
 
 local function InitUI()

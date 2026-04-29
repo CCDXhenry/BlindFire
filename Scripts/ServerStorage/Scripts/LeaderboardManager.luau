@@ -14,6 +14,7 @@ local serverStorage = game:GetService("ServerStorage")
 local serverScripts = serverStorage:WaitForChild("Scripts")
 
 local LOG_PREFIX = "[LeaderboardManager]"
+local SlowOperationWarnThresholdSeconds: number = 1
 
 local httpService = game:GetService("HttpService")
 
@@ -23,6 +24,13 @@ local usernameCache: { [number]: string } = {}
 local lastLeaderboardHashes: { [string]: string } = {}
 -- 下次排行榜刷新时间戳（UTC 秒）
 local nextRefreshTimestamp: number = 0
+
+local function WarnIfSlow(operationName: string, startClock: number)
+	local elapsed = os.clock() - startClock
+	if elapsed >= SlowOperationWarnThresholdSeconds then
+		warn(string.format("%s SlowOperation name=%s elapsed=%.2fs", LOG_PREFIX, operationName, elapsed))
+	end
+end
 
 -- 获取本周 Key
 local function GetWeeklyKey(category: string): string
@@ -149,6 +157,7 @@ end
 function LeaderboardManager.UpdateToOrderedDataStore(player: Player, category: string, value: number)
 	local ods = GetOrderedDataStore(category)
 	task.spawn(function()
+		local updateStartClock = os.clock()
 		local success, err = pcall(function()
 			ods:SetAsync(tostring(player.UserId), math.floor(value))
 		end)
@@ -156,6 +165,7 @@ function LeaderboardManager.UpdateToOrderedDataStore(player: Player, category: s
 			warn(string.format("%s Failed to update OrderedDataStore for %d in %s: %s", 
 				LOG_PREFIX, player.UserId, category, err))
 		end
+		WarnIfSlow("UpdateToOrderedDataStore", updateStartClock)
 	end)
 end
 
@@ -163,6 +173,7 @@ end
 function LeaderboardManager.RefreshLeaderboard(category: string)
 	local ods = GetOrderedDataStore(category)
 	task.spawn(function()
+		local refreshStartClock = os.clock()
 		local success, pages = pcall(function()
 			return ods:GetSortedAsync(false, GameConfig.LeaderboardDisplayCount)
 		end)
@@ -195,6 +206,7 @@ function LeaderboardManager.RefreshLeaderboard(category: string)
 			
 			local jsonString = httpService:JSONEncode(newList)
 			if lastLeaderboardHashes[category] == jsonString then
+				WarnIfSlow("RefreshLeaderboard", refreshStartClock)
 				return -- 数据没有变化，跳过网络广播
 			end
 			lastLeaderboardHashes[category] = jsonString
@@ -205,6 +217,7 @@ function LeaderboardManager.RefreshLeaderboard(category: string)
 		else
 			warn(string.format("%s Failed to refresh leaderboard for %s: %s", LOG_PREFIX, category, tostring(pages)))
 		end
+		WarnIfSlow("RefreshLeaderboard", refreshStartClock)
 	end)
 end
 
