@@ -7,7 +7,7 @@ return {
 		["sortId"] = 1,
 		["maxDistance"] = 500,
 		["lifetime"] = 3,
-		["maxBounces"] = 1,
+		["maxBounces"] = 99,
 		["moveSpeed"] = 60,
 	},
 	[2] = {
@@ -18,7 +18,7 @@ return {
 		["sortId"] = 2,
 		["maxDistance"] = 500,
 		["lifetime"] = 3,
-		["maxBounces"] = 1,
+		["maxBounces"] = 99,
 		["moveSpeed"] = 60,
 	},
 	[3] = {
@@ -29,7 +29,7 @@ return {
 		["sortId"] = 3,
 		["maxDistance"] = 500,
 		["lifetime"] = 3,
-		["maxBounces"] = 1,
+		["maxBounces"] = 99,
 		["moveSpeed"] = 60,
 	},
 	[4] = {
@@ -40,7 +40,7 @@ return {
 		["sortId"] = 4,
 		["maxDistance"] = 500,
 		["lifetime"] = 3,
-		["maxBounces"] = 1,
+		["maxBounces"] = 99,
 		["moveSpeed"] = 60,
 	},
 	[5] = {
@@ -51,7 +51,7 @@ return {
 		["sortId"] = 5,
 		["maxDistance"] = 500,
 		["lifetime"] = 3,
-		["maxBounces"] = 1,
+		["maxBounces"] = 99,
 		["moveSpeed"] = 60,
 	},
 	[6] = {
@@ -62,7 +62,7 @@ return {
 		["sortId"] = 6,
 		["maxDistance"] = 500,
 		["lifetime"] = 3,
-		["maxBounces"] = 1,
+		["maxBounces"] = 99,
 		["moveSpeed"] = 60,
 	},
 	[7] = {
@@ -73,7 +73,7 @@ return {
 		["sortId"] = 7,
 		["maxDistance"] = 500,
 		["lifetime"] = 3,
-		["maxBounces"] = 1,
+		["maxBounces"] = 99,
 		["moveSpeed"] = 60,
 	},
 	[8] = {
@@ -84,7 +84,7 @@ return {
 		["sortId"] = 8,
 		["maxDistance"] = 500,
 		["lifetime"] = 3,
-		["maxBounces"] = 1,
+		["maxBounces"] = 99,
 		["moveSpeed"] = 60,
 	},
 	[9] = {
@@ -95,7 +95,7 @@ return {
 		["sortId"] = 9,
 		["maxDistance"] = 500,
 		["lifetime"] = 3,
-		["maxBounces"] = 1,
+		["maxBounces"] = 99,
 		["moveSpeed"] = 60,
 	},
 }
