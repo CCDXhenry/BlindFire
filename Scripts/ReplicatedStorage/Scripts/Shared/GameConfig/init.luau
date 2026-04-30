@@ -534,7 +534,8 @@ local function readPlayerInfoUiOffsetFromVehicleTemplate(resourceName: string): 
 	return Vector3.zero
 end
 
-for id, data in pairs(VehiclesData) do
+-- 必须用 data.id 作键：VehiclesData 的表序号（pairs 的 key）与 sortId、配置 id 三者可能不一致
+for _, data in pairs(VehiclesData) do
 	local vehicle: VehicleData = {
 		id = data.id,
 		iconImage = data.iconImage,
@@ -554,7 +555,7 @@ for id, data in pairs(VehiclesData) do
 	if vehicle.bulletId then
 		vehicle.bulletData = BulletData[vehicle.bulletId]
 	end
-	GameConfig.VehicleDataMap[id] = vehicle
+	GameConfig.VehicleDataMap[data.id] = vehicle
 end
 
 function GameConfig.GetGroupRewardVehicleIdList(): { number }
