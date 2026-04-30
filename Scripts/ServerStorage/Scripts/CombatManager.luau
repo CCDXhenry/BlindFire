@@ -16,6 +16,7 @@ local PlayerStateManager = require(serverScripts:FindFirstChild("PlayerStateMana
 local ArenaManager = require(serverScripts:FindFirstChild("ArenaManager"))
 local ServerGameInfo = require(serverScripts:FindFirstChild("ServerGameInfo"))
 local LeaderboardManager = require(serverScripts:FindFirstChild("LeaderboardManager"))
+local AnalyticsTool = require(serverScripts:FindFirstChild("AnalyticsTool"))
 local VehicleLocomotionTool = require(sharedScripts:FindFirstChild("VehicleLocomotionTool"))
 
 type OnPlayerDeadCallback = (player: Player, isDisconnect: boolean?, hitDirection: Vector3?) -> ()
@@ -40,6 +41,7 @@ type ServerUnitInfo = {
 
 type ServerBullet = {
 	shooterId: number,
+	vehicleId: number,
 	templateName: string,
 	spawnPos: Vector3,
 	shotDir: Vector3,
@@ -62,6 +64,13 @@ type ServerBullet = {
 	physicsStarted: boolean,
 }
 
+type ProjectileVisual = {
+	model: Model,
+	physicsRoot: BasePart,
+	visualWeld: Motor6D,
+	linearVelocity: LinearVelocity,
+}
+
 local heartbeatConnection: RBXScriptConnection? = nil
 local activeServerBullets: { [string]: ServerBullet } = {}
 -- 每个 shooterId 当前存活子弹数，O(1) 查询替代遍历
@@ -76,6 +85,7 @@ local UNDERGROUND_Y = -100
 local SERVER_PROJECTILE_NAME_PREFIX = "ServerProjectile_"
 local SERVER_BULLETS_FOLDER_NAME = "ServerBullets"
 local SERVER_BULLET_SHOOTER_USER_ID_ATTR = "ShooterUserId"
+local SERVER_BULLET_TEMPLATE_NAME_ATTR = "TemplateName"
 local PROJECTILE_PREPARED_ATTR = "ServerPreparedProjectileTemplate"
 local PROJECTILE_PHYSICS_ROOT_NAME = "PhysicsRoot"
 local PROJECTILE_VISUAL_WELD_NAME = "VisualWeld"
@@ -83,6 +93,11 @@ local PROJECTILE_DRIVE_ATTACHMENT_NAME = "ProjectileDriveAttachment"
 local PROJECTILE_ALIGN_ORIENTATION_NAME = "ProjectileAlignOrientation"
 local PROJECTILE_LINEAR_VELOCITY_NAME = "ProjectileLinearVelocity"
 local PROJECTILE_POOL_LIMIT_PER_TEMPLATE = 24
+local VEHICLE_PROJECTILE_POOL_INITIAL_SIZE = 1
+local VEHICLE_PROJECTILE_POOL_RETAIN_LIMIT = 24
+local DEFAULT_PROJECTILE_TEMPLATE_NAME = "ProjectileModel"
+local PROJECTILE_POOL_PARK_BASE_POSITION = Vector3.new(100000, UNDERGROUND_Y - 500, -100000)
+local PROJECTILE_POOL_PARK_OFFSET_STEP = Vector3.new(80, 0, -8)
 local PROJECTILE_BOUNCE_SEPARATION_BIAS = 0.05
 local PROJECTILE_EMBED_CHECK_BIAS = 0.05
 
@@ -746,7 +761,8 @@ local function ShouldSuppressNoPlayerTargetProjectileLog(hitInst: Instance, unde
 end
 
 local preparedProjectileTemplateMap: { [string]: Model? } = {}
-local pooledProjectileVisualMap: { [string]: { [number]: { model: Model, physicsRoot: BasePart, visualWeld: Motor6D, linearVelocity: LinearVelocity } } } = {}
+local pooledProjectileVisualMap: { [string]: { ProjectileVisual } } = {}
+local vehicleProjectileVisualPoolMap: { [number]: { [string]: { ProjectileVisual } } } = {}
 local raycastParamsPool: { RaycastParams } = {}
 local excludeListPool: { { Instance } } = {}
 
@@ -880,72 +896,191 @@ local function EnsurePreparedProjectileTemplate(templateName: string): Model?
 	return projectileTemplate
 end
 
-local function CreateServerProjectileVisual(shooterId: number, spawnPos: Vector3, shotDir: Vector3, bulletId: string, modelName: string?): (Model?, BasePart?, Motor6D?, LinearVelocity?)
-	local templateName = modelName or "ProjectileModel"
-	local projectileModel: Model? = nil
-	local physicsRoot: BasePart? = nil
-	local rootWeld: Motor6D? = nil
-	local linearVelocity: LinearVelocity? = nil
+local function GetProjectileTemplateNameFromUnitInfo(unitInfo: ServerUnitInfo): string
+	local bulletData = if unitInfo.vehicleConfig then unitInfo.vehicleConfig.bulletData else nil
+	local resourceName = if bulletData then bulletData.resourceName else nil
+	if typeof(resourceName) == "string" and resourceName ~= "" then
+		return resourceName
+	end
+	return DEFAULT_PROJECTILE_TEMPLATE_NAME
+end
 
+local function GetVehicleProjectilePoolKey(unitInfo: ServerUnitInfo): number
+	return getVehicleIdFromUnitInfo(unitInfo)
+end
+
+local function SetProjectileHighlightEnabled(model: Model, enabled: boolean)
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("Highlight") then
+			descendant.Enabled = enabled
+		end
+	end
+end
+
+local function GetVehicleProjectilePool(vehicleId: number, templateName: string): { ProjectileVisual }
+	local templatePoolMap = vehicleProjectileVisualPoolMap[vehicleId]
+	if templatePoolMap == nil then
+		templatePoolMap = {}
+		vehicleProjectileVisualPoolMap[vehicleId] = templatePoolMap
+	end
+	local poolList = templatePoolMap[templateName]
+	if poolList == nil then
+		poolList = {}
+		templatePoolMap[templateName] = poolList
+	end
+	return poolList
+end
+
+local function GetProjectilePoolParkPosition(vehicleId: number, templateName: string, poolIndex: number): Vector3
+	local templateOffset = #templateName * PROJECTILE_POOL_PARK_OFFSET_STEP.Z
+	return PROJECTILE_POOL_PARK_BASE_POSITION
+		+ Vector3.new(PROJECTILE_POOL_PARK_OFFSET_STEP.X * vehicleId, 0, templateOffset)
+		+ Vector3.new(0, 0, PROJECTILE_POOL_PARK_OFFSET_STEP.Z * poolIndex)
+end
+
+local function CreateProjectileVisualFromTemplate(templateName: string): ProjectileVisual?
+	local projectileTemplate = EnsurePreparedProjectileTemplate(templateName)
+	if projectileTemplate == nil then
+		return nil
+	end
+
+	local createdModel = projectileTemplate:Clone()
+	local visualRoot = createdModel:FindFirstChild("Core")
+	if visualRoot == nil or not visualRoot:IsA("BasePart") then
+		createdModel:Destroy()
+		warn("[CombatManager] ProjectileModel.Core not found.")
+		return nil
+	end
+
+	local clonedPhysicsRoot = createdModel:FindFirstChild(PROJECTILE_PHYSICS_ROOT_NAME)
+	if clonedPhysicsRoot == nil or not clonedPhysicsRoot:IsA("BasePart") then
+		createdModel:Destroy()
+		warn("[CombatManager] ProjectileModel.PhysicsRoot not found.")
+		return nil
+	end
+	createdModel.PrimaryPart = clonedPhysicsRoot
+
+	local clonedRootWeld = clonedPhysicsRoot:FindFirstChild(PROJECTILE_VISUAL_WELD_NAME)
+	local clonedLinearVelocity = clonedPhysicsRoot:FindFirstChild(PROJECTILE_LINEAR_VELOCITY_NAME)
+	if clonedRootWeld == nil or not clonedRootWeld:IsA("Motor6D") then
+		createdModel:Destroy()
+		warn("[CombatManager] ProjectileModel.VisualWeld not found.")
+		return nil
+	end
+	if clonedLinearVelocity == nil or not clonedLinearVelocity:IsA("LinearVelocity") then
+		createdModel:Destroy()
+		warn("[CombatManager] ProjectileModel.ProjectileLinearVelocity not found.")
+		return nil
+	end
+
+	return {
+		model = createdModel,
+		physicsRoot = clonedPhysicsRoot,
+		visualWeld = clonedRootWeld,
+		linearVelocity = clonedLinearVelocity,
+	}
+end
+
+local function ParkInactiveProjectileVisual(
+	vehicleId: number,
+	templateName: string,
+	visual: ProjectileVisual,
+	poolIndex: number
+)
+	visual.physicsRoot.AssemblyLinearVelocity = Vector3.zero
+	visual.physicsRoot.AssemblyAngularVelocity = Vector3.zero
+	visual.linearVelocity.VectorVelocity = Vector3.zero
+	visual.model:SetAttribute(SERVER_BULLET_SHOOTER_USER_ID_ATTR, nil)
+	visual.model:SetAttribute(SERVER_BULLET_TEMPLATE_NAME_ATTR, nil)
+	visual.model.Name = "PooledProjectile"
+	SetProjectileHighlightEnabled(visual.model, false)
+	visual.model:PivotTo(CFrame.new(GetProjectilePoolParkPosition(vehicleId, templateName, poolIndex)))
+	visual.model.Parent = nil
+end
+
+local function AcquireTemplateProjectileVisual(templateName: string): ProjectileVisual?
 	local poolList = pooledProjectileVisualMap[templateName]
-	if poolList ~= nil and #poolList > 0 then
+	while poolList ~= nil and #poolList > 0 do
 		local reused = table.remove(poolList)
 		if reused ~= nil and reused.model.Parent == nil then
-			projectileModel = reused.model
-			physicsRoot = reused.physicsRoot
-			rootWeld = reused.visualWeld
-			linearVelocity = reused.linearVelocity
+			return reused
+		end
+	end
+	return nil
+end
+
+local function AcquirePooledProjectileVisual(vehicleId: number, templateName: string): ProjectileVisual?
+	local vehiclePool = GetVehicleProjectilePool(vehicleId, templateName)
+	while #vehiclePool > 0 do
+		local reused = table.remove(vehiclePool)
+		if reused ~= nil and reused.model.Parent == nil then
+			return reused
 		end
 	end
 
-	if projectileModel == nil then
-		local projectileTemplate = EnsurePreparedProjectileTemplate(templateName)
-		if projectileTemplate == nil then
-			return nil
-		end
-		local createdModel = projectileTemplate:Clone()
-		projectileModel = createdModel
-		local visualRoot = createdModel:FindFirstChild("Core")
-		if visualRoot == nil or not visualRoot:IsA("BasePart") then
-			createdModel:Destroy()
-			warn("[CombatManager] ProjectileModel.Core not found.")
-			return nil
-		end
-
-		local clonedPhysicsRoot = createdModel:FindFirstChild(PROJECTILE_PHYSICS_ROOT_NAME)
-		if clonedPhysicsRoot == nil or not clonedPhysicsRoot:IsA("BasePart") then
-			createdModel:Destroy()
-			warn("[CombatManager] ProjectileModel.PhysicsRoot not found.")
-			return nil
-		end
-		createdModel.PrimaryPart = clonedPhysicsRoot
-
-		local clonedRootWeld = clonedPhysicsRoot:FindFirstChild(PROJECTILE_VISUAL_WELD_NAME)
-		local clonedLinearVelocity = clonedPhysicsRoot:FindFirstChild(PROJECTILE_LINEAR_VELOCITY_NAME)
-		if clonedRootWeld == nil or not clonedRootWeld:IsA("Motor6D") then
-			createdModel:Destroy()
-			warn("[CombatManager] ProjectileModel.VisualWeld not found.")
-			return nil
-		end
-		if clonedLinearVelocity == nil or not clonedLinearVelocity:IsA("LinearVelocity") then
-			createdModel:Destroy()
-			warn("[CombatManager] ProjectileModel.ProjectileLinearVelocity not found.")
-			return nil
-		end
-		physicsRoot = clonedPhysicsRoot
-		rootWeld = clonedRootWeld
-		linearVelocity = clonedLinearVelocity
+	local templatePooled = AcquireTemplateProjectileVisual(templateName)
+	if templatePooled ~= nil then
+		return templatePooled
 	end
 
-	local projectileModelRef = projectileModel :: Model
-	local physicsRootRef = physicsRoot :: BasePart
-	local rootWeldRef = rootWeld :: Motor6D
-	local linearVelocityRef = linearVelocity :: LinearVelocity
+	return CreateProjectileVisualFromTemplate(templateName)
+end
+
+local function ReturnTemplateProjectileVisual(templateName: string, visual: ProjectileVisual)
+	local poolList = pooledProjectileVisualMap[templateName]
+	if poolList == nil then
+		poolList = {}
+		pooledProjectileVisualMap[templateName] = poolList
+	end
+	if #poolList >= PROJECTILE_POOL_LIMIT_PER_TEMPLATE then
+		visual.model:Destroy()
+		return
+	end
+	ParkInactiveProjectileVisual(0, templateName, visual, #poolList + 1)
+	table.insert(poolList, visual)
+end
+
+local function ReleasePooledProjectileVisual(vehicleId: number, templateName: string, visual: ProjectileVisual)
+	local vehiclePool = GetVehicleProjectilePool(vehicleId, templateName)
+	if #vehiclePool >= VEHICLE_PROJECTILE_POOL_RETAIN_LIMIT then
+		ReturnTemplateProjectileVisual(templateName, visual)
+		return
+	end
+	ParkInactiveProjectileVisual(vehicleId, templateName, visual, #vehiclePool + 1)
+	table.insert(vehiclePool, visual)
+end
+
+local function EnsureVehicleProjectilePool(vehicleId: number, templateName: string)
+	local vehiclePool = GetVehicleProjectilePool(vehicleId, templateName)
+	while #vehiclePool < VEHICLE_PROJECTILE_POOL_INITIAL_SIZE do
+		local visual = CreateProjectileVisualFromTemplate(templateName)
+		if visual == nil then
+			return
+		end
+		ParkInactiveProjectileVisual(vehicleId, templateName, visual, #vehiclePool + 1)
+		table.insert(vehiclePool, visual)
+	end
+end
+
+local function ActivateProjectileVisual(
+	visual: ProjectileVisual,
+	shooterId: number,
+	spawnPos: Vector3,
+	shotDir: Vector3,
+	bulletId: string,
+	templateName: string
+): (Model?, BasePart?, Motor6D?, LinearVelocity?)
+	local projectileModelRef = visual.model
+	local physicsRootRef = visual.physicsRoot
+	local rootWeldRef = visual.visualWeld
+	local linearVelocityRef = visual.linearVelocity
 
 	projectileModelRef.Parent = EnsureServerBulletsFolder()
 	projectileModelRef.Name = SERVER_PROJECTILE_NAME_PREFIX .. bulletId
 	projectileModelRef:SetAttribute(SERVER_BULLET_SHOOTER_USER_ID_ATTR, shooterId)
+	projectileModelRef:SetAttribute(SERVER_BULLET_TEMPLATE_NAME_ATTR, templateName)
 	projectileModelRef.PrimaryPart = physicsRootRef
+	SetProjectileHighlightEnabled(projectileModelRef, true)
 
 	local visualRoot = projectileModelRef:FindFirstChild("Core")
 	if visualRoot == nil or not visualRoot:IsA("BasePart") then
@@ -961,10 +1096,8 @@ local function CreateServerProjectileVisual(shooterId: number, spawnPos: Vector3
 	physicsRootRef.AssemblyLinearVelocity = Vector3.zero
 	physicsRootRef.AssemblyAngularVelocity = Vector3.zero
 
-	-- SAFELY move the whole assembly to spawnPos
 	projectileModelRef:PivotTo(CFrame.new(spawnPos))
 
-	-- Server assumes physics ownership for reliable replication
 	pcall(function()
 		physicsRootRef:SetNetworkOwner(nil)
 	end)
@@ -972,7 +1105,30 @@ local function CreateServerProjectileVisual(shooterId: number, spawnPos: Vector3
 	return projectileModelRef, physicsRootRef, rootWeldRef, linearVelocityRef
 end
 
-local function RecycleServerProjectileVisual(templateName: string, model: Model?, physicsRoot: BasePart?, visualWeld: Motor6D?, linearVelocity: LinearVelocity?)
+local function CreateServerProjectileVisual(
+	shooterId: number,
+	vehicleId: number,
+	spawnPos: Vector3,
+	shotDir: Vector3,
+	bulletId: string,
+	modelName: string?
+): (Model?, BasePart?, Motor6D?, LinearVelocity?)
+	local templateName = modelName or DEFAULT_PROJECTILE_TEMPLATE_NAME
+	local visual = AcquirePooledProjectileVisual(vehicleId, templateName)
+	if visual == nil then
+		return nil
+	end
+	return ActivateProjectileVisual(visual, shooterId, spawnPos, shotDir, bulletId, templateName)
+end
+
+local function RecycleServerProjectileVisual(
+	vehicleId: number,
+	templateName: string,
+	model: Model?,
+	physicsRoot: BasePart?,
+	visualWeld: Motor6D?,
+	linearVelocity: LinearVelocity?
+)
 	if model == nil or physicsRoot == nil or visualWeld == nil or linearVelocity == nil then
 		if model ~= nil then
 			model:Destroy()
@@ -983,23 +1139,7 @@ local function RecycleServerProjectileVisual(templateName: string, model: Model?
 		return
 	end
 
-	physicsRoot.AssemblyLinearVelocity = Vector3.zero
-	physicsRoot.AssemblyAngularVelocity = Vector3.zero
-	linearVelocity.VectorVelocity = Vector3.zero
-	model:SetAttribute(SERVER_BULLET_SHOOTER_USER_ID_ATTR, nil)
-	model.Name = "PooledProjectile"
-	model.Parent = nil
-
-	local poolList = pooledProjectileVisualMap[templateName]
-	if poolList == nil then
-		poolList = {}
-		pooledProjectileVisualMap[templateName] = poolList
-	end
-	if #poolList >= PROJECTILE_POOL_LIMIT_PER_TEMPLATE then
-		model:Destroy()
-		return
-	end
-	table.insert(poolList, {
+	ReleasePooledProjectileVisual(vehicleId, templateName, {
 		model = model,
 		physicsRoot = physicsRoot,
 		visualWeld = visualWeld,
@@ -1043,7 +1183,14 @@ local function DestroyServerBullet(bulletId: string)
 	if bullet == nil then
 		return
 	end
-	RecycleServerProjectileVisual(bullet.templateName, bullet.visualModel, bullet.physicsRoot, bullet.visualWeld, bullet.linearVelocity)
+	RecycleServerProjectileVisual(
+		bullet.vehicleId,
+		bullet.templateName,
+		bullet.visualModel,
+		bullet.physicsRoot,
+		bullet.visualWeld,
+		bullet.linearVelocity
+	)
 	-- 同步减少计数
 	local sid = bullet.shooterId
 	if shooterBulletCountMap[sid] ~= nil then
@@ -1054,8 +1201,8 @@ end
 
 local function PrewarmProjectileTemplates()
 	local preparedNameMap: { [string]: boolean } = {}
-	preparedNameMap["ProjectileModel"] = true
-	EnsurePreparedProjectileTemplate("ProjectileModel")
+	preparedNameMap[DEFAULT_PROJECTILE_TEMPLATE_NAME] = true
+	EnsurePreparedProjectileTemplate(DEFAULT_PROJECTILE_TEMPLATE_NAME)
 
 	for _, vehicleConfig in GameConfig.VehicleDataMap do
 		local bulletData = if vehicleConfig then vehicleConfig.bulletData else nil
@@ -1103,12 +1250,14 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 
 	local hitCount: number = 0
 	local isDead: boolean = false
+	local didApplyDamage: boolean = false
 	local maxHits = if targetUnitInfo ~= nil then targetUnitInfo.vehicleConfig.maxHits else GameConfig.MaxHits
 	if isProtected then
 		hitCount = PlayerStateManager.GetPlayerHitCount(targetPlayerId)
 		isDead = false
 	else
 		hitCount, isDead = PlayerStateManager.AddPlayerHit(targetPlayerId, maxHits)
+		didApplyDamage = hitCount > 0 or isDead
 		if hitCount == 0 and not isDead then
 			LogProjectileHitResolve(
 				string.format(
@@ -1160,12 +1309,26 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 	)
 	NetMsg.FireNotifyHit(targetPlayerId, shooterId, hitDirection, hitCount, bulletId, hitPosition)
 	NetMsg.FireNotifyHpChanged(targetPlayerId, hitCount, maxHits)
+	local targetPlayer = players:GetPlayerByUserId(targetPlayerId)
+	local shooterPlayer = players:GetPlayerByUserId(shooterId)
+
+	if didApplyDamage and targetPlayer ~= nil then
+		local targetInfo = ServerGameInfo.GetPlayerInfo(targetPlayer)
+		if targetInfo ~= nil then
+			AnalyticsTool.AddGameHurtEvent(targetPlayer, targetInfo.vehicleInventory.currentId)
+		end
+	end
 
 	--增加金币奖励
-	if shooterId ~= targetPlayerId then
-		local shooterPlayer = players:GetPlayerByUserId(shooterId)
+	if shooterId ~= targetPlayerId and didApplyDamage then
 		if shooterPlayer ~= nil then
+			PlayerStateManager.AddRoundDealtHit(shooterId)
+			local shooterInfo = ServerGameInfo.GetPlayerInfo(shooterPlayer)
+			if shooterInfo ~= nil then
+				AnalyticsTool.AddCarHitEvent(shooterPlayer, shooterInfo.vehicleInventory.currentId, isDead)
+			end
 			if isDead then
+				PlayerStateManager.AddRoundKill(shooterId)
 				--击杀奖励
 				ServerGameInfo.UpdatePlayerCurrency(shooterPlayer, GameConfig.CurrencyType.Coin, 2, GameConfig.ItemCountChangeReason.GainFromKill)
 				LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyKills, 1)
@@ -1180,7 +1343,19 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 
 	if isDead then
 		NetMsg.FireNotifyDead(targetPlayerId, shooterId)
-		local targetPlayer = players:GetPlayerByUserId(targetPlayerId)
+		if targetPlayer ~= nil then
+			local targetInfo = ServerGameInfo.GetPlayerInfo(targetPlayer)
+			local roundHitCount, roundKillCount, roundCoinEarned = PlayerStateManager.GetRoundStats(targetPlayerId)
+			if targetInfo ~= nil then
+				AnalyticsTool.AddGameDeadEvent(
+					targetPlayer,
+					targetInfo.vehicleInventory.currentId,
+					roundHitCount,
+					roundKillCount,
+					roundCoinEarned
+				)
+			end
+		end
 		if targetPlayer ~= nil and playerDeadCallback ~= nil then
 			LogInfo(string.format("NotifyPlayerDead userId=%d", targetPlayerId))
 			task.defer(playerDeadCallback, targetPlayer, false, hitDirection)
@@ -1272,7 +1447,10 @@ function CombatManager.OnHeartbeat(dt: number)
 			-- 重叠区内优先 Pick 到敌方载具；若有剩余反弹次数，旧逻辑会误走「墙反弹」导致在敌人身上弹开
 			if embedTargetId ~= nil then
 				ReleaseRaycastContext()
-				local skipDamageEmbedOwnHull = embedTargetId == bullet.shooterId and embeddedInShooterVehicle
+				local bouncedEnoughForSelfHit = GameConfig.CanHitSelf and bullet.bouncesLeft < bullet.maxBounces
+				local skipDamageEmbedOwnHull = embedTargetId == bullet.shooterId
+					and embeddedInShooterVehicle
+					and not bouncedEnoughForSelfHit
 				if skipDamageEmbedOwnHull then
 					LogProjectileHitResolve(
 						string.format(
@@ -1547,6 +1725,8 @@ function CombatManager.OnPlayerRemoving(player: Player)
 	local roundInfoMap = PlayerStateManager.GetAllPlayerRoundInfoMap()
 	local roundInfo = roundInfoMap[userId]
 	local shouldNotifyDead = roundInfo ~= nil and roundInfo.isParticipant and roundInfo.isAlive
+	local playerInfo = ServerGameInfo.GetPlayerInfo(player)
+	local roundHitCount, roundKillCount, roundCoinEarned = PlayerStateManager.GetRoundStats(userId)
 
 	unseatPlayerFromOwnedVehicle(player)
 	CombatManager.DestroyUnitForPlayer(userId)
@@ -1554,6 +1734,9 @@ function CombatManager.OnPlayerRemoving(player: Player)
 	NetMsg.FireNotifyUnitRemoveToAll(userId)
 
 	if shouldNotifyDead then
+		if playerInfo ~= nil then
+			AnalyticsTool.AddGameDeadEvent(player, playerInfo.vehicleInventory.currentId, roundHitCount, roundKillCount, roundCoinEarned)
+		end
 		NetMsg.FireNotifyDead(userId, nil)
 		if playerDeadCallback ~= nil then
 			local ok, err = pcall(function()
@@ -1589,9 +1772,10 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 	if unitInfo == nil then
 		return
 	end
+	local vehicleId = GetVehicleProjectilePoolKey(unitInfo)
 	local bulletData = if unitInfo then unitInfo.vehicleConfig.bulletData else nil
 	local bounces = if bulletData then bulletData.maxBounces else (GameConfig.ProjectileMaxBounces or 0)
-	local bulletResource = if bulletData then bulletData.resourceName else "ProjectileModel"
+	local bulletResource = GetProjectileTemplateNameFromUnitInfo(unitInfo)
 	local bulletSpeed = if bulletData then bulletData.moveSpeed else GameConfig.ProjectileSpeed
 	local bulletLifetime = if bulletData then bulletData.lifetime else GameConfig.ProjectileLifetime
 	local bulletMaxDistance = if bulletData then bulletData.maxDistance else GameConfig.MaxProjectileDistance
@@ -1676,9 +1860,10 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 	local bulletLaunchTime = clientTimestamp + GameConfig.FireCastTime
 
 	local visualModel, physicsRoot, visualWeld, linearVelocity =
-		CreateServerProjectileVisual(player.UserId, spawnPos, shotDirection, bulletId, bulletResource)
+		CreateServerProjectileVisual(player.UserId, vehicleId, spawnPos, shotDirection, bulletId, bulletResource)
 	activeServerBullets[bulletId] = {
 		shooterId = player.UserId,
+		vehicleId = vehicleId,
 		templateName = bulletResource,
 		spawnPos = spawnPos,
 		shotDir = shotDirection,
@@ -1713,6 +1898,10 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 	end
 
 	LogInfo(string.format("FireAccepted userId=%d bulletId=%s", player.UserId, bulletId))
+	local playerInfo = ServerGameInfo.GetPlayerInfo(player)
+	if playerInfo ~= nil then
+		AnalyticsTool.AddCarFireEvent(player, playerInfo.vehicleInventory.currentId)
+	end
 	NetMsg.FireNotifyDirectionFlipToAll(player.UserId)
 	NetMsg.FireNotifyFireAccepted(player.UserId, clientTimestamp, spawnPos, shotDirection, serverTime, bulletId)
 end
@@ -1739,6 +1928,8 @@ function CombatManager.StartRound(participantIds: { number })
 		if unitInfo == nil then
 			continue
 		end
+		local vehicleId = GetVehicleProjectilePoolKey(unitInfo)
+		EnsureVehicleProjectilePool(vehicleId, GetProjectileTemplateNameFromUnitInfo(unitInfo))
 		unitInfo.moveAngle = GetRandomMoveAngle()
 		unitInfo.spinDir = GetRandomSpinDir()
 		local unitSpeed = unitInfo.vehicleConfig.moveSpeed or GameConfig.UnitSpeed
@@ -1755,7 +1946,7 @@ function CombatManager.StartRound(participantIds: { number })
 			spawnPosition = unitInfo.rootPart.Position,
 			maxHits = maxHits,
 			isParticipant = true, -- StartRound implies all passed IDs are participants
-			vehicleId = getVehicleIdFromUnitInfo(unitInfo),
+			vehicleId = vehicleId,
 		})
 		NetMsg.FireNotifyHpChanged(playerId, 0, maxHits)
 		LogInfo(string.format("StartRoundReset userId=%d moveAngle=%d spinDir=%d", playerId, unitInfo.moveAngle, unitInfo.spinDir))

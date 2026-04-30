@@ -14,6 +14,7 @@ local GameConfig = require(sharedScripts:WaitForChild("GameConfig"))
 local NetMsg = require(sharedScripts:WaitForChild("NetMsg"))
 local clientScripts = scripts:WaitForChild("Client")
 local BulletClientManager = require(clientScripts:WaitForChild("BulletClientManager"))
+local ClientGameInfo = require(clientScripts:WaitForChild("ClientGameInfo"))
 
 local COMBAT_FIRE_ACTION_NAME = "BlindFire_CombatVehicleFire"
 
@@ -126,6 +127,7 @@ local function OnCombatFireAction(actionName: string, inputState: Enum.UserInput
 		return Enum.ContextActionResult.Pass
 	end
 	BulletClientManager.FireShot()
+	ClientGameInfo.TryCompleteGuide(GameConfig.GuideType.TutorialFireBySpace)
 	return Enum.ContextActionResult.Sink
 end
 

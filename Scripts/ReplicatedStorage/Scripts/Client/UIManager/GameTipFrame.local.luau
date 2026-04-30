@@ -15,6 +15,7 @@ local GameConfig = require(sharedScripts:FindFirstChild("GameConfig"))
 local clientScripts = scripts:WaitForChild("Client")
 local ClientMsg = require(clientScripts:FindFirstChild("ClientMsg"))
 local ClientGameInfo = require(clientScripts:FindFirstChild("ClientGameInfo"))
+local GuideManager = require(clientScripts:WaitForChild("GuideManager"))
 local NumberExtension = require(coreSharedScripts:WaitForChild("NumberExtension"))
 local tweenService: TweenService = game:GetService("TweenService")
 local runService: RunService = game:GetService("RunService")
@@ -61,8 +62,30 @@ local ShowAddRewardsTipIntervalMin: number = 0.5
 local waitingShowAddRewardInfoList: { GameConfig.RewardInfo } = {}
 local lastShowedAddRewardsTipTime: number = -1
 local isShowRewardFrame: boolean = false
+local HideDownTipText: () -> ()
 
 local gameTipFrame: Frame = script.Parent
+local GameTipBaseZIndex = 1000
+
+local function ElevateGameTipGuiObject(guiObject: GuiObject)
+	if guiObject.ZIndex < GameTipBaseZIndex then
+		guiObject.ZIndex = GameTipBaseZIndex + guiObject.ZIndex
+	end
+end
+
+local function OnGameTipDescendantAdded(descendant: Instance)
+	if descendant:IsA("GuiObject") then
+		ElevateGameTipGuiObject(descendant)
+	end
+end
+
+local function EnsureGameTipOnTop()
+	ElevateGameTipGuiObject(gameTipFrame)
+	for _, descendant in gameTipFrame:GetDescendants() do
+		OnGameTipDescendantAdded(descendant)
+	end
+	gameTipFrame.DescendantAdded:Connect(OnGameTipDescendantAdded)
+end
 
 -- 常量定义
 local GIFT_CONFIRM_TITLE_COLOR = Color3.fromRGB(0, 255, 0) -- 绿色
@@ -76,6 +99,8 @@ local GIFT_TOP_TIP_DURATION = 5
 local TOP_TIP_FADE_DURATION = 0.5
 local MATCH_PHASE_TOP_TIP_DURATION = 3
 local ROUND_OUTCOME_GAME_TIP_TWEEN: number = GameConfig.GameTipTweenType.StayFlyUp
+local DefaultPhaseTextScale = 1
+local FightingPhaseTextScale = 0.5
 
 --AddRewardTipFrame
 local addRewardTipFrameOrigin: Frame = gameTipFrame:FindFirstChild("AddRewardTipFrame") :: Frame
@@ -130,6 +155,14 @@ local topTipText: TextLabel? = gameTipFrame:FindFirstChild("TopTipText") :: Text
 local topTipFadeCoroutine: thread?
 local topTipFadeTween: Tween?
 local topTipStrokeFadeTween: Tween?
+local downTipText: TextLabel? = gameTipFrame:FindFirstChild("DownTipText", true) :: TextLabel?
+local downTipTween: Tween? = nil
+local downTipFadeTween: Tween? = nil
+local downTipStrokeFadeTween: Tween? = nil
+local DOWN_TIP_PULSE_TWEEN_INFO = TweenInfo.new(0.45, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+local DOWN_TIP_PULSE_MIN_SCALE = 0.9
+local DOWN_TIP_TEXT_COLOR = Color3.fromRGB(0, 255, 0)
+local ShowDownTipTextWithScaleFade: (textSource: string, key: string?, args: { string }?) -> ()
 
 local EARTHQUAKE_WARNING_COLOR = Color3.fromRGB(255, 210, 0)
 local EARTHQUAKE_DANGER_COLOR = Color3.fromRGB(255, 60, 60)
@@ -161,12 +194,14 @@ if damageOverlay then
 	damageOverlay.BackgroundTransparency = 1
 	damageFlashInTween = tweenService:Create(damageOverlay, DamageFlashInTweenInfo, { BackgroundTransparency = 0.5 }) -- 设置闪烁时的最大透明度
 	damageFlashOutTween = tweenService:Create(damageOverlay, DamageFlashOutTweenInfo, { BackgroundTransparency = 1 })
+	local resolvedDamageFlashInTween = damageFlashInTween :: Tween
+	local resolvedDamageFlashOutTween = damageFlashOutTween :: Tween
 
-	damageFlashInTween.Completed:Connect(function()
-		damageFlashOutTween:Play()
+	resolvedDamageFlashInTween.Completed:Connect(function()
+		resolvedDamageFlashOutTween:Play()
 	end)
 
-	damageFlashOutTween.Completed:Connect(function()
+	resolvedDamageFlashOutTween.Completed:Connect(function()
 		damageOverlay.Visible = false
 	end)
 end
@@ -345,6 +380,14 @@ local function OnRenderStepped(deltaTime: number)
 		end
 		lastShowedAddRewardsTipTime = nowTime
 	end
+
+	if GuideManager.ShouldShowSpaceGuide() then
+		if downTipText == nil or not downTipText.Visible then
+			ShowDownTipTextWithScaleFade(GameTexts.GuideTutorialFireBySpace.source, GameTexts.GuideTutorialFireBySpace.key, nil)
+		end
+	elseif downTipText ~= nil and downTipText.Visible then
+		HideDownTipText()
+	end
 end
 
 local function OnShowAddRewardsTip(rewardInfoList: { GameConfig.RewardInfo })
@@ -389,6 +432,42 @@ local function ApplyCountdownFormatToLabel(targetLabel: TextLabel, seconds: numb
 		GameTexts.CountdownFormat.key,
 		{ secondsText }
 	)
+end
+
+local function ApplyPhaseTextScale(targetLabel: TextLabel?, scaleValue: number)
+	if targetLabel == nil then
+		return
+	end
+	local scaleNode = targetLabel:FindFirstChildOfClass("UIScale")
+	if scaleNode == nil then
+		local createdScaleNode = Instance.new("UIScale")
+		createdScaleNode.Parent = targetLabel
+		scaleNode = createdScaleNode
+	end
+	local resolvedScaleNode = scaleNode :: UIScale
+	resolvedScaleNode.Scale = scaleValue
+end
+
+local function ApplyMatchStateTextScale(matchState: GameConfig.MatchState)
+	local targetScale = if matchState == GameConfig.MatchState.Fighting then FightingPhaseTextScale else DefaultPhaseTextScale
+	ApplyPhaseTextScale(topTipText, targetScale)
+	ApplyPhaseTextScale(countdownText, targetScale)
+end
+
+local function ApplyFightingTopTipCountdownText(countdown: number)
+	if topTipText == nil then
+		return
+	end
+	topTipText.Visible = true
+	topTipText.TextColor3 = TOP_TIP_SUCCESS_COLOR
+	topTipText.TextTransparency = 0
+	local stroke = topTipText:FindFirstChild("UIStroke") :: UIStroke?
+	if stroke ~= nil then
+		stroke.Transparency = 0
+	end
+	local countdownSeconds = math.max(countdown, 0)
+	local countdownSource = string.gsub(GameTexts.CountdownFormat.source, "{1}", tostring(countdownSeconds))
+	topTipText.Text = string.format("%s %s", GameTexts.MatchPhaseFighting.source, countdownSource)
 end
 
 local function StartPopUpCountdown(targetTimeLabel: TextLabel?, totalSeconds: number, timeoutCallback: () -> ())
@@ -467,6 +546,71 @@ local function OnShowTopTipText(textSource: string, color: Color3, duration: num
 	end)
 	topTipFadeCoroutine = newCoroutine
 	coroutine.resume(newCoroutine)
+end
+
+function ShowDownTipTextWithScaleFade(textSource: string, key: string?, args: { string }?)
+	if downTipText == nil then
+		return
+	end
+	local targetDownTipText = downTipText
+	if downTipTween ~= nil then
+		downTipTween:Cancel()
+		downTipTween = nil
+	end
+	if downTipFadeTween ~= nil then
+		downTipFadeTween:Cancel()
+		downTipFadeTween = nil
+	end
+	if downTipStrokeFadeTween ~= nil then
+		downTipStrokeFadeTween:Cancel()
+		downTipStrokeFadeTween = nil
+	end
+
+	targetDownTipText.Visible = true
+	targetDownTipText.TextColor3 = DOWN_TIP_TEXT_COLOR
+	targetDownTipText.TextTransparency = 0
+	local downTipStroke = targetDownTipText:FindFirstChild("UIStroke") :: UIStroke?
+	if downTipStroke ~= nil then
+		downTipStroke.Transparency = 0
+	end
+
+	local scaleNode = targetDownTipText:FindFirstChildOfClass("UIScale")
+	if scaleNode == nil then
+		local createdScaleNode = Instance.new("UIScale")
+		createdScaleNode.Parent = targetDownTipText
+		scaleNode = createdScaleNode
+	end
+	local resolvedScaleNode = scaleNode :: UIScale
+	resolvedScaleNode.Scale = 1
+
+	TranslationTool.CustomAutoLocalizeTextLabel(targetDownTipText, textSource, key, args)
+
+	local pulseTween = tweenService:Create(
+		resolvedScaleNode,
+		DOWN_TIP_PULSE_TWEEN_INFO,
+		{ Scale = DOWN_TIP_PULSE_MIN_SCALE }
+	)
+	downTipTween = pulseTween
+	pulseTween:Play()
+end
+
+function HideDownTipText()
+	if downTipText == nil then
+		return
+	end
+	if downTipTween ~= nil then
+		downTipTween:Cancel()
+		downTipTween = nil
+	end
+	if downTipFadeTween ~= nil then
+		downTipFadeTween:Cancel()
+		downTipFadeTween = nil
+	end
+	if downTipStrokeFadeTween ~= nil then
+		downTipStrokeFadeTween:Cancel()
+		downTipStrokeFadeTween = nil
+	end
+	downTipText.Visible = false
 end
 
 local lastNotifiedMatchState: GameConfig.MatchState? = nil
@@ -559,11 +703,21 @@ local function OnNotifyDeadForKillSound(_playerId: number, killerId: number?)
 end
 
 local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: number)
+	ApplyMatchStateTextScale(matchState)
+
 	if matchState ~= lastNotifiedMatchState then
 		local entry, tipColor = GetMatchPhaseTipEntry(matchState)
 		local tipDuration = GetPhaseTopTipDuration(matchState, countdown)
 		OnShowTopTipText(entry.source, tipColor, tipDuration, nil, entry.key)
 		lastNotifiedMatchState = matchState
+	end
+
+	if matchState == GameConfig.MatchState.Fighting then
+		if countdownText ~= nil then
+			countdownText.Visible = false
+		end
+		ApplyFightingTopTipCountdownText(countdown)
+		return
 	end
 
 	if countdownText == nil then
@@ -577,19 +731,12 @@ local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: 
 		else
 			countdownText.Visible = false
 		end
-	elseif matchState == GameConfig.MatchState.Fighting then
-		if countdown > 0 then
-			countdownText.Visible = true
-			countdownText.TextColor3 = EARTHQUAKE_DANGER_COLOR
-			ApplyCountdownFormatToLabel(countdownText, countdown)
-		else
-			countdownText.Visible = false
-		end
 	else
 		countdownText.Visible = false
 	end
 end
 
+EnsureGameTipOnTop()
 UIAdapter.AddAdaptiveFrame(gameTipFrame, UIAdapter.AdaptiveType.FullScreen)
 
 runService:BindToRenderStep("GameTipFrame.RenderStepped", Enum.RenderPriority.Camera.Value + 2, OnRenderStepped)

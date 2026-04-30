@@ -29,8 +29,6 @@ end
 
 --六次方群组id
 GameConfig.SixcubeGroupId = 33977495
---群组奖励载具id
-GameConfig.GroupRewardVehicleId = 2
 
 --奖励信息
 export type RewardInfo = {
@@ -67,6 +65,7 @@ GameConfig.CostType = {
 	Coin = 1, --金币
 	Rb = 2, --RB
 	CoinOrRb = 3, --金币或RB
+	GroupReward = 4, --群组奖励
 }
 
 --物品数量改变原因
@@ -85,10 +84,19 @@ GameConfig.ItemCountChangeReason = {
 GameConfig.GuideType = {
 	None = 0,
 	TutorialBasic = 1,
+	TutorialFireBySpace = 2,
+	TutorialFireByButton = 3,
 }
 
 GameConfig.GuideTextKeyMap = {
 	[GameConfig.GuideType.TutorialBasic] = "GuideTutorialBasic",
+	[GameConfig.GuideType.TutorialFireBySpace] = "GuideTutorialFireBySpace",
+	[GameConfig.GuideType.TutorialFireByButton] = "GuideTutorialFireByButton",
+}
+
+export type GuideProgressInfo = {
+	FireBySpace: boolean,
+	FireByButton: boolean,
 }
 
 GameConfig.CoinIconImage = "rbxassetid://138756794615498"
@@ -181,6 +189,8 @@ export type PlayerSaveInfo = {
 	},
 	-- 是否已领取过群组奖励
 	hasClaimedGroupReward: boolean,
+	-- 新手引导进度
+	guideProgress: GuideProgressInfo,
 }
 export type PlayerInfo = PlayerSaveInfo & {
 	--玩家信息是否发生变化
@@ -228,6 +238,10 @@ function GameConfig.CreateDefaultPlayerSaveInfo(): PlayerSaveInfo
 		},
 		ownedGamePassList = {},
 		hasClaimedGroupReward = false,
+		guideProgress = {
+			FireBySpace = false,
+			FireByButton = false,
+		},
 		currencies = {
 			[tostring(GameConfig.CurrencyType.Coin)] = 0,
 		},
@@ -260,6 +274,8 @@ export type ClientLocalPlayerSaveInfo = {
 	isInGroup: boolean,
 	-- 是否已领取过群组奖励
 	hasClaimedGroupReward: boolean,
+	-- 新手引导进度
+	guideProgress: GuideProgressInfo,
 }
 export type ClientLocalPlayerInfo = ClientLocalPlayerSaveInfo & {
 	--已拥有的通行证映射
@@ -495,6 +511,7 @@ local VehiclesData = require(script.VehiclesData)
 
 GameConfig.BulletDataMap = BulletData :: { [number]: BulletData }
 GameConfig.VehicleDataMap = {} :: { [number]: VehicleData }
+local groupRewardVehicleIdListCache: { number }? = nil
 
 local PlayerInfoUiOffsetAttributeName = "PlayerInfoUIOffset"
 local modelsFolderForVehicleTemplates = replicatedStorage:FindFirstChild("Models") :: Folder?
@@ -517,7 +534,8 @@ local function readPlayerInfoUiOffsetFromVehicleTemplate(resourceName: string): 
 	return Vector3.zero
 end
 
-for id, data in pairs(VehiclesData) do
+-- 必须用 data.id 作键：VehiclesData 的表序号（pairs 的 key）与 sortId、配置 id 三者可能不一致
+for _, data in pairs(VehiclesData) do
 	local vehicle: VehicleData = {
 		id = data.id,
 		iconImage = data.iconImage,
@@ -537,7 +555,35 @@ for id, data in pairs(VehiclesData) do
 	if vehicle.bulletId then
 		vehicle.bulletData = BulletData[vehicle.bulletId]
 	end
-	GameConfig.VehicleDataMap[id] = vehicle
+	GameConfig.VehicleDataMap[data.id] = vehicle
+end
+
+function GameConfig.GetGroupRewardVehicleIdList(): { number }
+	if groupRewardVehicleIdListCache ~= nil then
+		return table.clone(groupRewardVehicleIdListCache)
+	end
+
+	local groupRewardVehicleIdList = {} :: { number }
+	for vehicleId, vehicleData in pairs(GameConfig.VehicleDataMap) do
+		if vehicleData.costType == GameConfig.CostType.GroupReward then
+			table.insert(groupRewardVehicleIdList, vehicleId)
+		end
+	end
+
+	table.sort(groupRewardVehicleIdList, function(leftVehicleId, rightVehicleId)
+		local leftVehicleData = GameConfig.VehicleDataMap[leftVehicleId]
+		local rightVehicleData = GameConfig.VehicleDataMap[rightVehicleId]
+		if leftVehicleData == nil or rightVehicleData == nil then
+			return leftVehicleId < rightVehicleId
+		end
+		if leftVehicleData.sortId ~= rightVehicleData.sortId then
+			return leftVehicleData.sortId < rightVehicleData.sortId
+		end
+		return leftVehicleId < rightVehicleId
+	end)
+
+	groupRewardVehicleIdListCache = groupRewardVehicleIdList
+	return table.clone(groupRewardVehicleIdListCache)
 end
 
 return GameConfig

@@ -29,6 +29,10 @@ function ClientGameInfo.InitPlayerInfo(
 		currentGuideType = GameConfig.GuideType.None,
 		isInGroup = localPlayerSaveInfo.isInGroup,
 		hasClaimedGroupReward = localPlayerSaveInfo.hasClaimedGroupReward,
+		guideProgress = localPlayerSaveInfo.guideProgress or {
+			FireBySpace = false,
+			FireByButton = false,
+		},
 	}
 	if localPlayerInfo == nil then
 		return
@@ -121,6 +125,58 @@ function ClientGameInfo.SetCurrentGuideType(guideType: number)
 	ClientMsg.FireCurrentGuideTypeChanged()
 end
 
+function ClientGameInfo.IsGuideFinished(guideType: number): boolean
+	if localPlayerInfo == nil then
+		return false
+	end
+	if guideType == GameConfig.GuideType.TutorialFireBySpace then
+		return localPlayerInfo.guideProgress.FireBySpace
+	end
+	if guideType == GameConfig.GuideType.TutorialFireByButton then
+		return localPlayerInfo.guideProgress.FireByButton
+	end
+	return false
+end
+
+function ClientGameInfo.TryCompleteGuide(guideType: number): boolean
+	if localPlayerInfo == nil then
+		return false
+	end
+	if ClientGameInfo.IsGuideFinished(guideType) then
+		return false
+	end
+	if guideType == GameConfig.GuideType.TutorialFireBySpace then
+		localPlayerInfo.guideProgress.FireBySpace = true
+	elseif guideType == GameConfig.GuideType.TutorialFireByButton then
+		localPlayerInfo.guideProgress.FireByButton = true
+	else
+		return false
+	end
+	if localPlayerInfo.currentGuideType == guideType then
+		localPlayerInfo.currentGuideType = GameConfig.GuideType.None
+		ClientMsg.FireCurrentGuideTypeChanged()
+	end
+	NetMsg.FireRequestGuideProgress(guideType)
+	return true
+end
+
+local function OnNotifyGuideProgressUpdated(guideType: number)
+	if localPlayerInfo == nil then
+		return
+	end
+	if guideType == GameConfig.GuideType.TutorialFireBySpace then
+		localPlayerInfo.guideProgress.FireBySpace = true
+	elseif guideType == GameConfig.GuideType.TutorialFireByButton then
+		localPlayerInfo.guideProgress.FireByButton = true
+	else
+		return
+	end
+	if localPlayerInfo.currentGuideType == guideType then
+		localPlayerInfo.currentGuideType = GameConfig.GuideType.None
+		ClientMsg.FireCurrentGuideTypeChanged()
+	end
+end
+
 --更新载具仓库
 function ClientGameInfo.UpdateVehicleInventory(vehicleInventory: GameConfig.VehicleInventory)
 	if localPlayerInfo == nil then
@@ -141,6 +197,7 @@ end
 
 function ClientGameInfo.Init()
 	NetMsg.ConnectNotifyPlayerClaimedGroupReward(ClientGameInfo.SetLocalPlayerClaimedGroupReward)
+	NetMsg.ConnectNotifyGuideProgressUpdated(OnNotifyGuideProgressUpdated)
 end
 
 return ClientGameInfo

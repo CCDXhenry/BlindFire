@@ -53,9 +53,12 @@ local function IsVehicleAffordable(localPlayerInfo: GameConfig.ClientLocalPlayer
 	if vehicleData.costType == GameConfig.CostType.Coin then
 		return coinAmount >= vehicleData.costCoin
 	elseif vehicleData.costType == GameConfig.CostType.Rb then
-		return rbAmount >= vehicleData.costCoin
+		return rbAmount >= rbCost
 	elseif vehicleData.costType == GameConfig.CostType.CoinOrRb then
 		return coinAmount >= vehicleData.costCoin or rbAmount >= rbCost
+	elseif vehicleData.costType == GameConfig.CostType.GroupReward then
+		-- 群组奖励载具不参与大厅载具红点判定
+		return false
 	end
 
 	return false
@@ -94,13 +97,9 @@ local function RefreshVehiclesRedPoint()
 			local isOwned = localPlayerInfo.vehicleInventory.ownedList[tostring(vehicleData.id)]
 			
 			if not isOwned then
-				-- 红点只算能够金币购买且金币数量足够的
-				if vehicleData.costType == GameConfig.CostType.Coin or vehicleData.costType == GameConfig.CostType.CoinOrRb then
-					local coinAmount: number = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
-					if coinAmount >= vehicleData.costCoin then
-						hasAffordableBetter = true
-						break
-					end
+				if IsVehicleAffordable(localPlayerInfo, vehicleData) then
+					hasAffordableBetter = true
+					break
 				end
 			end
 		end

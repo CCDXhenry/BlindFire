@@ -95,6 +95,39 @@ local function AddCustomEvent(player: Player, eventName: string, eventParams: {C
 	end
 end
 
+local function HasEventParam(eventParams: {CustomEventParam}, fieldName: string): boolean
+	for _, eventParam in ipairs(eventParams) do
+		if eventParam.filed == fieldName then
+			return true
+		end
+	end
+	return false
+end
+
+local function BuildEventParams(paramMap: {[string]: string}, withHeartTime: boolean, player: Player): {CustomEventParam}
+	local eventParams: {CustomEventParam} = {}
+	for fieldName, value in paramMap do
+		table.insert(eventParams, {
+			filed = fieldName,
+			value = tostring(value),
+		})
+	end
+	if withHeartTime and not HasEventParam(eventParams, "heart_time") then
+		local playerInfo: GameConfig.PlayerInfo = ServerGameInfo.GetPlayerInfo(player)
+		if playerInfo ~= nil then
+			table.insert(eventParams, {
+				filed = "heart_time",
+				value = tostring(math.floor(playerInfo.gameTime)),
+			})
+		end
+	end
+	return eventParams
+end
+
+local function addCustomEventWithHeartTime(player: Player, eventName: string, paramMap: {[string]: string})
+	AddCustomEvent(player, eventName, BuildEventParams(paramMap, true, player))
+end
+
 --添加设计事件
 --local function AddDesignEvent(player: Player, eventId: string, value: number?)
 --	local options = {eventId = eventId}
@@ -180,6 +213,61 @@ function AnalyticsTool.AddPassPurchaseEvent(player: Player, gamePassId: number, 
 		{filed = "player_id", value = tostring(player.UserId)},
 		{filed = "product_id", value = tostring(gamePassId)},
 		{filed = "spent", value = tostring(price)},
+	})
+end
+
+function AnalyticsTool.AddGameStartEvent(player: Player, carId: string)
+	addCustomEventWithHeartTime(player, "game_start", {
+		car_id = carId,
+	})
+end
+
+function AnalyticsTool.AddGameHurtEvent(player: Player, carId: string)
+	addCustomEventWithHeartTime(player, "game_hurt", {
+		car_id = carId,
+	})
+end
+
+function AnalyticsTool.AddCarFireEvent(player: Player, carId: string)
+	addCustomEventWithHeartTime(player, "car_fire", {
+		car_id = carId,
+	})
+end
+
+function AnalyticsTool.AddCarHitEvent(player: Player, carId: string, isKill: boolean)
+	addCustomEventWithHeartTime(player, "car_hit", {
+		car_id = carId,
+		is_kill = if isKill then "1" else "0",
+	})
+end
+
+function AnalyticsTool.AddGameDeadEvent(player: Player, carId: string, carHitNum: number, carKillNum: number, getMoney: number)
+	addCustomEventWithHeartTime(player, "game_dead", {
+		car_id = carId,
+		car_hit_num = tostring(carHitNum),
+		car_kill_num = tostring(carKillNum),
+		get_money = tostring(getMoney),
+	})
+end
+
+function AnalyticsTool.AddGameWinEvent(player: Player, carId: string, carHitNum: number, carKillNum: number, getMoney: number)
+	addCustomEventWithHeartTime(player, "game_win", {
+		car_id = carId,
+		car_hit_num = tostring(carHitNum),
+		car_kill_num = tostring(carKillNum),
+		get_money = tostring(getMoney),
+	})
+end
+
+function AnalyticsTool.AddAfkTurnEvent(player: Player, isAfkOn: boolean)
+	addCustomEventWithHeartTime(player, "afk_turn", {
+		afk_type = if isAfkOn then "1" else "0",
+	})
+end
+
+function AnalyticsTool.AddCarGetEvent(player: Player, carId: string)
+	addCustomEventWithHeartTime(player, "car_get", {
+		car_id = carId,
 	})
 end
 

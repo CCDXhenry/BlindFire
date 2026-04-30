@@ -4,6 +4,7 @@ local ServerGameInfo = {}
 local serverStorage: ServerStorage = game:GetService("ServerStorage")
 local serverScripts = serverStorage:WaitForChild("Scripts")
 local ServerMsg = require(serverScripts:FindFirstChild("ServerMsg"))
+local PlayerStateManager = require(serverScripts:FindFirstChild("PlayerStateManager"))
 local replicatedStorage: ReplicatedStorage = game:GetService("ReplicatedStorage")
 local core = replicatedStorage:WaitForChild("Core")
 local coreScripts = core:WaitForChild("Scripts")
@@ -16,6 +17,20 @@ local NetMsg = require(sharedScripts:FindFirstChild("NetMsg"))
 local players = game:GetService("Players")
 
 local playerInfoMap: {[number]: GameConfig.PlayerInfo} = {}
+local analyticsToolModule = nil
+
+local function IsBattleCoinGainReason(reason: number): boolean
+	return reason == GameConfig.ItemCountChangeReason.GainFromHit
+		or reason == GameConfig.ItemCountChangeReason.GainFromKill
+		or reason == GameConfig.ItemCountChangeReason.GainFromBattle
+end
+
+local function GetAnalyticsTool()
+	if analyticsToolModule == nil then
+		analyticsToolModule = require(serverScripts:FindFirstChild("AnalyticsTool"))
+	end
+	return analyticsToolModule
+end
 
 --初始化玩家信息
 function ServerGameInfo.InitPlayerInfo(player: Player, playerSaveInfo: GameConfig.PlayerSaveInfo, countryRegion: string,
@@ -44,6 +59,10 @@ function ServerGameInfo.InitPlayerInfo(player: Player, playerSaveInfo: GameConfi
 		isInGroup = isInGroup,
 		weeklyStats = playerSaveInfo.weeklyStats,
 		hasClaimedGroupReward = playerSaveInfo.hasClaimedGroupReward or false,
+		guideProgress = playerSaveInfo.guideProgress or {
+			FireBySpace = false,
+			FireByButton = false,
+		},
 	}
 	for ownedGamePassIndex: number, ownedGamePassId: number in playerInfo.ownedGamePassList do
 		playerInfo.ownedGamePassMap[ownedGamePassId] = true
@@ -57,6 +76,7 @@ function ServerGameInfo.InitPlayerInfo(player: Player, playerSaveInfo: GameConfi
 		vehicleInventory = playerInfo.vehicleInventory,
 		isInGroup = playerInfo.isInGroup,
 		hasClaimedGroupReward = playerInfo.hasClaimedGroupReward,
+		guideProgress = playerInfo.guideProgress,
 	}
 	local clientOtherPlayerSaveInfo: GameConfig.ClientOtherPlayerSyncInfo = {
 		
@@ -104,7 +124,33 @@ function ServerGameInfo.CreatePlayerSaveInfoByPlayerInfo(playerInfo: GameConfig.
 		currencies = playerInfo.currencies,
 		vehicleInventory = playerInfo.vehicleInventory,
 		weeklyStats = playerInfo.weeklyStats,
+		hasClaimedGroupReward = playerInfo.hasClaimedGroupReward,
+		guideProgress = playerInfo.guideProgress,
 	}
+end
+
+function ServerGameInfo.SetGuideProgress(player: Player, guideType: number)
+	local playerInfo: GameConfig.PlayerInfo = playerInfoMap[player.UserId]
+	if playerInfo == nil then
+		return false, playerInfo
+	end
+	if guideType == GameConfig.GuideType.TutorialFireBySpace then
+		if playerInfo.guideProgress.FireBySpace then
+			return false, playerInfo
+		end
+		playerInfo.guideProgress.FireBySpace = true
+		playerInfo.playerInfoChanged = true
+		return true, playerInfo
+	end
+	if guideType == GameConfig.GuideType.TutorialFireByButton then
+		if playerInfo.guideProgress.FireByButton then
+			return false, playerInfo
+		end
+		playerInfo.guideProgress.FireByButton = true
+		playerInfo.playerInfoChanged = true
+		return true, playerInfo
+	end
+	return false, playerInfo
 end
 
 --增加玩家游戏时间
@@ -157,6 +203,9 @@ function ServerGameInfo.UpdatePlayerCurrency(player: Player, currencyType: numbe
 
 	playerInfo.currencies[currencyKey] = totalAmount
 	playerInfo.playerInfoChanged = true
+	if currencyType == GameConfig.CurrencyType.Coin and changeAmount > 0 and IsBattleCoinGainReason(reason) then
+		PlayerStateManager.AddRoundCoinEarned(player.UserId, changeAmount)
+	end
 
 	--通知客户端
 	NetMsg.FireNotifyPlayerCurrencyUpdate(player, currencyType, totalAmount, changeAmount, reason)
@@ -170,6 +219,8 @@ function ServerGameInfo.AddPlayerVehicle(player: Player, vehicleId: string)
 	end
 	playerInfo.vehicleInventory.ownedList[vehicleId] = true
 	playerInfo.playerInfoChanged = true
+	local analyticsTool = GetAnalyticsTool()
+	analyticsTool.AddCarGetEvent(player, vehicleId)
 	--通知客户端
 	NetMsg.FireNotifyPlayerVehicleInventoryUpdate(player, playerInfo.vehicleInventory)
 end

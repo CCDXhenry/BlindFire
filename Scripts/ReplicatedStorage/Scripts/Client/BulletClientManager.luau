@@ -4,6 +4,7 @@ local BulletClientManager = {}
 local replicatedStorage: ReplicatedStorage = game:GetService("ReplicatedStorage")
 local players = game:GetService("Players")
 local workspaceService = game:GetService("Workspace")
+local runService = game:GetService("RunService")
 
 local scripts = replicatedStorage:WaitForChild("Scripts")
 local sharedScripts = scripts:WaitForChild("Shared")
@@ -18,6 +19,7 @@ local ClientGameInfo = require(clientScripts:FindFirstChild("ClientGameInfo"))
 
 type ClientUnitState = {
 	playerId: number,
+	vehicleId: number,
 	targetVelX: number,
 	targetVelZ: number,
 	spinDir: number,
@@ -45,11 +47,16 @@ local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
 local SERVER_BULLETS_FOLDER_NAME = "ServerBullets"
 local SERVER_PROJECTILE_NAME_PREFIX = "ServerProjectile_"
 local SHOOTER_USER_ID_ATTRIBUTE = "ShooterUserId"
+local TEMPLATE_NAME_ATTRIBUTE = "TemplateName"
+local PROJECTILE_MODEL_TEMPLATE_NAME = "ProjectileModel"
 local LOCAL_OWNED_PROJECTILE_COLOR = Color3.new(0, 1, 0)
 local ENEMY_PROJECTILE_COLOR = Color3.new(1, 0.2, 0.2)
+local LOCAL_OWNED_PROJECTILE_BRICK_COLOR = BrickColor.new("Lime green")
+local ENEMY_PROJECTILE_BRICK_COLOR = BrickColor.new("Bright red")
 local CLIENT_BULLET_PREWARM_FOLDER_NAME = "ClientBulletPrewarm"
-local PREWARM_UNDERGROUND_Y = -200
-local PREWARM_CLEAR_DELAY_SEC = 1.5
+-- 远离赛场的世界坐标，避免预热模型出现在擂台/相机附近
+local PREWARM_WORLD_POSITION = Vector3.new(200, -600, -200)
+local PREWARM_OFFSET_STEP = Vector3.new(300, -100, -8)
 
 -- Recoil Animation Constants
 local RECOIL_OFFSET_STUDS = 1.4 -- 枪管后退的距离 (Studs)
@@ -76,8 +83,7 @@ local lastFireTime: number = -math.huge
 local isInitialized: boolean = false
 local _hasWarnedMissingTurretActuator: boolean = false
 local isLocalAfk: boolean = false
-local hasPrewarmedBulletsThisRound: boolean = false
-local activePrewarmToken: number = 0
+local prewarmedBulletResourceNameMap: { [string]: boolean } = {}
 
 local HttpService = game:GetService("HttpService")
 local soundOriginsFolder = replicatedStorage:FindFirstChild("Sounds")
@@ -88,26 +94,6 @@ local impactSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirs
 local deathSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("DeathSound") else nil
 local unitFireSoundCache: { [Model]: Instance } = {}
 local unitMissingFireSoundCache: { [Model]: boolean } = {}
-
-if soundOriginsFolder == nil then
-	warn("[BulletClientManager] Sounds folder not found in ReplicatedStorage.")
-else
-	if fireSoundOrigin == nil then
-		warn("[BulletClientManager] FireSound not found in ReplicatedStorage.Sounds.")
-	end
-	if hitSoundOrigin == nil then
-		warn("[BulletClientManager] HitSound not found in ReplicatedStorage.Sounds.")
-	end
-	if struckSoundOrigin == nil then
-		warn("[BulletClientManager] StruckSound not found in ReplicatedStorage.Sounds.")
-	end
-	if impactSoundOrigin == nil then
-		warn("[BulletClientManager] ImpactSound not found in ReplicatedStorage.Sounds.")
-	end
-	if deathSoundOrigin == nil then
-		warn("[BulletClientManager] DeathSound not found in ReplicatedStorage.Sounds.")
-	end
-end
 
 local function PlayLocalCombatSound(soundOrigin: Instance?, worldPosition: Vector3)
 	if soundOrigin == nil or not soundOrigin:IsA("Sound") then
@@ -150,7 +136,6 @@ local function ResolveFireSound(unitModel: Model?): Instance?
 			unitFireSoundCache[unitModel] = modelFireSound
 			return modelFireSound
 		end
-		warn(string.format("[BulletClientManager] FireSound under model %s is not a Sound.", unitModel.Name))
 	end
 
 	unitMissingFireSoundCache[unitModel] = true
@@ -171,66 +156,138 @@ local function GetBulletModelsFolder(): Folder?
 end
 
 local function EnsureClientBulletPrewarmFolder(): Folder
-	local folder = workspaceService:FindFirstChild(CLIENT_BULLET_PREWARM_FOLDER_NAME)
-	if folder ~= nil and folder:IsA("Folder") then
-		return folder
+	local existing = workspaceService:FindFirstChild(CLIENT_BULLET_PREWARM_FOLDER_NAME)
+	if existing ~= nil and not existing:IsA("Folder") then
+		existing:Destroy()
+		existing = nil
+	end
+	if existing ~= nil and existing:IsA("Folder") then
+		return existing :: Folder
 	end
 	local created = Instance.new("Folder")
 	created.Name = CLIENT_BULLET_PREWARM_FOLDER_NAME
+	created:SetAttribute("PrewarmedByClient", true)
 	created.Parent = workspaceService
 	return created
 end
 
 local function ClearClientBulletPrewarmFolder()
+	if not runService:IsClient() then
+		return
+	end
 	local folder = workspaceService:FindFirstChild(CLIENT_BULLET_PREWARM_FOLDER_NAME)
 	if folder ~= nil and folder:IsA("Folder") then
 		folder:Destroy()
 	end
 end
 
-local function GetCurrentVehicleBulletResourceNameFromPlayer(playerId: number): string?
-	local vehicleInventory: GameConfig.VehicleInventory? = nil
-	if playerId == localPlayerId then
-		local localInfo = ClientGameInfo.GetLocalPlayerInfo()
-		if localInfo ~= nil then
-			vehicleInventory = localInfo.vehicleInventory
+local function SetPrewarmModelHighlightEnabled(model: Model, enabled: boolean)
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("Highlight") then
+			descendant.Enabled = enabled
 		end
-	else
-		local otherInfo = ClientGameInfo.GetOtherPlayerInfo(playerId)
-		if otherInfo ~= nil then
-			local dynamicInfo = otherInfo :: any
-			local otherVehicleInventory = dynamicInfo.vehicleInventory
-			if otherVehicleInventory ~= nil then
-				vehicleInventory = otherVehicleInventory
-			end
+	end
+end
+
+local function ConfigurePrewarmClonedModelPhysics(model: Model)
+	for _, d in model:GetDescendants() do
+		if d:IsA("BasePart") then
+			d.CanCollide = false
+			d.CanQuery = false
+			d.Anchored = true
+		end
+	end
+end
+
+local function GetPrewarmWorldPositionForIndex(index: number): Vector3
+	return PREWARM_WORLD_POSITION + PREWARM_OFFSET_STEP * index
+end
+
+-- StartRound 在「备战倒计时结束」与「开局倒计时广播」之间发 UnitInit，此时客户端仍为 MatchCountdown，必须仍允许预热
+local function ShouldRunClientBulletPrewarm(): boolean
+	if matchState == GameConfig.MatchState.InLobby or matchState == GameConfig.MatchState.Settlement then
+		return false
+	end
+	return true
+end
+
+local function IsParticipantFromPayload(value: unknown): boolean
+	if value == true or value == 1 then
+		return true
+	end
+	if typeof(value) == "string" then
+		local s = string.lower(value :: string)
+		return s == "true" or s == "1"
+	end
+	return false
+end
+
+local function GetBulletResourceNameFromVehicleId(vehicleId: number): string
+	local vehicleData = GameConfig.VehicleDataMap[vehicleId]
+	local bulletData = if vehicleData then vehicleData.bulletData else nil
+	local resourceName = if bulletData then bulletData.resourceName else nil
+	if typeof(resourceName) == "string" and resourceName ~= "" then
+		return resourceName
+	end
+	return PROJECTILE_MODEL_TEMPLATE_NAME
+end
+
+-- RemoteEvent 反序列化可能把 vehicleId 变成 string；缺字段时按 unknown 规范化
+local function CoerceVehicleIdFromPayload(raw: unknown): number?
+	if raw == nil then
+		return nil
+	end
+	if typeof(raw) == "number" then
+		if raw ~= raw then
+			return nil
+		end
+		return raw
+	end
+	if typeof(raw) == "string" then
+		return tonumber(raw)
+	end
+	return nil
+end
+
+local function GetMatchVehicleIdForPlayer(playerId: number): number?
+	local pendingInfo = pendingUnitInits[playerId]
+	if pendingInfo ~= nil then
+		local id = CoerceVehicleIdFromPayload(pendingInfo.vehicleId)
+		if id ~= nil then
+			return id
 		end
 	end
 
-	if vehicleInventory == nil then
-		return nil
+	local state = unitStateMap[playerId]
+	if state ~= nil then
+		local id = CoerceVehicleIdFromPayload(state.vehicleId)
+		if id ~= nil then
+			return id
+		end
 	end
-	local vehicleId = tonumber(vehicleInventory.currentId)
+
+	return nil
+end
+
+local function GetMatchBulletResourceNameForParticipantPlayer(playerId: number): string
+	local vehicleId = GetMatchVehicleIdForPlayer(playerId)
 	if vehicleId == nil then
-		return nil
+		return PROJECTILE_MODEL_TEMPLATE_NAME
 	end
-	local vehicleData = GameConfig.VehicleDataMap[vehicleId]
-	if vehicleData == nil or vehicleData.bulletData == nil then
-		return nil
-	end
-	return vehicleData.bulletData.resourceName
+	return GetBulletResourceNameFromVehicleId(vehicleId)
 end
 
 local function CollectParticipantIdList(): { number }
 	local participantIdMap: { [number]: boolean } = {}
 
 	for playerId, unitInitInfo in pendingUnitInits do
-		if unitInitInfo.isParticipant == true then
+		if IsParticipantFromPayload(unitInitInfo.isParticipant) then
 			participantIdMap[playerId] = true
 		end
 	end
 
 	for playerId, state in unitStateMap do
-		if state.isParticipant == true then
+		if state.isParticipant then
 			participantIdMap[playerId] = true
 		end
 	end
@@ -244,26 +301,12 @@ end
 
 local function CollectPrewarmBulletResourceNameList(): { string }
 	local resourceNameMap: { [string]: boolean } = {}
-	local hasMissingVehicleInfo = false
 	local participantIdList = CollectParticipantIdList()
 
 	for _, playerId in participantIdList do
-		local resourceName = GetCurrentVehicleBulletResourceNameFromPlayer(playerId)
-		if resourceName ~= nil and resourceName ~= "" then
+		local resourceName = GetMatchBulletResourceNameForParticipantPlayer(playerId)
+		if resourceName ~= "" and prewarmedBulletResourceNameMap[resourceName] ~= true then
 			resourceNameMap[resourceName] = true
-		else
-			hasMissingVehicleInfo = true
-		end
-	end
-
-	-- 其他玩家载具信息未同步到客户端时，回退预热全部可能子弹模板，确保首发稳定。
-	if hasMissingVehicleInfo then
-		for _, vehicleData: GameConfig.VehicleData in pairs(GameConfig.VehicleDataMap) do
-			local bulletData = vehicleData.bulletData
-			local resourceName = if bulletData ~= nil then bulletData.resourceName else nil
-			if typeof(resourceName) == "string" and resourceName ~= "" then
-				resourceNameMap[resourceName] = true
-			end
 		end
 	end
 
@@ -275,47 +318,43 @@ local function CollectPrewarmBulletResourceNameList(): { string }
 end
 
 local function PrewarmBulletVisualsForCurrentParticipants()
-	local bulletFolder = GetBulletModelsFolder()
-	if bulletFolder == nil then
-		warn("[BulletClientManager] Bullet models folder missing for prewarm.")
+	if not runService:IsClient() then
 		return
 	end
-
 	local resourceNameList = CollectPrewarmBulletResourceNameList()
 	if #resourceNameList <= 0 then
 		return
 	end
+	local bulletFolder = GetBulletModelsFolder()
+	if bulletFolder == nil then
+		return
+	end
 
 	local prewarmFolder = EnsureClientBulletPrewarmFolder()
-	activePrewarmToken += 1
-	local token = activePrewarmToken
-	local spawnX = 0
-	local prewarmedCount = 0
 
-	for _, resourceName in resourceNameList do
+	for i, resourceName in ipairs(resourceNameList) do
 		local template = bulletFolder:FindFirstChild(resourceName)
 		if template == nil or not template:IsA("Model") then
-			warn("[BulletClientManager] Bullet prewarm template not found:", resourceName)
 			continue
 		end
 		local cloned = template:Clone()
 		cloned.Name = "Prewarm_" .. resourceName
+		SetPrewarmModelHighlightEnabled(cloned, false)
+		ConfigurePrewarmClonedModelPhysics(cloned)
 		cloned.Parent = prewarmFolder
-		cloned:PivotTo(CFrame.new(spawnX, PREWARM_UNDERGROUND_Y, 0))
-		spawnX += 8
-		prewarmedCount += 1
+		local targetCf = CFrame.new(GetPrewarmWorldPositionForIndex(i - 1))
+		pcall(function()
+			cloned:PivotTo(targetCf)
+		end)
+		task.defer(function()
+			if cloned.Parent ~= nil then
+				pcall(function()
+					cloned:PivotTo(targetCf)
+				end)
+			end
+		end)
+		prewarmedBulletResourceNameMap[resourceName] = true
 	end
-
-	if prewarmedCount > 0 then
-		print(string.format("[BulletClientManager] Prewarmed bullets=%d", prewarmedCount))
-	end
-
-	task.delay(PREWARM_CLEAR_DELAY_SEC, function()
-		if token ~= activePrewarmToken then
-			return
-		end
-		ClearClientBulletPrewarmFolder()
-	end)
 end
 
 local cachedProjectileRadius: number? = nil
@@ -355,10 +394,19 @@ local function TintServerProjectile(projectileModel: Model)
 
 		local isLocal = (shooterId == localPlayerId)
 		local tintColor = if isLocal then LOCAL_OWNED_PROJECTILE_COLOR else ENEMY_PROJECTILE_COLOR
+		local brickColor = if isLocal then LOCAL_OWNED_PROJECTILE_BRICK_COLOR else ENEMY_PROJECTILE_BRICK_COLOR
 		-- 规范：子弹模型的 Highlight 必须挂在模型根节点
 		local rootHighlight = projectileModel:FindFirstChildWhichIsA("Highlight")
 		if rootHighlight ~= nil then
 			rootHighlight.OutlineColor = tintColor
+		end
+		local templateName = projectileModel:GetAttribute(TEMPLATE_NAME_ATTRIBUTE)
+		if templateName ~= PROJECTILE_MODEL_TEMPLATE_NAME then
+			return
+		end
+		local projectileCore = projectileModel:FindFirstChild("Core")
+		if projectileCore ~= nil and projectileCore:IsA("BasePart") then
+			projectileCore.BrickColor = brickColor
 		end
 	end
 	tryTint()
@@ -461,10 +509,14 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 
 	pendingUnitInits[playerId] = unitInitInfo
 
+	if ShouldRunClientBulletPrewarm() then
+		PrewarmBulletVisualsForCurrentParticipants()
+	end
+
 	-- Update existing state immediately to avoid UI delays if this is a state update (e.g. StartRound)
 	local existingState = unitStateMap[playerId]
 	if existingState ~= nil then
-		existingState.isParticipant = unitInitInfo.isParticipant == true
+		existingState.isParticipant = IsParticipantFromPayload(unitInitInfo.isParticipant)
 		if existingState.model ~= nil then
 			ClearCachedFireSoundForModel(existingState.model)
 		end
@@ -524,6 +576,7 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 
 	local state: ClientUnitState = {
 		playerId = playerId,
+		vehicleId = currentInfo.vehicleId,
 		targetVelX = targetVelX,
 		targetVelZ = targetVelZ,
 		spinDir = currentInfo.spinDir,
@@ -542,9 +595,9 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 		spinOffsetRad = 0,
 		lastWallBounceClock = 0,
 		lastVehicleBumpClock = 0,
-		isParticipant = currentInfo.isParticipant == true,
 		recoilJoint = nil,
 		recoilPropName = nil,
+		isParticipant = IsParticipantFromPayload(currentInfo.isParticipant),
 	}
 	unitStateMap[playerId] = state
 
@@ -802,15 +855,14 @@ function BulletClientManager.OnTeleport(_playerId: number, _targetPosition: Vect
 
 function BulletClientManager.OnMatchStateChanged(newState: GameConfig.MatchState, _countdown: number)
 	matchState = newState
-	if newState == GameConfig.MatchState.GameStartCountdown or newState == GameConfig.MatchState.Fighting then
-		if not hasPrewarmedBulletsThisRound then
-			hasPrewarmedBulletsThisRound = true
-			PrewarmBulletVisualsForCurrentParticipants()
-		end
+	if
+		newState == GameConfig.MatchState.MatchCountdown
+		or newState == GameConfig.MatchState.GameStartCountdown
+		or newState == GameConfig.MatchState.Fighting
+	then
+		PrewarmBulletVisualsForCurrentParticipants()
 	end
 	if newState == GameConfig.MatchState.InLobby then
-		hasPrewarmedBulletsThisRound = false
-		activePrewarmToken += 1
 		ClearClientBulletPrewarmFolder()
 		table.clear(unitStateMap)
 		table.clear(pendingUnitInits)

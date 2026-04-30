@@ -13,6 +13,9 @@ export type PlayerRoundInfo = {
 	isParticipant: boolean,
 	isAfk: boolean,
 	hitCount: number,
+	roundDealtHitCount: number,
+	roundKillCount: number,
+	roundCoinEarned: number,
 	lastFireTime: number,
 }
 
@@ -27,6 +30,9 @@ local function CreateDefaultPlayerRoundInfo(player: Player): PlayerRoundInfo
 		isParticipant = false,
 		isAfk = false,
 		hitCount = 0,
+		roundDealtHitCount = 0,
+		roundKillCount = 0,
+		roundCoinEarned = 0,
 		lastFireTime = DEFAULT_LAST_FIRE_TIME,
 	}
 end
@@ -61,6 +67,9 @@ function PlayerStateManager.ResetAllPlayerRoundInfo(participantIds: { number }?)
 		playerRoundInfo.isParticipant = isParticipant
 		playerRoundInfo.isAlive = isParticipant
 		playerRoundInfo.hitCount = 0
+		playerRoundInfo.roundDealtHitCount = 0
+		playerRoundInfo.roundKillCount = 0
+		playerRoundInfo.roundCoinEarned = 0
 		playerRoundInfo.lastFireTime = DEFAULT_LAST_FIRE_TIME
 	end
 end
@@ -131,6 +140,41 @@ function PlayerStateManager.GetPlayerHitCount(playerId: number): number
 		return 0
 	end
 	return playerRoundInfo.hitCount
+end
+
+function PlayerStateManager.AddRoundDealtHit(playerId: number)
+	local playerRoundInfo = playerRoundInfoMap[playerId]
+	if playerRoundInfo == nil then
+		return
+	end
+	playerRoundInfo.roundDealtHitCount += 1
+end
+
+function PlayerStateManager.AddRoundKill(playerId: number)
+	local playerRoundInfo = playerRoundInfoMap[playerId]
+	if playerRoundInfo == nil then
+		return
+	end
+	playerRoundInfo.roundKillCount += 1
+end
+
+function PlayerStateManager.AddRoundCoinEarned(playerId: number, amount: number)
+	if amount <= 0 then
+		return
+	end
+	local playerRoundInfo = playerRoundInfoMap[playerId]
+	if playerRoundInfo == nil or not playerRoundInfo.isParticipant then
+		return
+	end
+	playerRoundInfo.roundCoinEarned += amount
+end
+
+function PlayerStateManager.GetRoundStats(playerId: number): (number, number, number)
+	local playerRoundInfo = playerRoundInfoMap[playerId]
+	if playerRoundInfo == nil then
+		return 0, 0, 0
+	end
+	return playerRoundInfo.roundDealtHitCount, playerRoundInfo.roundKillCount, playerRoundInfo.roundCoinEarned
 end
 
 function PlayerStateManager.GetAllPlayerRoundInfoMap(): {[number]: PlayerRoundInfo}
