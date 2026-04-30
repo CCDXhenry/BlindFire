@@ -39,8 +39,6 @@ type ClientUnitState = {
 	lastWallBounceClock: number,
 	lastVehicleBumpClock: number?,
 	isParticipant: boolean,
-	recoilJoint: Weld | Motor6D?,
-	recoilPropName: "C0" | "C1"?,
 }
 
 local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
@@ -595,8 +593,6 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 		spinOffsetRad = 0,
 		lastWallBounceClock = 0,
 		lastVehicleBumpClock = 0,
-		recoilJoint = nil,
-		recoilPropName = nil,
 		isParticipant = IsParticipantFromPayload(currentInfo.isParticipant),
 	}
 	unitStateMap[playerId] = state
@@ -627,41 +623,25 @@ function BulletClientManager.OnUnitRemove(playerId: number)
 end
 local TweenService = game:GetService("TweenService")
 
-local function ResolveRecoilJoint(state: ClientUnitState): ((Weld | Motor6D)?, ("C0" | "C1")?)
-	if state.turretPart == nil or state.model == nil then
-		return nil, nil
+function BulletClientManager.PlayRecoilAnimation(state: ClientUnitState)
+	if not state.turretPart or not state.model then
+		return
 	end
 
-	local turretPart = state.turretPart
-	local model = state.model
-	local namedWeld = model:FindFirstChild("Weld_SeatToTurret", true)
-	local weld: (Weld | Motor6D)? = nil
+	local weld = state.model:FindFirstChild("Weld_SeatToTurret", true)
 
-	if namedWeld ~= nil and namedWeld:IsA("Weld") then
-		weld = namedWeld
-	elseif namedWeld ~= nil and namedWeld:IsA("Motor6D") then
-		weld = namedWeld
-	end
-	if weld ~= nil then
+	if weld then
+		-- If explicitly named weld is found, ensure state.turretPart matches the correct part
 		if weld.Part0 and weld.Part0.Name ~= "Seat" then
 			state.turretPart = weld.Part0
 		elseif weld.Part1 and weld.Part1.Name ~= "Seat" then
 			state.turretPart = weld.Part1
 		end
-		turretPart = state.turretPart or turretPart
 	else
-		local directWeld = turretPart:FindFirstChildWhichIsA("Weld")
-		if directWeld ~= nil then
-			weld = directWeld
-		else
-			local directMotor = turretPart:FindFirstChildWhichIsA("Motor6D")
-			if directMotor ~= nil then
-				weld = directMotor
-			end
-		end
-		if weld == nil then
-			for _, d in model:GetDescendants() do
-				if (d:IsA("Weld") or d:IsA("Motor6D")) and (d.Part0 == turretPart or d.Part1 == turretPart) then
+		weld = state.turretPart:FindFirstChildWhichIsA("Weld") or state.turretPart:FindFirstChildWhichIsA("Motor6D")
+		if not weld then
+			for _, d in state.model:GetDescendants() do
+				if (d:IsA("Weld") or d:IsA("Motor6D")) and (d.Part0 == state.turretPart or d.Part1 == state.turretPart) then
 					weld = d
 					break
 				end
@@ -671,10 +651,10 @@ local function ResolveRecoilJoint(state: ClientUnitState): ((Weld | Motor6D)?, (
 
 	-- Support WeldConstraint by dynamically converting it to a standard Weld
 	if not weld then
-		local weldConstraint = turretPart:FindFirstChildWhichIsA("WeldConstraint")
+		local weldConstraint = state.turretPart:FindFirstChildWhichIsA("WeldConstraint")
 		if not weldConstraint then
-			for _, d in model:GetDescendants() do
-				if d:IsA("WeldConstraint") and (d.Part0 == turretPart or d.Part1 == turretPart) then
+			for _, d in state.model:GetDescendants() do
+				if d:IsA("WeldConstraint") and (d.Part0 == state.turretPart or d.Part1 == state.turretPart) then
 					weldConstraint = d
 					break
 				end
@@ -698,40 +678,15 @@ local function ResolveRecoilJoint(state: ClientUnitState): ((Weld | Motor6D)?, (
 	end
 
 	if not weld then
-		return nil, nil
-	end
-	local resolvedWeld: Weld | Motor6D = weld
-
-	local propName: "C0" | "C1"
-	if resolvedWeld.Part0 == state.turretPart then
-		propName = "C0"
-	else
-		propName = "C1"
-	end
-	return resolvedWeld, propName
-end
-
-function BulletClientManager.PlayRecoilAnimation(state: ClientUnitState)
-	if not state.turretPart or not state.model then
 		return
 	end
 
-	if state.recoilJoint == nil or state.recoilJoint.Parent == nil or state.recoilPropName == nil then
-		local resolvedWeld, resolvedPropName = ResolveRecoilJoint(state)
-		state.recoilJoint = resolvedWeld
-		state.recoilPropName = resolvedPropName :: ("C0" | "C1")?
-	end
-	local weld = state.recoilJoint
-	local propName = state.recoilPropName
-
-	if weld == nil or propName == nil then
-		return
-	end
+	local isPart0 = (weld.Part0 == state.turretPart)
+	local propName = isPart0 and "C0" or "C1"
 
 	local attrName = "Original" .. propName
 	if not weld:GetAttribute(attrName) then
-		local currentJointCFrame = if propName == "C0" then weld.C0 else weld.C1
-		weld:SetAttribute(attrName, currentJointCFrame)
+		weld:SetAttribute(attrName, weld[propName])
 	end
 
 	local originalCFrame = weld:GetAttribute(attrName) :: CFrame
@@ -758,7 +713,7 @@ function BulletClientManager.PlayRecoilAnimation(state: ClientUnitState)
 
 	local targetCFrame = recoilOffset:Inverse() * originalCFrame
 
-	local recoilId = ((weld:GetAttribute("RecoilId") :: number?) or 0) + 1
+	local recoilId = (weld:GetAttribute("RecoilId") or 0) + 1
 	weld:SetAttribute("RecoilId", recoilId)
 
 	local tweenInfoIn = TweenInfo.new(RECOIL_IN_DURATION_SEC, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
