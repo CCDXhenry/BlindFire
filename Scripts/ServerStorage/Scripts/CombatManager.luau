@@ -16,6 +16,7 @@ local PlayerStateManager = require(serverScripts:FindFirstChild("PlayerStateMana
 local ArenaManager = require(serverScripts:FindFirstChild("ArenaManager"))
 local ServerGameInfo = require(serverScripts:FindFirstChild("ServerGameInfo"))
 local LeaderboardManager = require(serverScripts:FindFirstChild("LeaderboardManager"))
+local AnalyticsTool = require(serverScripts:FindFirstChild("AnalyticsTool"))
 local VehicleLocomotionTool = require(sharedScripts:FindFirstChild("VehicleLocomotionTool"))
 
 type OnPlayerDeadCallback = (player: Player, isDisconnect: boolean?, hitDirection: Vector3?) -> ()
@@ -1249,12 +1250,14 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 
 	local hitCount: number = 0
 	local isDead: boolean = false
+	local didApplyDamage: boolean = false
 	local maxHits = if targetUnitInfo ~= nil then targetUnitInfo.vehicleConfig.maxHits else GameConfig.MaxHits
 	if isProtected then
 		hitCount = PlayerStateManager.GetPlayerHitCount(targetPlayerId)
 		isDead = false
 	else
 		hitCount, isDead = PlayerStateManager.AddPlayerHit(targetPlayerId, maxHits)
+		didApplyDamage = hitCount > 0 or isDead
 		if hitCount == 0 and not isDead then
 			LogProjectileHitResolve(
 				string.format(
@@ -1306,12 +1309,26 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 	)
 	NetMsg.FireNotifyHit(targetPlayerId, shooterId, hitDirection, hitCount, bulletId, hitPosition)
 	NetMsg.FireNotifyHpChanged(targetPlayerId, hitCount, maxHits)
+	local targetPlayer = players:GetPlayerByUserId(targetPlayerId)
+	local shooterPlayer = players:GetPlayerByUserId(shooterId)
+
+	if didApplyDamage and targetPlayer ~= nil then
+		local targetInfo = ServerGameInfo.GetPlayerInfo(targetPlayer)
+		if targetInfo ~= nil then
+			AnalyticsTool.AddGameHurtEvent(targetPlayer, targetInfo.vehicleInventory.currentId)
+		end
+	end
 
 	--增加金币奖励
-	if shooterId ~= targetPlayerId then
-		local shooterPlayer = players:GetPlayerByUserId(shooterId)
+	if shooterId ~= targetPlayerId and didApplyDamage then
 		if shooterPlayer ~= nil then
+			PlayerStateManager.AddRoundDealtHit(shooterId)
+			local shooterInfo = ServerGameInfo.GetPlayerInfo(shooterPlayer)
+			if shooterInfo ~= nil then
+				AnalyticsTool.AddCarHitEvent(shooterPlayer, shooterInfo.vehicleInventory.currentId, isDead)
+			end
 			if isDead then
+				PlayerStateManager.AddRoundKill(shooterId)
 				--击杀奖励
 				ServerGameInfo.UpdatePlayerCurrency(shooterPlayer, GameConfig.CurrencyType.Coin, 2, GameConfig.ItemCountChangeReason.GainFromKill)
 				LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyKills, 1)
@@ -1326,7 +1343,19 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 
 	if isDead then
 		NetMsg.FireNotifyDead(targetPlayerId, shooterId)
-		local targetPlayer = players:GetPlayerByUserId(targetPlayerId)
+		if targetPlayer ~= nil then
+			local targetInfo = ServerGameInfo.GetPlayerInfo(targetPlayer)
+			local roundHitCount, roundKillCount, roundCoinEarned = PlayerStateManager.GetRoundStats(targetPlayerId)
+			if targetInfo ~= nil then
+				AnalyticsTool.AddGameDeadEvent(
+					targetPlayer,
+					targetInfo.vehicleInventory.currentId,
+					roundHitCount,
+					roundKillCount,
+					roundCoinEarned
+				)
+			end
+		end
 		if targetPlayer ~= nil and playerDeadCallback ~= nil then
 			LogInfo(string.format("NotifyPlayerDead userId=%d", targetPlayerId))
 			task.defer(playerDeadCallback, targetPlayer, false, hitDirection)
@@ -1696,6 +1725,8 @@ function CombatManager.OnPlayerRemoving(player: Player)
 	local roundInfoMap = PlayerStateManager.GetAllPlayerRoundInfoMap()
 	local roundInfo = roundInfoMap[userId]
 	local shouldNotifyDead = roundInfo ~= nil and roundInfo.isParticipant and roundInfo.isAlive
+	local playerInfo = ServerGameInfo.GetPlayerInfo(player)
+	local roundHitCount, roundKillCount, roundCoinEarned = PlayerStateManager.GetRoundStats(userId)
 
 	unseatPlayerFromOwnedVehicle(player)
 	CombatManager.DestroyUnitForPlayer(userId)
@@ -1703,6 +1734,9 @@ function CombatManager.OnPlayerRemoving(player: Player)
 	NetMsg.FireNotifyUnitRemoveToAll(userId)
 
 	if shouldNotifyDead then
+		if playerInfo ~= nil then
+			AnalyticsTool.AddGameDeadEvent(player, playerInfo.vehicleInventory.currentId, roundHitCount, roundKillCount, roundCoinEarned)
+		end
 		NetMsg.FireNotifyDead(userId, nil)
 		if playerDeadCallback ~= nil then
 			local ok, err = pcall(function()
@@ -1864,6 +1898,10 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 	end
 
 	LogInfo(string.format("FireAccepted userId=%d bulletId=%s", player.UserId, bulletId))
+	local playerInfo = ServerGameInfo.GetPlayerInfo(player)
+	if playerInfo ~= nil then
+		AnalyticsTool.AddCarFireEvent(player, playerInfo.vehicleInventory.currentId)
+	end
 	NetMsg.FireNotifyDirectionFlipToAll(player.UserId)
 	NetMsg.FireNotifyFireAccepted(player.UserId, clientTimestamp, spawnPos, shotDirection, serverTime, bulletId)
 end

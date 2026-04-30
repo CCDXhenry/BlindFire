@@ -15,6 +15,8 @@ local PlayerStateManager = require(serverScripts:WaitForChild("PlayerStateManage
 local ConfigManager = require(serverScripts:WaitForChild("ConfigManager"))
 local ArenaManager = require(serverScripts:WaitForChild("ArenaManager"))
 local LeaderboardManager = require(serverScripts:WaitForChild("LeaderboardManager"))
+local ServerGameInfo = require(serverScripts:WaitForChild("ServerGameInfo"))
+local AnalyticsTool = require(serverScripts:WaitForChild("AnalyticsTool"))
 
 type OnRoundStartCallback = (participantIds: { number }) -> ()
 
@@ -58,6 +60,7 @@ local function OnRequestSetAfkState(player: Player, isAfk: boolean)
 	end
 	PlayerStateManager.SetPlayerAfk(player.UserId, isAfk == true)
 	NetMsg.FireNotifyAfkState(player.UserId, isAfk == true)
+	AnalyticsTool.AddAfkTurnEvent(player, isAfk == true)
 end
 
 local function OnRequestSyncAfkState(player: Player)
@@ -496,6 +499,16 @@ local function RunMatchLoop()
 		end
 
 		BroadcastMatchState(GameConfig.MatchState.Fighting, 0)
+		local roundInfoMap = PlayerStateManager.GetAllPlayerRoundInfoMap()
+		for _, participantPlayer in players:GetPlayers() do
+			local roundInfo = roundInfoMap[participantPlayer.UserId]
+			if roundInfo ~= nil and roundInfo.isParticipant then
+				local playerInfo = ServerGameInfo.GetPlayerInfo(participantPlayer)
+				if playerInfo ~= nil then
+					AnalyticsTool.AddGameStartEvent(participantPlayer, playerInfo.vehicleInventory.currentId)
+				end
+			end
+		end
 		ArenaManager.StartShrinking(GameConfig.RoundFightDuration)
 		LogInfo(string.format("FightPhase start seconds=%d", GameConfig.RoundFightDuration))
 		-- 与 MatchCountdown / GameStartCountdown 一致：先广播再 wait，避免首秒无数字、客户端慢约 1s
@@ -525,6 +538,17 @@ local function RunMatchLoop()
 		for _, winnerId in ipairs(aliveUserIds) do
 			local winner = players:GetPlayerByUserId(winnerId)
 			if winner then
+				local playerInfo = ServerGameInfo.GetPlayerInfo(winner)
+				local roundHitCount, roundKillCount, roundCoinEarned = PlayerStateManager.GetRoundStats(winnerId)
+				if playerInfo ~= nil then
+					AnalyticsTool.AddGameWinEvent(
+						winner,
+						playerInfo.vehicleInventory.currentId,
+						roundHitCount,
+						roundKillCount,
+						roundCoinEarned
+					)
+				end
 				LeaderboardManager.AddStat(winner, GameConfig.LeaderboardCategory.WeeklyWins, 1)
 			end
 		end
