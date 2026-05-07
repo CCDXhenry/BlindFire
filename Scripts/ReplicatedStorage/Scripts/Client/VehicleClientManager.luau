@@ -47,11 +47,16 @@ type ClientVehicleState = {
 	lastSpinDirFlipClock: number,
 	-- 本地玩家被命中时：短时间抑制服务端纠偏，避免“先被击退后看到命中”
 	suppressServerCorrectionUntilServerTime: number,
+	hitSoftReconcileUntilServerTime: number,
 }
 
 local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
 local VEHICLE_PROXY_PART_NAME_PREFIX = "VehiclePhysicsProxy_"
 local CLIENT_VEHICLE_VISUAL_COLLISION_GROUP = "ClientVehicleVisual"
+local HIT_SOFT_RECONCILE_DURATION_SEC = 0.45
+local HIT_SOFT_RECONCILE_HARD_SNAP_MULTIPLIER = 3
+local HIT_SOFT_RECONCILE_VELOCITY_CONVERGE_RATE = 16
+local HIT_SOFT_RECONCILE_MAX_CORRECTION_SPEED = 140
 
 local vehicleStateMap: { [number]: ClientVehicleState } = {}
 local matchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
@@ -231,6 +236,7 @@ local function CreateDefaultState(playerId: number): ClientVehicleState
 		lastAppliedSpinMatchState = nil,
 		lastSpinDirFlipClock = 0,
 		suppressServerCorrectionUntilServerTime = 0,
+		hitSoftReconcileUntilServerTime = 0,
 	}
 end
 
@@ -330,6 +336,7 @@ local function StopVehicleVisualMotion(state: ClientVehicleState)
 	state.targetServerVelocity = nil
 	state.targetServerAngVelY = nil
 	state.lastInputSendAccumulator = 0
+	state.hitSoftReconcileUntilServerTime = 0
 	table.clear(state.snapshotBuffer)
 end
 
@@ -421,6 +428,7 @@ local function ReconcileLocalStateFromSnapshot(state: ClientVehicleState, snapsh
 	local nowServer = workspaceService:GetServerTimeNow()
 	local suppressUntil = state.suppressServerCorrectionUntilServerTime or 0
 	local shouldSuppress = nowServer < suppressUntil
+	local isHitSoftReconcile = nowServer < (state.hitSoftReconcileUntilServerTime or 0)
 	-- 硬 reconcile 门槛随当前速度放宽：高速载具允许 N 秒位移作为缓冲，避免快照延迟导致频繁拉扯
 	local serverSpeed = Vector3.new(snapshot.velocity.X, 0, snapshot.velocity.Z).Magnitude
 	local clientSpeed = Vector3.new(rootPart.AssemblyLinearVelocity.X, 0, rootPart.AssemblyLinearVelocity.Z).Magnitude
@@ -429,8 +437,10 @@ local function ReconcileLocalStateFromSnapshot(state: ClientVehicleState, snapsh
 	local hardThreshold = math.max(GameConfig.VehicleReconcilePosThreshold, speedAwareThreshold)
 	local shouldHardReconcile = posErr >= hardThreshold
 	if shouldHardReconcile then
-		if shouldSuppress then
-			-- 被命中补偿窗口内不硬拉，避免“瞬移/提前击退”体感；先缓存目标，窗口结束后再收敛
+		local shouldUseHitSoftReconcile = shouldSuppress
+			or (isHitSoftReconcile and posErr < hardThreshold * HIT_SOFT_RECONCILE_HARD_SNAP_MULTIPLIER)
+		if shouldUseHitSoftReconcile then
+			-- 被命中补偿窗口和随后的软纠偏窗口内不硬拉，避免高击退速度导致表现瞬移。
 			state.targetServerPosition = snapshot.position
 			state.targetServerYaw = snapshot.yaw
 			state.targetServerVelocity = snapshot.velocity
@@ -464,12 +474,15 @@ local function ApplyLocalSoftCorrection(state: ClientVehicleState, rootPart: Bas
 		return
 	end
 	local currentVel = rootPart.AssemblyLinearVelocity
+	local isHitSoftReconcile = nowServer < (state.hitSoftReconcileUntilServerTime or 0)
+	local velocityConvergeRate = if isHitSoftReconcile
+		then HIT_SOFT_RECONCILE_VELOCITY_CONVERGE_RATE
+		else math.max(0, GameConfig.VehicleVelocityConvergeRate)
 	-- 帧率无关的速度收敛：水平方向向服务端速度做指数插值，不动 Y 速度
 	local blendedX, blendedZ = currentVel.X, currentVel.Z
 	local targetVel = state.targetServerVelocity
 	if targetVel ~= nil then
-		local convergeRate = math.max(0, GameConfig.VehicleVelocityConvergeRate)
-		local velAlpha = Clamp01(1 - math.exp(-math.max(0, dt) * convergeRate))
+		local velAlpha = Clamp01(1 - math.exp(-math.max(0, dt) * velocityConvergeRate))
 		blendedX = currentVel.X + (targetVel.X - currentVel.X) * velAlpha
 		blendedZ = currentVel.Z + (targetVel.Z - currentVel.Z) * velAlpha
 	end
@@ -477,7 +490,9 @@ local function ApplyLocalSoftCorrection(state: ClientVehicleState, rootPart: Bas
 	-- 不再每帧写 CFrame，避免与本地物理子步竞争造成「拉扯感 / 服务器端瞬移感」
 	local posDelta = serverPos - rootPart.Position
 	local correctionGain = math.max(0, GameConfig.VehiclePosCorrectionGain)
-	local maxCorrectionSpeed = math.max(0, GameConfig.VehiclePosCorrectionMaxSpeed)
+	local maxCorrectionSpeed = if isHitSoftReconcile
+		then HIT_SOFT_RECONCILE_MAX_CORRECTION_SPEED
+		else math.max(0, GameConfig.VehiclePosCorrectionMaxSpeed)
 	local correctionX = math.clamp(posDelta.X * correctionGain, -maxCorrectionSpeed, maxCorrectionSpeed)
 	local correctionZ = math.clamp(posDelta.Z * correctionGain, -maxCorrectionSpeed, maxCorrectionSpeed)
 	rootPart.AssemblyLinearVelocity = Vector3.new(blendedX + correctionX, currentVel.Y, blendedZ + correctionZ)
@@ -485,7 +500,7 @@ local function ApplyLocalSoftCorrection(state: ClientVehicleState, rootPart: Bas
 	local targetYaw = state.targetServerYaw
 	local yawErr = 0
 	if targetYaw ~= nil then
-		local yawAlpha = Clamp01(1 - math.exp(-math.max(0, dt) * math.max(0, GameConfig.VehicleVelocityConvergeRate)))
+		local yawAlpha = Clamp01(1 - math.exp(-math.max(0, dt) * velocityConvergeRate))
 		local currentYaw = GetSnapshotYawFromCFrame(rootPart.CFrame)
 		yawErr = math.abs(_NormalizeAngleRad(targetYaw - currentYaw))
 		local smoothYaw = _LerpAngleRad(currentYaw, targetYaw, yawAlpha)
@@ -650,6 +665,7 @@ function VehicleClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 	state.targetServerYaw = nil
 	state.targetServerVelocity = nil
 	state.targetServerAngVelY = nil
+	state.hitSoftReconcileUntilServerTime = 0
 	state.lastServerTime = 0
 	state.lastServerTick = 0
 	state.isParticipant = IsParticipantFromPayload(unitInitInfo.isParticipant)
@@ -789,6 +805,8 @@ function VehicleClientManager.SetLocalHitCorrectionSuppression(untilServerTime: 
 		return
 	end
 	state.suppressServerCorrectionUntilServerTime = math.max(state.suppressServerCorrectionUntilServerTime or 0, untilServerTime)
+	state.hitSoftReconcileUntilServerTime =
+		math.max(state.hitSoftReconcileUntilServerTime or 0, untilServerTime + HIT_SOFT_RECONCILE_DURATION_SEC)
 end
 
 return VehicleClientManager
