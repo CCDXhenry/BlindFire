@@ -5,6 +5,20 @@ local infoGuiIndexMap: { [BillboardGui]: number } = {}
 local connectionMap: { [BillboardGui]: { RBXScriptConnection } } = {}
 local SCALE_EPSILON = 0.001
 
+local function GetScaleMultiplier(controllerFrame: Frame): number
+	local scaleAttr = controllerFrame:GetAttribute("UIScale")
+	if typeof(scaleAttr) == "number" then
+		return math.max(scaleAttr, 0)
+	end
+	if typeof(scaleAttr) == "string" then
+		local parsedScale = tonumber(scaleAttr)
+		if parsedScale ~= nil then
+			return math.max(parsedScale, 0)
+		end
+	end
+	return 1
+end
+
 local function RemoveInfoGuiByIndex(index: number)
 	local lastIndex = #infoGuis
 	local removedGui = infoGuis[index]
@@ -50,6 +64,7 @@ local function UpdateSingleInfoScale(infoUI: BillboardGui)
 		infoUI.AbsoluteSize.X / controllerWidth,
 		infoUI.AbsoluteSize.Y / controllerHeight
 	)
+	nextScale *= GetScaleMultiplier(controllerFrame)
 	if math.abs(uiScale.Scale - nextScale) < SCALE_EPSILON then
 		return
 	end
