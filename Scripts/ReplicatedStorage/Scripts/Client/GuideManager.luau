@@ -4,10 +4,14 @@ local GuideManager = {}
 local replicatedStorage: ReplicatedStorage = game:GetService("ReplicatedStorage")
 local userInputService = game:GetService("UserInputService")
 
+local core = replicatedStorage:WaitForChild("Core")
+local coreScripts = core:WaitForChild("Scripts")
+local coreClientScripts = coreScripts:WaitForChild("Client")
 local scripts = replicatedStorage:WaitForChild("Scripts")
 local sharedScripts = scripts:WaitForChild("Shared")
 local clientScripts = scripts:WaitForChild("Client")
 
+local UserInutExtension = require(coreClientScripts:WaitForChild("UserInutExtension"))
 local GameConfig = require(sharedScripts:WaitForChild("GameConfig"))
 local NetMsg = require(sharedScripts:WaitForChild("NetMsg"))
 local ClientGameInfo = require(clientScripts:WaitForChild("ClientGameInfo"))
@@ -56,6 +60,10 @@ end
 
 function GuideManager.ShouldShowButtonGuide(): boolean
 	if currentMatchState ~= GameConfig.MatchState.Fighting then
+		return false
+	end
+	local inputTypeString: string?, _: Enum.UserInputType = UserInutExtension.GetInputType()
+	if inputTypeString == UserInutExtension.InputTypeString.Keyboard_Mouse then
 		return false
 	end
 	if ClientGameInfo.IsGuideFinished(GameConfig.GuideType.TutorialFireByButton) then
