@@ -52,7 +52,7 @@ function KillFeedManager.Init(gameScreenGui: ScreenGui)
 	
 	container = feedFrame
 	
-	NetMsg.ConnectNotifyDead(function(victimId: number, killerId: number?)
+	NetMsg.ConnectNotifyDead(function(victimId: number, killerId: number?, _deadServerTime: number, _adaptiveDelaySec: number)
 		if killerId ~= nil then
 			KillFeedManager.AddEntry(killerId, victimId)
 		end

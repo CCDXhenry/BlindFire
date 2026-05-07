@@ -24,6 +24,7 @@ type OnPlayerDeadCallback = (player: Player, isDisconnect: boolean?, hitDirectio
 type ServerUnitInfo = {
 	playerId: number,
 	unitModel: Model,
+	visualRootPart: BasePart,
 	rootPart: BasePart,
 	spinDir: number,
 	moveAngle: number,
@@ -37,6 +38,26 @@ type ServerUnitInfo = {
 	vehicleConfig: any,
 	stuckTime: number?,
 	lastPos: Vector3?,
+	lastInputSeq: number,
+	lastInputClientTime: number,
+}
+
+type ServerVehicleInputState = {
+	lastReceivedSeq: number,
+	lastAppliedSeq: number,
+	lastReceivedClock: number,
+	lastCmd: GameConfig.VehicleInputCmd?,
+}
+
+type PlayerLatencyStats = {
+	rttSecEma: number,
+	jitterSecEma: number,
+	lastSampleServerTime: number,
+}
+
+type VehiclePoseSample = {
+	serverTime: number,
+	position: Vector3,
 }
 
 type ServerBullet = {
@@ -55,6 +76,7 @@ type ServerBullet = {
 	bouncesLeft: number,
 	currentPos: Vector3,
 	estimatedRtt: number,
+	shotServerTime: number,
 	visualModel: Model?,
 	physicsRoot: BasePart?,
 	visualWeld: Motor6D?,
@@ -62,6 +84,7 @@ type ServerBullet = {
 	-- 激活前是否已执行过首次 PivotTo（避免每帧重复定位）
 	visualSpawned: boolean,
 	physicsStarted: boolean,
+	pendingDestroyServerTime: number?,
 }
 
 type ProjectileVisual = {
@@ -81,6 +104,11 @@ local DEBUG_LOG = false -- 生产环境设为 false 关闭高频日志
 -- 炮弹命中后「解析目标玩家」诊断：无 targetId 仍销毁、贴墙嵌入销毁、无敌帧跳过伤害等（复现问题后可改 false）
 local DEBUG_LOG_PROJECTILE_HIT_RESOLVE = true
 local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
+local VEHICLE_PROXY_PART_NAME_PREFIX = "VehiclePhysicsProxy_"
+local VEHICLE_PROXY_PLAYER_ID_ATTR = "VehicleProxyPlayerId"
+local CLIENT_VEHICLE_VISUAL_COLLISION_GROUP = "ClientVehicleVisual"
+local SERVER_VEHICLE_PROXY_COLLISION_GROUP = "ServerVehicleProxy"
+local PLAYER_CHARACTER_COLLISION_GROUP = "PlayerCharacter"
 local UNDERGROUND_Y = -100
 local SERVER_PROJECTILE_NAME_PREFIX = "ServerProjectile_"
 local SERVER_BULLETS_FOLDER_NAME = "ServerBullets"
@@ -108,9 +136,14 @@ local vehiclesFolder: Folder = modelsFolder:WaitForChild("Vehicles") :: Folder
 local bulletModelsFolder: Folder = modelsFolder:WaitForChild("Bullet") :: Folder
 
 local unitInfoMap: { [number]: ServerUnitInfo } = {}
+local vehicleInputStateMap: { [number]: ServerVehicleInputState } = {}
+local playerLatencyStatsMap: { [number]: PlayerLatencyStats } = {}
+local vehiclePoseHistoryMap: { [number]: { VehiclePoseSample } } = {}
 local playerDeadCallback: OnPlayerDeadCallback? = nil
 
 local serverMatchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
+local serverSnapshotTick = 0
+local snapshotSendAccumulator = 0
 
 local function LogInfo(message: string)
 	if not DEBUG_LOG then
@@ -147,6 +180,120 @@ local function ToHorizontalDirection(vector: Vector3): Vector3
 		return Vector3.new(0, 0, -1)
 	end
 	return horizontal.Unit
+end
+
+local function EnsurePlayerLatencyStats(playerId: number): PlayerLatencyStats
+	local existing = playerLatencyStatsMap[playerId]
+	if existing ~= nil then
+		return existing
+	end
+	local created: PlayerLatencyStats = {
+		rttSecEma = 0.08,
+		jitterSecEma = 0,
+		lastSampleServerTime = -math.huge,
+	}
+	playerLatencyStatsMap[playerId] = created
+	return created
+end
+
+local function UpdatePlayerLatencyStats(playerId: number, clientTimestamp: number)
+	local nowServerTime = workspace:GetServerTimeNow()
+	local stats = EnsurePlayerLatencyStats(playerId)
+	local minIntervalSec = math.max(0, GameConfig.HitAdaptiveRttSampleIntervalSec or 0.03)
+	if (nowServerTime - stats.lastSampleServerTime) < minIntervalSec then
+		return
+	end
+	local sampleRttSec = math.clamp(
+		nowServerTime - clientTimestamp,
+		math.max(0, GameConfig.HitAdaptiveRttMinSec or 0.01),
+		math.max(0.01, GameConfig.HitAdaptiveRttMaxSec or 0.8)
+	)
+	local rttAlpha = math.clamp(GameConfig.HitAdaptiveRttEmaAlpha or 0.25, 0.01, 1)
+	local jitterAlpha = math.clamp(GameConfig.HitAdaptiveJitterEmaAlpha or 0.2, 0.01, 1)
+	local jitterSample = math.abs(sampleRttSec - stats.rttSecEma)
+	stats.rttSecEma += (sampleRttSec - stats.rttSecEma) * rttAlpha
+	stats.jitterSecEma += (jitterSample - stats.jitterSecEma) * jitterAlpha
+	stats.lastSampleServerTime = nowServerTime
+end
+
+local function GetLatencyStats(playerId: number): PlayerLatencyStats
+	return EnsurePlayerLatencyStats(playerId)
+end
+
+local function ComputeAdaptiveFeedbackDelaySec(targetPlayerId: number, fallbackRttSec: number): (number, number, number)
+	local stats = GetLatencyStats(targetPlayerId)
+	local rttSec = math.max(0, if stats.rttSecEma > 0 then stats.rttSecEma else fallbackRttSec)
+	local jitterSec = math.max(0, stats.jitterSecEma)
+	local rttMs = rttSec * 1000
+	local jitterMs = jitterSec * 1000
+	local baseBackMs = math.max(0, GameConfig.VehicleInterpolationBackTimeMs or 0) * math.clamp(GameConfig.HitVfxAlignLerpAlpha or 1, 0, 1)
+	local delayMs = baseBackMs + rttMs * math.max(0, GameConfig.HitVfxAdaptiveRttScale or 0) + jitterMs
+		* math.max(0, GameConfig.HitVfxAdaptiveJitterScale or 0)
+	local minDelayMs = math.max(0, GameConfig.HitVfxAdaptiveMinDelayMs or 40)
+	local maxDelayMs = math.max(minDelayMs, GameConfig.HitVfxAdaptiveMaxDelayMs or 180)
+	delayMs = math.clamp(delayMs, minDelayMs, maxDelayMs)
+	return delayMs / 1000, rttSec, jitterSec
+end
+
+local function RecordVehiclePoseHistory(serverTime: number)
+	local historyKeepSec = math.max(0.1, (GameConfig.HitRewindHistoryMs or 1000) / 1000)
+	for playerId, unitInfo in unitInfoMap do
+		local historyList = vehiclePoseHistoryMap[playerId]
+		if historyList == nil then
+			historyList = {}
+			vehiclePoseHistoryMap[playerId] = historyList
+		end
+		table.insert(historyList, {
+			serverTime = serverTime,
+			position = unitInfo.rootPart.Position,
+		})
+		while #historyList > 0 and (serverTime - historyList[1].serverTime) > historyKeepSec do
+			table.remove(historyList, 1)
+		end
+	end
+end
+
+local function SampleVehiclePositionAtServerTime(playerId: number, sampleTime: number): Vector3?
+	local historyList = vehiclePoseHistoryMap[playerId]
+	if historyList == nil or #historyList == 0 then
+		return nil
+	end
+	if #historyList < math.max(1, GameConfig.HitRewindMinSamples or 3) then
+		return nil
+	end
+	local first = historyList[1]
+	local last = historyList[#historyList]
+	if sampleTime <= first.serverTime then
+		return first.position
+	end
+	if sampleTime >= last.serverTime then
+		return last.position
+	end
+	for i = 1, #historyList - 1 do
+		local left = historyList[i]
+		local right = historyList[i + 1]
+		if sampleTime >= left.serverTime and sampleTime <= right.serverTime then
+			local span = right.serverTime - left.serverTime
+			if span <= 1e-5 then
+				return right.position
+			end
+			local alpha = math.clamp((sampleTime - left.serverTime) / span, 0, 1)
+			return left.position:Lerp(right.position, alpha)
+		end
+	end
+	return nil
+end
+
+local function ValidateRewindHitTarget(targetPlayerId: number, hitPosition: Vector3, shotServerTime: number, nowServerTime: number): boolean
+	local rewindWindowSec = math.max(0.02, (GameConfig.HitRewindWindowMs or 220) / 1000)
+	local maxCompSec = math.max(0.01, (GameConfig.HitRewindMaxCompensationMs or 180) / 1000)
+	local clampedSampleTime = math.clamp(shotServerTime, nowServerTime - rewindWindowSec, nowServerTime + maxCompSec)
+	local rewoundPosition = SampleVehiclePositionAtServerTime(targetPlayerId, clampedSampleTime)
+	if rewoundPosition == nil then
+		return true
+	end
+	local allowedRadius = math.max(0.5, GameConfig.HitRewindTargetRadiusStuds or 4.2)
+	return (hitPosition - rewoundPosition).Magnitude <= allowedRadius
 end
 
 local function GetVehicleTemplate(modelName: string): Model?
@@ -220,7 +367,7 @@ local function _GetMuzzleAttachment(unitModel: Model): Attachment?
 	return muzzleAttachment
 end
 
-local function GetPlayerIdByVehicleModelName(modelName: string): number?
+local function _GetPlayerIdByVehicleModelName(modelName: string): number?
 	if not modelName:match("^" .. VEHICLE_MODEL_NAME_PREFIX) then
 		return nil
 	end
@@ -229,33 +376,38 @@ local function GetPlayerIdByVehicleModelName(modelName: string): number?
 end
 
 local function GetUnderRegisteredUnitPlayerIdForHit(hitInst: Instance): number?
+	if hitInst:IsA("BasePart") then
+		local proxyPlayerId = hitInst:GetAttribute(VEHICLE_PROXY_PLAYER_ID_ATTR)
+		if typeof(proxyPlayerId) == "number" then
+			return proxyPlayerId
+		end
+	end
 	for pid, uinfo in unitInfoMap do
-		if hitInst:IsDescendantOf(uinfo.unitModel) then
+		if hitInst == uinfo.rootPart or hitInst:IsDescendantOf(uinfo.unitModel) then
 			return pid
 		end
 	end
 	return nil
 end
 
--- 由命中实例解析「被击中玩家」UserId：祖先链 Vehicle_* / Character，再回退到已登记 unitModel（与 Spherecast 一致）
-local function GetProjectileTargetPlayerIdFromHitInstance(inst: Instance): number?
-	local targetId: number? = nil
-	local currentAncestor: Instance? = inst.Parent
-	while currentAncestor ~= nil and currentAncestor ~= workspace do
-		if currentAncestor:IsA("Model") then
-			local m = currentAncestor :: Model
-			targetId = GetPlayerIdByVehicleModelName(m.Name)
-			if targetId ~= nil then
-				return targetId
-			end
-			local charPlayer = players:GetPlayerFromCharacter(m)
-			if charPlayer then
-				return charPlayer.UserId
-			end
-		end
-		currentAncestor = currentAncestor.Parent
+local function GetProxyTargetPlayerIdFromHitInstance(inst: Instance): number?
+	if not inst:IsA("BasePart") then
+		return nil
 	end
-	return GetUnderRegisteredUnitPlayerIdForHit(inst)
+	local part = inst :: BasePart
+	if part.CollisionGroup ~= SERVER_VEHICLE_PROXY_COLLISION_GROUP then
+		return nil
+	end
+	local proxyPlayerId = part:GetAttribute(VEHICLE_PROXY_PLAYER_ID_ATTR)
+	if typeof(proxyPlayerId) == "number" then
+		return proxyPlayerId
+	end
+	return nil
+end
+
+-- 仅通过 ServerVehicleProxy 判定玩家命中（忽略表现载具和人物）
+local function GetProjectileTargetPlayerIdFromHitInstance(inst: Instance): number?
+	return GetProxyTargetPlayerIdFromHitInstance(inst)
 end
 
 local function MoveModelKeepRotation(model: Model, targetPosition: Vector3)
@@ -269,6 +421,192 @@ end
 local function ZeroHorizontalVelocity(part: BasePart)
 	local v = part.AssemblyLinearVelocity
 	part.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
+end
+
+local function ApplyCollisionGroupForModel(model: Model, collisionGroup: string)
+	for _, inst in model:GetDescendants() do
+		if inst:IsA("BasePart") then
+			inst.CollisionGroup = collisionGroup
+		end
+	end
+end
+
+local function ApplyCollisionGroupForCharacter(character: Model)
+	ApplyCollisionGroupForModel(character, PLAYER_CHARACTER_COLLISION_GROUP)
+end
+
+local function ConfigureVisualVehicleModelForPresentation(unitModel: Model)
+	for _, inst in unitModel:GetDescendants() do
+		if inst:IsA("BasePart") then
+			inst.Anchored = false
+			inst.CanQuery = false
+			inst.CanTouch = false
+			inst.Massless = inst.Name ~= "BaseDisk"
+			if inst.Name == "BaseDisk" or inst:IsA("Seat") then
+				inst.CanCollide = true
+			else
+				inst.CanCollide = false
+			end
+		end
+	end
+	ApplyCollisionGroupForModel(unitModel, CLIENT_VEHICLE_VISUAL_COLLISION_GROUP)
+end
+
+local function CreateVehiclePhysicsProxyPart(playerId: number, visualRootPart: BasePart): BasePart
+	local proxyPart = Instance.new("Part")
+	proxyPart.Name = VEHICLE_PROXY_PART_NAME_PREFIX .. tostring(playerId)
+	proxyPart.Transparency = 0.3
+	proxyPart.Size = visualRootPart.Size
+	if visualRootPart:IsA("Part") then
+		proxyPart.Shape = (visualRootPart :: Part).Shape
+	else
+		proxyPart.Shape = Enum.PartType.Block
+	end
+	proxyPart.CFrame = visualRootPart.CFrame
+	proxyPart.CanCollide = true
+	proxyPart.CanTouch = true
+	proxyPart.CanQuery = true
+	proxyPart.Massless = false
+	proxyPart.CastShadow = false
+	proxyPart:SetAttribute(VEHICLE_PROXY_PLAYER_ID_ATTR, playerId)
+	proxyPart.CustomPhysicalProperties = visualRootPart.CustomPhysicalProperties
+	proxyPart.CollisionGroup = SERVER_VEHICLE_PROXY_COLLISION_GROUP
+	proxyPart.Parent = workspace
+	return proxyPart
+end
+
+local function SyncVisualModelToPhysicsRoot(unitInfo: ServerUnitInfo)
+	local visualModel = unitInfo.unitModel
+	local physicsRoot = unitInfo.rootPart
+	if visualModel.Parent == nil or physicsRoot.Parent == nil then
+		return
+	end
+	visualModel:PivotTo(physicsRoot.CFrame)
+end
+
+local function GetForceDirectionFromTargetVelocity(unitInfo: ServerUnitInfo): Vector3
+	local horizontal = Vector3.new(unitInfo.targetVelX, 0, unitInfo.targetVelZ)
+	if horizontal.Magnitude <= 0.001 then
+		return Vector3.new(0, 0, -1)
+	end
+	return horizontal.Unit
+end
+
+local function BroadcastVehicleDirectionChanged(unitInfo: ServerUnitInfo, reason: GameConfig.DirectionChangeReason)
+	NetMsg.FireNotifyVehicleDirectionChangedToAll({
+		playerId = unitInfo.playerId,
+		reason = reason,
+		serverPosition = unitInfo.rootPart.Position,
+		forceDirection = GetForceDirectionFromTargetVelocity(unitInfo),
+		serverTime = workspace:GetServerTimeNow(),
+	})
+end
+
+local function _NormalizeInputDirection(moveDir: Vector3): Vector3
+	local horizontal = Vector3.new(moveDir.X, 0, moveDir.Z)
+	if horizontal.Magnitude <= 0.001 then
+		return Vector3.zero
+	end
+	return horizontal.Unit
+end
+
+local function EnsureVehicleInputState(playerId: number): ServerVehicleInputState
+	local existing = vehicleInputStateMap[playerId]
+	if existing ~= nil then
+		return existing
+	end
+	local newState: ServerVehicleInputState = {
+		lastReceivedSeq = 0,
+		lastAppliedSeq = 0,
+		lastReceivedClock = 0,
+		lastCmd = nil,
+	}
+	vehicleInputStateMap[playerId] = newState
+	return newState
+end
+
+function CombatManager.OnRequestVehicleInput(player: Player, inputCmd: GameConfig.VehicleInputCmd)
+	local unitInfo = unitInfoMap[player.UserId]
+	if unitInfo == nil then
+		return
+	end
+	if typeof(inputCmd) ~= "table" then
+		return
+	end
+	local seq = inputCmd.seq
+	if typeof(seq) ~= "number" then
+		return
+	end
+	local clientTime = inputCmd.clientTime
+	if typeof(clientTime) == "number" then
+		UpdatePlayerLatencyStats(player.UserId, clientTime)
+	end
+	local inputState = EnsureVehicleInputState(player.UserId)
+	if seq <= inputState.lastReceivedSeq then
+		return
+	end
+	inputState.lastReceivedSeq = seq
+	inputState.lastReceivedClock = os.clock()
+	inputState.lastCmd = inputCmd
+end
+
+local function ApplyVehicleInputToUnit(unitInfo: ServerUnitInfo)
+	local inputState = vehicleInputStateMap[unitInfo.playerId]
+	if inputState == nil then
+		return
+	end
+	local cmd = inputState.lastCmd
+	if cmd == nil then
+		return
+	end
+	if inputState.lastAppliedSeq == cmd.seq then
+		return
+	end
+	inputState.lastAppliedSeq = cmd.seq
+	unitInfo.lastInputSeq = cmd.seq
+	unitInfo.lastInputClientTime = cmd.clientTime
+end
+
+local function SyncLatestInputSpinDir(playerId: number, spinDir: number)
+	local inputState = vehicleInputStateMap[playerId]
+	if inputState == nil then
+		return
+	end
+	local lastCmd = inputState.lastCmd
+	if lastCmd ~= nil then
+		lastCmd.spinDir = spinDir
+	end
+	-- 开火触发服务端翻转后，避免上一帧旧输入立即把 spinDir 改回去
+	inputState.lastAppliedSeq = inputState.lastReceivedSeq
+end
+
+local function BuildVehicleSnapshot(unitInfo: ServerUnitInfo): GameConfig.VehicleStateSnapshot
+	local root = unitInfo.rootPart
+	local velocity = root.AssemblyLinearVelocity
+	local look = root.CFrame.LookVector
+	local yaw = math.atan2(look.Z, look.X)
+	local serverTime = workspace:GetServerTimeNow()
+	return {
+		playerId = unitInfo.playerId,
+		serverTick = serverSnapshotTick,
+		serverTime = serverTime,
+		ackInputSeq = unitInfo.lastInputSeq,
+		position = root.Position,
+		velocity = velocity,
+		yaw = yaw,
+		angVelY = root.AssemblyAngularVelocity.Y,
+		spinDir = unitInfo.spinDir,
+		vehicleId = getVehicleIdFromUnitInfo(unitInfo),
+	}
+end
+
+local function BroadcastVehicleSnapshots()
+	for _, unitInfo in unitInfoMap do
+		if unitInfo.rootPart.Parent == nil then
+			continue
+		end
+		NetMsg.FireNotifyVehicleStateSnapshotToAll(BuildVehicleSnapshot(unitInfo))
+	end
 end
 
 local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
@@ -303,37 +641,33 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 		warn("[CombatManager] VehicleModel.BaseDisk not found.")
 		return nil
 	end
-	unitModel.PrimaryPart = rootPart
-	rootPart.CanCollide = true
-	-- SetNetworkOwner(nil) 必须在未锚固时调用；对战期由服务端模拟载具物理
-	rootPart.Anchored = false
-	for _, inst in unitModel:GetDescendants() do
-		if inst:IsA("BasePart") then
-			local oldAnchored = inst.Anchored
-			inst.Anchored = false
-			pcall(function()
-				inst:SetNetworkOwner(nil)
-			end)
-			inst.Anchored = oldAnchored
-		end
-	end
+	local visualRootPart = rootPart :: BasePart
+	unitModel.PrimaryPart = visualRootPart
+	ConfigureVisualVehicleModelForPresentation(unitModel)
 	
 	-- 监听座位变动，防止玩家入座后 Roblox 自动将网络所有权转移给客户端导致争夺和卡顿（高速抽搐/周期性停顿根源）
 	local seatInstance = unitModel:FindFirstChild("Seat", true)
 	if seatInstance and seatInstance:IsA("Seat") then
 		seatInstance:GetPropertyChangedSignal("Occupant"):Connect(function()
 			if seatInstance.Occupant ~= nil then
-				local primary = unitModel.PrimaryPart
-				if primary and not primary.Anchored then
+				if not visualRootPart.Anchored then
 					pcall(function()
-						primary:SetNetworkOwner(nil)
+						visualRootPart:SetNetworkOwner(player)
 					end)
 				end
 			end
 		end)
 	end
+
+	pcall(function()
+		visualRootPart:SetNetworkOwner(player)
+	end)
 	
-	rootPart.Anchored = true
+	local physicsRootPart = CreateVehiclePhysicsProxyPart(player.UserId, visualRootPart)
+	pcall(function()
+		physicsRootPart:SetNetworkOwner(nil)
+	end)
+	physicsRootPart.Anchored = true
 
 	local spawnPosition = GetSpawnPosition()
 	local undergroundPosition = Vector3.new(spawnPosition.X, UNDERGROUND_Y, spawnPosition.Z)
@@ -343,11 +677,14 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 	local tvx, tvz = VehicleLocomotionTool.AngleToVelocityXZ(moveAngle)
 
 	local initYawRad = math.atan2(tvz, tvx)
-	unitModel:PivotTo(CFrame.new(undergroundPosition) * VehicleLocomotionTool.UprightGoalCFrame(initYawRad))
+	local initCFrame = CFrame.new(undergroundPosition) * VehicleLocomotionTool.UprightGoalCFrame(initYawRad)
+	physicsRootPart.CFrame = initCFrame
+	unitModel:PivotTo(initCFrame)
 	local unitInfo: ServerUnitInfo = {
 		playerId = player.UserId,
 		unitModel = unitModel,
-		rootPart = rootPart,
+		visualRootPart = visualRootPart,
+		rootPart = physicsRootPart,
 		spinDir = spinDir,
 		moveAngle = moveAngle,
 		invincibleUntil = 0,
@@ -358,9 +695,17 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 		lastVehicleBumpClock = 0,
 		driveVectorForce = nil,
 		vehicleConfig = vehicleConfig,
+		lastInputSeq = 0,
+		lastInputClientTime = 0,
 	}
 
 	unitInfoMap[player.UserId] = unitInfo
+	vehicleInputStateMap[player.UserId] = {
+		lastReceivedSeq = 0,
+		lastAppliedSeq = 0,
+		lastReceivedClock = os.clock(),
+		lastCmd = nil,
+	}
 	LogInfo(string.format("CreateUnit userId=%d spawn=%s moveAngle=%d spinDir=%d", player.UserId, FormatVector3(spawnPosition), moveAngle, spinDir))
 	return unitInfo
 end
@@ -413,7 +758,13 @@ function CombatManager.DestroyUnitForPlayer(playerId: number)
 	if unitInfo.unitModel.Parent ~= nil then
 		unitInfo.unitModel:Destroy()
 	end
+	if unitInfo.rootPart.Parent ~= nil then
+		unitInfo.rootPart:Destroy()
+	end
 	unitInfoMap[playerId] = nil
+	vehicleInputStateMap[playerId] = nil
+	playerLatencyStatsMap[playerId] = nil
+	vehiclePoseHistoryMap[playerId] = nil
 	LogInfo(string.format("DestroyUnit userId=%d", playerId))
 end
 
@@ -424,10 +775,20 @@ function CombatManager.PlayVehicleDeathEffect(playerId: number, hitDirection: Ve
 	end
 
 	local model = unitInfo.unitModel
+	local physicsRoot = unitInfo.rootPart
 	unitInfoMap[playerId] = nil -- 立即停止模拟更新
+	vehicleInputStateMap[playerId] = nil
+	vehiclePoseHistoryMap[playerId] = nil
 
-	if model == nil or model.Parent == nil then
+	if not model:IsDescendantOf(game) then
+		if physicsRoot:IsDescendantOf(game) then
+			physicsRoot:Destroy()
+		end
 		return
+	end
+
+	if physicsRoot:IsDescendantOf(game) then
+		physicsRoot:Destroy()
 	end
 
 	LogInfo(string.format("PlayVehicleDeathEffect userId=%d", playerId))
@@ -498,7 +859,7 @@ function CombatManager.PlayVehicleDeathEffect(playerId: number, hitDirection: Ve
 		local steps = 20
 		for i = 1, steps do
 			task.wait(fadeDuration / steps)
-			if model.Parent == nil then
+			if not model:IsDescendantOf(game) then
 				break
 			end
 			local alpha = i / steps
@@ -529,7 +890,9 @@ local function ResetUnitToUnderground(playerId: number)
 	root.AssemblyAngularVelocity = Vector3.zero
 
 	local pos = root.Position
-	MoveModelKeepRotation(unitInfo.unitModel, Vector3.new(pos.X, UNDERGROUND_Y, pos.Z))
+	local targetPosition = Vector3.new(pos.X, UNDERGROUND_Y, pos.Z)
+	root.CFrame = CFrame.new(targetPosition) * VehicleLocomotionTool.UprightGoalCFrame(unitInfo.spinAngleRad)
+	MoveModelKeepRotation(unitInfo.unitModel, targetPosition)
 	LogInfo(string.format("ResetUnitToUnderground userId=%d", playerId))
 end
 
@@ -546,6 +909,8 @@ local function StepVehicleSimulation(dt: number)
 		if root.Anchored then
 			continue
 		end
+
+		ApplyVehicleInputToUnit(unitInfo)
 
 		local drive = unitInfo.driveVectorForce
 		if drive == nil then
@@ -569,7 +934,11 @@ local function StepVehicleSimulation(dt: number)
 			local roundInfo = PlayerStateManager.GetAllPlayerRoundInfoMap()[playerId]
 			if roundInfo ~= nil and roundInfo.isParticipant and roundInfo.isAlive then
 				avValue = Vector3.new(0, math.rad(GameConfig.UnitRotationSpeed) * unitInfo.spinDir, 0)
-				VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, driveNotNull, dt, true, unitSpeed)
+				local didWallDirectionChange =
+					VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, driveNotNull, dt, true, unitSpeed)
+				if didWallDirectionChange then
+					BroadcastVehicleDirectionChanged(unitInfo, GameConfig.DirectionChangeReason.WallCollision)
+				end
 				VehicleLocomotionTool.ResolveVehicleOverlaps(unitInfo, unitInfoMap :: any, playerId, dt)
 			else
 				VehicleLocomotionTool.UpdateBaseDiskLocomotion(unitInfo, root, driveNotNull, dt, false, unitSpeed)
@@ -587,7 +956,15 @@ local function StepVehicleSimulation(dt: number)
 		VehicleLocomotionTool.ResolveAllVehicleBumps(unitInfoMap :: any, function(playerIdForBump: number): boolean
 			local roundInfoForBump = PlayerStateManager.GetAllPlayerRoundInfoMap()[playerIdForBump]
 			return roundInfoForBump ~= nil and roundInfoForBump.isParticipant and roundInfoForBump.isAlive
-		end, function(_playerIdA: number, _playerIdB: number, impactPosition: Vector3)
+		end, function(playerIdA: number, playerIdB: number, impactPosition: Vector3)
+			local unitInfoA = unitInfoMap[playerIdA]
+			if unitInfoA ~= nil then
+				BroadcastVehicleDirectionChanged(unitInfoA, GameConfig.DirectionChangeReason.VehicleCollision)
+			end
+			local unitInfoB = unitInfoMap[playerIdB]
+			if unitInfoB ~= nil then
+				BroadcastVehicleDirectionChanged(unitInfoB, GameConfig.DirectionChangeReason.VehicleCollision)
+			end
 			NetMsg.FireNotifyImpact(impactPosition)
 		end)
 	end
@@ -620,7 +997,7 @@ local function _BroadcastUnitInit(unitInfo: ServerUnitInfo)
 		vehicleId = getVehicleIdFromUnitInfo(unitInfo),
 	}
 	NetMsg.FireNotifyUnitInitToAll(unitInitInfo)
-	NetMsg.FireNotifyHpChanged(unitInfo.playerId, 0, maxHits)
+	NetMsg.FireNotifyHpChanged(unitInfo.playerId, 0, maxHits, workspace:GetServerTimeNow(), 0)
 	LogInfo(
 		string.format(
 			"BroadcastUnitInit userId=%d pos=%s moveAngle=%d spinDir=%d",
@@ -686,6 +1063,9 @@ end
 
 local function ShouldProjectilePassThroughInstance(inst: Instance): boolean
 	if inst:IsA("BasePart") then
+		if inst.CollisionGroup == CLIENT_VEHICLE_VISUAL_COLLISION_GROUP or inst.CollisionGroup == PLAYER_CHARACTER_COLLISION_GROUP then
+			return true
+		end
 		if inst.Name == "ArenaFloor" or inst.Name == "Ground" then
 			return true
 		end
@@ -1199,6 +1579,41 @@ local function DestroyServerBullet(bulletId: string)
 	activeServerBullets[bulletId] = nil
 end
 
+local function GetHitVisualHoldSeconds(defaultDelaySec: number?): number
+	if defaultDelaySec ~= nil and defaultDelaySec > 0 then
+		return defaultDelaySec
+	end
+	local maxDelaySec = math.max(0, GameConfig.HitVfxAlignMaxDelayMs or 0) / 1000
+	local renderBackSec = math.max(0, GameConfig.VehicleInterpolationBackTimeMs or 0) / 1000
+	local alignAlpha = math.clamp(GameConfig.HitVfxAlignLerpAlpha or 0, 0, 1)
+	local desiredHold = renderBackSec * alignAlpha
+	return math.min(maxDelaySec, desiredHold)
+end
+
+local function ScheduleServerBulletDestroyAfterHit(
+	bulletId: string,
+	hitPosition: Vector3,
+	currentServerTime: number,
+	adaptiveDelaySec: number?
+)
+	local bullet = activeServerBullets[bulletId]
+	if bullet == nil then
+		return
+	end
+	local holdSeconds = GetHitVisualHoldSeconds(adaptiveDelaySec)
+	if holdSeconds <= 0 then
+		DestroyServerBullet(bulletId)
+		return
+	end
+	bullet.pendingDestroyServerTime = currentServerTime + holdSeconds
+	bullet.currentPos = hitPosition
+	bullet.speed = 0
+	if bullet.linearVelocity ~= nil and bullet.linearVelocity.Parent ~= nil then
+		bullet.linearVelocity.VectorVelocity = Vector3.zero
+	end
+	PivotServerProjectileToBullet(bullet, hitPosition)
+end
+
 local function PrewarmProjectileTemplates()
 	local preparedNameMap: { [string]: boolean } = {}
 	preparedNameMap[DEFAULT_PROJECTILE_TEMPLATE_NAME] = true
@@ -1214,7 +1629,17 @@ local function PrewarmProjectileTemplates()
 	end
 end
 
-local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, hitDirection: Vector3, bulletId: string, hitPosition: Vector3)
+local function ResolveProjectileHit(
+	shooterId: number,
+	targetPlayerId: number,
+	hitDirection: Vector3,
+	bulletId: string,
+	hitPosition: Vector3,
+	hitServerTime: number,
+	adaptiveDelaySec: number,
+	targetRttSec: number,
+	targetJitterSec: number
+)
 	hitDirection = ToHorizontalDirection(hitDirection)
 
 	if targetPlayerId == shooterId and not GameConfig.CanHitSelf then
@@ -1271,12 +1696,20 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 	end
 
 	-- 仅在受到伤害且未死亡的情况下开启无敌特效
+	-- 表现层按 adaptiveDelaySec 对齐，避免命中高亮早于命中反馈
 	if not isProtected and not isDead and targetUnitInfo ~= nil then
-		targetUnitInfo.unitModel:SetAttribute("IsInvincible", true)
-		task.delay(GameConfig.InvincibilityDuration, function()
-			if targetUnitInfo.unitModel.Parent ~= nil then
-				targetUnitInfo.unitModel:SetAttribute("IsInvincible", false)
+		local invincibleVisualDelaySec = math.max(0, adaptiveDelaySec or 0)
+		local targetModel = targetUnitInfo.unitModel
+		task.delay(invincibleVisualDelaySec, function()
+			if not targetModel:IsDescendantOf(workspace) then
+				return
 			end
+			targetModel:SetAttribute("IsInvincible", true)
+			task.delay(GameConfig.InvincibilityDuration, function()
+				if targetModel:IsDescendantOf(workspace) then
+					targetModel:SetAttribute("IsInvincible", false)
+				end
+			end)
 		end)
 	end
 
@@ -1288,6 +1721,8 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 			targetUnitInfo.rootPart.AssemblyLinearVelocity = knockbackDir * (unitSpeed * GameConfig.BulletHitSpeedMultiplier)
 			targetUnitInfo.targetVelX = knockbackDir.X * unitSpeed
 			targetUnitInfo.targetVelZ = knockbackDir.Z * unitSpeed
+			targetUnitInfo.spinAngleRad = math.atan2(targetUnitInfo.targetVelZ, targetUnitInfo.targetVelX)
+			BroadcastVehicleDirectionChanged(targetUnitInfo, GameConfig.DirectionChangeReason.BulletHit)
 		end
 	end
 
@@ -1307,8 +1742,19 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 			FormatVector3(hitDirection)
 		)
 	)
-	NetMsg.FireNotifyHit(targetPlayerId, shooterId, hitDirection, hitCount, bulletId, hitPosition)
-	NetMsg.FireNotifyHpChanged(targetPlayerId, hitCount, maxHits)
+	NetMsg.FireNotifyHit(
+		targetPlayerId,
+		shooterId,
+		hitDirection,
+		hitCount,
+		bulletId,
+		hitPosition,
+		hitServerTime,
+		adaptiveDelaySec,
+		targetRttSec,
+		targetJitterSec
+	)
+	NetMsg.FireNotifyHpChanged(targetPlayerId, hitCount, maxHits, hitServerTime, adaptiveDelaySec)
 	local targetPlayer = players:GetPlayerByUserId(targetPlayerId)
 	local shooterPlayer = players:GetPlayerByUserId(shooterId)
 
@@ -1342,7 +1788,7 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 	end
 
 	if isDead then
-		NetMsg.FireNotifyDead(targetPlayerId, shooterId)
+		NetMsg.FireNotifyDead(targetPlayerId, shooterId, hitServerTime, adaptiveDelaySec)
 		if targetPlayer ~= nil then
 			local targetInfo = ServerGameInfo.GetPlayerInfo(targetPlayer)
 			local roundHitCount, roundKillCount, roundCoinEarned = PlayerStateManager.GetRoundStats(targetPlayerId)
@@ -1358,17 +1804,37 @@ local function ResolveProjectileHit(shooterId: number, targetPlayerId: number, h
 		end
 		if targetPlayer ~= nil and playerDeadCallback ~= nil then
 			LogInfo(string.format("NotifyPlayerDead userId=%d", targetPlayerId))
-			task.defer(playerDeadCallback, targetPlayer, false, hitDirection)
+			local deadCallbackDelaySec = math.max(0, adaptiveDelaySec or 0)
+			task.delay(deadCallbackDelaySec, function()
+				if players:GetPlayerByUserId(targetPlayerId) == nil then
+					return
+				end
+				playerDeadCallback(targetPlayer, false, hitDirection)
+			end)
 		end
 	end
 end
 
 function CombatManager.OnHeartbeat(dt: number)
 	StepVehicleSimulation(dt)
+	snapshotSendAccumulator += dt
+	local snapshotInterval = 1 / math.max(1, GameConfig.VehicleSnapshotHz)
+	while snapshotSendAccumulator >= snapshotInterval do
+		snapshotSendAccumulator -= snapshotInterval
+		serverSnapshotTick += 1
+		BroadcastVehicleSnapshots()
+	end
 
 	local currentServerTime = workspace:GetServerTimeNow()
+	RecordVehiclePoseHistory(currentServerTime)
 
 	for bulletId, bullet in activeServerBullets do
+		if bullet.pendingDestroyServerTime ~= nil then
+			if currentServerTime >= (bullet.pendingDestroyServerTime :: number) then
+				DestroyServerBullet(bulletId)
+			end
+			continue
+		end
 		-- 激活前：仅在首帧定位 visualModel，然后 continue 跳过物理更新
 		if currentServerTime < bullet.activeTime then
 			if bullet.visualModel ~= nil and bullet.visualModel.Parent ~= nil and not bullet.visualSpawned then
@@ -1408,6 +1874,7 @@ function CombatManager.OnHeartbeat(dt: number)
 		local shooterUnitInfo = unitInfoMap[bullet.shooterId]
 		if shooterUnitInfo and shooterUnitInfo.unitModel then
 			table.insert(excludeList, shooterUnitInfo.unitModel)
+			table.insert(excludeList, shooterUnitInfo.rootPart)
 		end
 		local shooterPlayer = players:GetPlayerByUserId(bullet.shooterId)
 		if shooterPlayer and shooterPlayer.Character then
@@ -1465,7 +1932,47 @@ function CombatManager.OnHeartbeat(dt: number)
 					continue
 				end
 				if embedTargetId ~= bullet.shooterId or GameConfig.CanHitSelf then
-					ResolveProjectileHit(bullet.shooterId, embedTargetId, shotDir, bulletId, hitPosEmbed)
+					if ValidateRewindHitTarget(embedTargetId, hitPosEmbed, bullet.shotServerTime, currentServerTime) then
+						local adaptiveDelaySec, targetRttSec, targetJitterSec =
+							ComputeAdaptiveFeedbackDelaySec(embedTargetId, bullet.estimatedRtt)
+						ResolveProjectileHit(
+							bullet.shooterId,
+							embedTargetId,
+							shotDir,
+							bulletId,
+							hitPosEmbed,
+							currentServerTime,
+							adaptiveDelaySec,
+							targetRttSec,
+							targetJitterSec
+						)
+						ScheduleServerBulletDestroyAfterHit(bulletId, hitPosEmbed, currentServerTime, adaptiveDelaySec)
+					else
+						LogProjectileHitResolve(
+							string.format(
+								"REWIND_MISMATCH_FALLBACK_EMBED bullet=%s shooter=%d target=%d hitPos=%s shotServerTime=%.4f",
+								bulletId,
+								bullet.shooterId,
+								embedTargetId,
+								FormatVector3(hitPosEmbed),
+								bullet.shotServerTime
+							)
+						)
+						local adaptiveDelaySec, targetRttSec, targetJitterSec =
+							ComputeAdaptiveFeedbackDelaySec(embedTargetId, bullet.estimatedRtt)
+						ResolveProjectileHit(
+							bullet.shooterId,
+							embedTargetId,
+							shotDir,
+							bulletId,
+							hitPosEmbed,
+							currentServerTime,
+							adaptiveDelaySec,
+							targetRttSec,
+							targetJitterSec
+						)
+						ScheduleServerBulletDestroyAfterHit(bulletId, hitPosEmbed, currentServerTime, adaptiveDelaySec)
+					end
 				else
 					LogProjectileHitResolve(
 						string.format(
@@ -1476,7 +1983,6 @@ function CombatManager.OnHeartbeat(dt: number)
 						)
 					)
 				end
-				DestroyServerBullet(bulletId)
 				continue
 			end
 
@@ -1565,7 +2071,47 @@ function CombatManager.OnHeartbeat(dt: number)
 
 			if targetId ~= nil then
 				if targetId ~= bullet.shooterId or GameConfig.CanHitSelf then
-					ResolveProjectileHit(bullet.shooterId, targetId, shotDir, bulletId, hitResult.Position)
+					if ValidateRewindHitTarget(targetId, hitResult.Position, bullet.shotServerTime, currentServerTime) then
+						local adaptiveDelaySec, targetRttSec, targetJitterSec =
+							ComputeAdaptiveFeedbackDelaySec(targetId, bullet.estimatedRtt)
+						ResolveProjectileHit(
+							bullet.shooterId,
+							targetId,
+							shotDir,
+							bulletId,
+							hitResult.Position,
+							currentServerTime,
+							adaptiveDelaySec,
+							targetRttSec,
+							targetJitterSec
+						)
+						ScheduleServerBulletDestroyAfterHit(bulletId, hitResult.Position, currentServerTime, adaptiveDelaySec)
+					else
+						LogProjectileHitResolve(
+							string.format(
+								"REWIND_MISMATCH_FALLBACK bullet=%s shooter=%d target=%d hitPos=%s shotServerTime=%.4f",
+								bulletId,
+								bullet.shooterId,
+								targetId,
+								FormatVector3(hitResult.Position),
+								bullet.shotServerTime
+							)
+						)
+						local adaptiveDelaySec, targetRttSec, targetJitterSec =
+							ComputeAdaptiveFeedbackDelaySec(targetId, bullet.estimatedRtt)
+						ResolveProjectileHit(
+							bullet.shooterId,
+							targetId,
+							shotDir,
+							bulletId,
+							hitResult.Position,
+							currentServerTime,
+							adaptiveDelaySec,
+							targetRttSec,
+							targetJitterSec
+						)
+						ScheduleServerBulletDestroyAfterHit(bulletId, hitResult.Position, currentServerTime, adaptiveDelaySec)
+					end
 				else
 					LogProjectileHitResolve(
 						string.format(
@@ -1578,7 +2124,6 @@ function CombatManager.OnHeartbeat(dt: number)
 					)
 				end
 				ReleaseRaycastContext()
-				DestroyServerBullet(bulletId)
 				continue
 			end
 
@@ -1672,6 +2217,7 @@ function CombatManager.Init(onPlayerDead: OnPlayerDeadCallback)
 	playerDeadCallback = onPlayerDead
 	NetMsg.ConnectRequestFire(CombatManager.OnRequestFire)
 	NetMsg.ConnectRequestSyncUnit(CombatManager.SyncToPlayer)
+	NetMsg.ConnectRequestVehicleInput(CombatManager.OnRequestVehicleInput)
 	-- 完全服务端权威模式：不再监听 RequestHit，所有命中由 OnHeartbeat 物理轨迹决定
 
 	if heartbeatConnection == nil then
@@ -1709,12 +2255,18 @@ function CombatManager.SyncToPlayer(player: Player)
 
 		-- Sync current HP
 		local hitCount = PlayerStateManager.GetPlayerHitCount(otherId)
-		NetMsg.FireNotifyHpChangedToPlayer(player, otherId, hitCount, maxHits)
+		NetMsg.FireNotifyHpChangedToPlayer(player, otherId, hitCount, maxHits, workspace:GetServerTimeNow(), 0)
 	end
 end
 
 function CombatManager.OnPlayerAdded(player: Player)
 	PlayerStateManager.EnsurePlayerRoundInfo(player)
+	if player.Character ~= nil then
+		ApplyCollisionGroupForCharacter(player.Character)
+	end
+	player.CharacterAdded:Connect(function(character: Model)
+		ApplyCollisionGroupForCharacter(character)
+	end)
 	LogInfo(string.format("OnPlayerAdded userId=%d", player.UserId))
 end
 
@@ -1737,7 +2289,7 @@ function CombatManager.OnPlayerRemoving(player: Player)
 		if playerInfo ~= nil then
 			AnalyticsTool.AddGameDeadEvent(player, playerInfo.vehicleInventory.currentId, roundHitCount, roundKillCount, roundCoinEarned)
 		end
-		NetMsg.FireNotifyDead(userId, nil)
+		NetMsg.FireNotifyDead(userId, nil, workspace:GetServerTimeNow(), 0)
 		if playerDeadCallback ~= nil then
 			local ok, err = pcall(function()
 				playerDeadCallback(player, true)
@@ -1787,21 +2339,11 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 
 	local spawnPos = Vector3.zero
 	local shotDirection = Vector3.new(0, 0, -1)
-
-	local muzzleAttachment = _GetMuzzleAttachment(unitInfo.unitModel)
-	if muzzleAttachment ~= nil then
-		spawnPos = muzzleAttachment.WorldCFrame.Position
-		local flat = Vector3.new(muzzleAttachment.WorldCFrame.LookVector.X, 0, muzzleAttachment.WorldCFrame.LookVector.Z)
-		if flat.Magnitude > 0.001 then
-			shotDirection = flat.Unit
-		end
-	else
-		local fallbackCFrame = unitInfo.rootPart.CFrame * CFrame.new(0, 1.2, -3.4)
-		spawnPos = fallbackCFrame.Position
-		local flat = Vector3.new(unitInfo.rootPart.CFrame.LookVector.X, 0, unitInfo.rootPart.CFrame.LookVector.Z)
-		if flat.Magnitude > 0.001 then
-			shotDirection = flat.Unit
-		end
+	local fallbackCFrame = unitInfo.rootPart.CFrame * CFrame.new(0, 1.2, -3.4)
+	spawnPos = fallbackCFrame.Position
+	local flat = Vector3.new(unitInfo.rootPart.CFrame.LookVector.X, 0, unitInfo.rootPart.CFrame.LookVector.Z)
+	if flat.Magnitude > 0.001 then
+		shotDirection = flat.Unit
 	end
 
 	local rayOrigin = unitInfo.rootPart.Position + Vector3.new(0, 1.2, 0)
@@ -1809,7 +2351,7 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 	if toSpawn.Magnitude > 0.01 then
 		local rayParams = RaycastParams.new()
 		rayParams.FilterType = Enum.RaycastFilterType.Exclude
-		local excludeList: { Instance } = { unitInfo.unitModel }
+		local excludeList: { Instance } = { unitInfo.unitModel, unitInfo.rootPart }
 		local character = player.Character
 		if character ~= nil then
 			table.insert(excludeList, character)
@@ -1849,15 +2391,16 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 		end
 	end
 
-	unitInfo.spinDir = -unitInfo.spinDir
-
 	local serverTime = workspace:GetServerTimeNow()
+	UpdatePlayerLatencyStats(player.UserId, clientTimestamp)
 	local estimatedRtt = math.clamp(
 		serverTime - clientTimestamp,
 		GameConfig.HitValidationClientTimestampMinDelta or -0.2,
 		GameConfig.HitValidationClientTimestampMaxDelta or 0.6
 	)
-	local bulletLaunchTime = clientTimestamp + GameConfig.FireCastTime
+	local rawShotServerTime = clientTimestamp + GameConfig.FireCastTime
+	local maxRewindCompSec = math.max(0.01, (GameConfig.HitRewindMaxCompensationMs or 180) / 1000)
+	local bulletLaunchTime = math.clamp(rawShotServerTime, serverTime - maxRewindCompSec, serverTime + 0.05)
 
 	local visualModel, physicsRoot, visualWeld, linearVelocity =
 		CreateServerProjectileVisual(player.UserId, vehicleId, spawnPos, shotDirection, bulletId, bulletResource)
@@ -1877,24 +2420,30 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 		bouncesLeft = bounces,
 		currentPos = spawnPos,
 		estimatedRtt = math.max(0, estimatedRtt),
+		shotServerTime = bulletLaunchTime,
 		visualModel = visualModel,
 		physicsRoot = physicsRoot,
 		visualWeld = visualWeld,
 		linearVelocity = linearVelocity,
 		visualSpawned = false,
 		physicsStarted = false,
+		pendingDestroyServerTime = nil,
 	}
 	-- 同步增加计数
 	shooterBulletCountMap[player.UserId] = (shooterBulletCountMap[player.UserId] or 0) + 1
 
 	local shooterUnit = unitInfoMap[player.UserId]
 	if shooterUnit ~= nil then
+		shooterUnit.spinDir = -shooterUnit.spinDir
+		SyncLatestInputSpinDir(player.UserId, shooterUnit.spinDir)
 		local recoilDir = -shotDirection
 		local unitSpeed = shooterUnit.vehicleConfig.moveSpeed or GameConfig.UnitSpeed
 		local recoilSpeed = unitSpeed * GameConfig.FireRecoilSpeedMultiplier
 		shooterUnit.rootPart.AssemblyLinearVelocity = recoilDir * recoilSpeed
 		shooterUnit.targetVelX = recoilDir.X * recoilSpeed
 		shooterUnit.targetVelZ = recoilDir.Z * recoilSpeed
+		shooterUnit.spinAngleRad = math.atan2(shooterUnit.targetVelZ, shooterUnit.targetVelX)
+		BroadcastVehicleDirectionChanged(shooterUnit, GameConfig.DirectionChangeReason.Fire)
 	end
 
 	LogInfo(string.format("FireAccepted userId=%d bulletId=%s", player.UserId, bulletId))
@@ -1917,6 +2466,7 @@ function CombatManager.StartRound(participantIds: { number })
 	end
 	-- 确保计数表与子弹表同步归零
 	shooterBulletCountMap = {}
+	vehiclePoseHistoryMap = {}
 	PlayerStateManager.ResetAllPlayerRoundInfo(participantIds)
 	for _, playerId in participantIds do
 		-- 无论之前有没有，都先尝试销毁旧载具并重新创建，以支持比赛间隙的载具切换
@@ -1937,7 +2487,8 @@ function CombatManager.StartRound(participantIds: { number })
 		unitInfo.targetVelX = tvx
 		unitInfo.targetVelZ = tvz
 		unitInfo.spinAngleRad = math.atan2(tvz, tvx)
-		unitInfo.unitModel:PivotTo(CFrame.new(unitInfo.rootPart.Position) * VehicleLocomotionTool.UprightGoalCFrame(unitInfo.spinAngleRad))
+		unitInfo.rootPart.CFrame = CFrame.new(unitInfo.rootPart.Position) * VehicleLocomotionTool.UprightGoalCFrame(unitInfo.spinAngleRad)
+		SyncVisualModelToPhysicsRoot(unitInfo)
 		local maxHits = if unitInfo.vehicleConfig then unitInfo.vehicleConfig.maxHits else GameConfig.MaxHits
 		NetMsg.FireNotifyUnitInitToAll({
 			playerId = playerId,
@@ -1948,7 +2499,7 @@ function CombatManager.StartRound(participantIds: { number })
 			isParticipant = true, -- StartRound implies all passed IDs are participants
 			vehicleId = vehicleId,
 		})
-		NetMsg.FireNotifyHpChanged(playerId, 0, maxHits)
+		NetMsg.FireNotifyHpChanged(playerId, 0, maxHits, workspace:GetServerTimeNow(), 0)
 		LogInfo(string.format("StartRoundReset userId=%d moveAngle=%d spinDir=%d", playerId, unitInfo.moveAngle, unitInfo.spinDir))
 	end
 	LogInfo("StartRound end")
@@ -1968,11 +2519,23 @@ function CombatManager.SetVehicleAnchoredForPlayer(playerId: number, anchored: b
 		return
 	end
 	root.Anchored = anchored
+	if not anchored then
+		pcall(function()
+			root:SetNetworkOwner(nil)
+		end)
+		local player = players:GetPlayerByUserId(playerId)
+		if player ~= nil then
+			pcall(function()
+				unitInfo.visualRootPart:SetNetworkOwner(player)
+			end)
+		end
+	end
 	if anchored then
 		root.AssemblyLinearVelocity = Vector3.zero
 		root.AssemblyAngularVelocity = Vector3.zero
 		unitInfo.driveVectorForce = nil
 	end
+	SyncVisualModelToPhysicsRoot(unitInfo)
 end
 
 function CombatManager.SetAllVehiclesAnchored(anchored: boolean)

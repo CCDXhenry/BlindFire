@@ -19,6 +19,10 @@ local requestFireEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("Request
 local requestHitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestHit") :: RemoteEvent
 local notifyUnitInitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyUnitInit") :: RemoteEvent
 local notifyDirectionFlipEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyDirectionFlip") :: RemoteEvent
+local notifyVehicleDirectionChangedEvent: RemoteEvent? =
+	remoteEventsFolder:FindFirstChild("NotifyVehicleDirectionChanged") :: RemoteEvent?
+local notifyVehicleStateSnapshotEvent: RemoteEvent? =
+	remoteEventsFolder:FindFirstChild("NotifyVehicleStateSnapshot") :: RemoteEvent?
 local notifyUnitRemoveEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyUnitRemove") :: RemoteEvent
 local notifyFireAcceptedEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyFireAccepted") :: RemoteEvent
 local notifyHitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyHit") :: RemoteEvent
@@ -32,6 +36,7 @@ local notifyArenaSeatPrepareEvent: RemoteEvent = remoteEventsFolder:FindFirstChi
 local notifyGameConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyGameConfigSync") :: RemoteEvent
 local notifyPendingConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPendingConfigSync") :: RemoteEvent
 local requestSyncUnitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestSyncUnit") :: RemoteEvent
+local requestVehicleInputEvent: RemoteEvent? = remoteEventsFolder:FindFirstChild("RequestVehicleInput") :: RemoteEvent?
 local requestSetAfkStateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestSetAfkState") :: RemoteEvent
 local requestSyncAfkStateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestSyncAfkState") :: RemoteEvent
 local notifyAfkStateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyAfkState") :: RemoteEvent
@@ -63,6 +68,15 @@ end
 
 local requestGuideProgressEvent: RemoteEvent = EnsureRemoteEvent("RequestGuideProgress")
 local notifyGuideProgressUpdatedEvent: RemoteEvent = EnsureRemoteEvent("NotifyGuideProgressUpdated")
+if notifyVehicleDirectionChangedEvent == nil then
+	notifyVehicleDirectionChangedEvent = EnsureRemoteEvent("NotifyVehicleDirectionChanged")
+end
+if requestVehicleInputEvent == nil then
+	requestVehicleInputEvent = EnsureRemoteEvent("RequestVehicleInput")
+end
+if notifyVehicleStateSnapshotEvent == nil then
+	notifyVehicleStateSnapshotEvent = EnsureRemoteEvent("NotifyVehicleStateSnapshot")
+end
 
 --客户端请求设置背景音乐音量
 function NetMsg.FireRequestSetBGMVolume(volume: number)
@@ -158,6 +172,22 @@ function NetMsg.ConnectRequestSyncUnit(callback: (player: Player) -> ())
 	requestSyncUnitEvent.OnServerEvent:Connect(callback)
 end
 
+function NetMsg.FireRequestVehicleInput(inputCmd: GameConfig.VehicleInputCmd)
+	local requestEvent = requestVehicleInputEvent
+	if requestEvent == nil then
+		return
+	end
+	requestEvent:FireServer(inputCmd)
+end
+
+function NetMsg.ConnectRequestVehicleInput(callback: (player: Player, inputCmd: GameConfig.VehicleInputCmd) -> ())
+	local requestEvent = requestVehicleInputEvent
+	if requestEvent == nil then
+		return
+	end
+	requestEvent.OnServerEvent:Connect(callback)
+end
+
 -- 客户端请求切换 AFK 状态
 function NetMsg.FireRequestSetAfkState(isAfk: boolean)
 	requestSetAfkStateEvent:FireServer(isAfk)
@@ -207,6 +237,50 @@ function NetMsg.ConnectNotifyDirectionFlip(callback: (playerId: number) -> ())
 	notifyDirectionFlipEvent.OnClientEvent:Connect(callback)
 end
 
+function NetMsg.FireNotifyVehicleDirectionChangedToAll(syncInfo: GameConfig.VehicleDirectionSyncInfo)
+	local notifyEvent = notifyVehicleDirectionChangedEvent
+	if notifyEvent == nil then
+		return
+	end
+	notifyEvent:FireAllClients(
+		syncInfo.playerId,
+		syncInfo.reason,
+		syncInfo.serverPosition,
+		syncInfo.forceDirection,
+		syncInfo.serverTime
+	)
+end
+
+function NetMsg.ConnectNotifyVehicleDirectionChanged(callback: (
+	playerId: number,
+	reason: GameConfig.DirectionChangeReason,
+	serverPosition: Vector3,
+	forceDirection: Vector3,
+	serverTime: number
+) -> ())
+	local notifyEvent = notifyVehicleDirectionChangedEvent
+	if notifyEvent == nil then
+		return
+	end
+	notifyEvent.OnClientEvent:Connect(callback)
+end
+
+function NetMsg.FireNotifyVehicleStateSnapshotToAll(snapshot: GameConfig.VehicleStateSnapshot)
+	local notifyEvent = notifyVehicleStateSnapshotEvent
+	if notifyEvent == nil then
+		return
+	end
+	notifyEvent:FireAllClients(snapshot)
+end
+
+function NetMsg.ConnectNotifyVehicleStateSnapshot(callback: (snapshot: GameConfig.VehicleStateSnapshot) -> ())
+	local notifyEvent = notifyVehicleStateSnapshotEvent
+	if notifyEvent == nil then
+		return
+	end
+	notifyEvent.OnClientEvent:Connect(callback)
+end
+
 --通知所有客户端某玩家单位移除
 function NetMsg.FireNotifyUnitRemoveToAll(playerId: number)
 	notifyUnitRemoveEvent:FireAllClients(playerId)
@@ -224,31 +298,77 @@ function NetMsg.ConnectNotifyFireAccepted(callback: (playerId: number, fireTime:
 	notifyFireAcceptedEvent.OnClientEvent:Connect(callback)
 end
 
-function NetMsg.FireNotifyHit(targetPlayerId: number, fromPlayerId: number, hitDirection: Vector3, hitCount: number, bulletId: string, hitPosition: Vector3)
-	notifyHitEvent:FireAllClients(targetPlayerId, fromPlayerId, hitDirection, hitCount, bulletId, hitPosition)
+function NetMsg.FireNotifyHit(
+	targetPlayerId: number,
+	fromPlayerId: number,
+	hitDirection: Vector3,
+	hitCount: number,
+	bulletId: string,
+	hitPosition: Vector3,
+	hitServerTime: number,
+	adaptiveDelaySec: number,
+	targetRttSec: number,
+	targetJitterSec: number
+)
+	notifyHitEvent:FireAllClients(
+		targetPlayerId,
+		fromPlayerId,
+		hitDirection,
+		hitCount,
+		bulletId,
+		hitPosition,
+		hitServerTime,
+		adaptiveDelaySec,
+		targetRttSec,
+		targetJitterSec
+	)
 end
 
-function NetMsg.ConnectNotifyHit(callback: (targetPlayerId: number, fromPlayerId: number, hitDirection: Vector3, hitCount: number, bulletId: string, hitPosition: Vector3) -> ())
+function NetMsg.ConnectNotifyHit(callback: (
+	targetPlayerId: number,
+	fromPlayerId: number,
+	hitDirection: Vector3,
+	hitCount: number,
+	bulletId: string,
+	hitPosition: Vector3,
+	hitServerTime: number,
+	adaptiveDelaySec: number,
+	targetRttSec: number,
+	targetJitterSec: number
+) -> ())
 	notifyHitEvent.OnClientEvent:Connect(callback)
 end
 
-function NetMsg.FireNotifyHpChanged(playerId: number, hitCount: number, maxHits: number)
-	notifyHpChangedEvent:FireAllClients(playerId, hitCount, maxHits)
+function NetMsg.FireNotifyHpChanged(playerId: number, hitCount: number, maxHits: number, hpServerTime: number, adaptiveDelaySec: number)
+	notifyHpChangedEvent:FireAllClients(playerId, hitCount, maxHits, hpServerTime, adaptiveDelaySec)
 end
 
-function NetMsg.FireNotifyHpChangedToPlayer(player: Player, playerId: number, hitCount: number, maxHits: number)
-	notifyHpChangedEvent:FireClient(player, playerId, hitCount, maxHits)
+function NetMsg.FireNotifyHpChangedToPlayer(
+	player: Player,
+	playerId: number,
+	hitCount: number,
+	maxHits: number,
+	hpServerTime: number,
+	adaptiveDelaySec: number
+)
+	notifyHpChangedEvent:FireClient(player, playerId, hitCount, maxHits, hpServerTime, adaptiveDelaySec)
 end
 
-function NetMsg.ConnectNotifyHpChanged(callback: (playerId: number, hitCount: number, maxHits: number) -> ())
+function NetMsg.ConnectNotifyHpChanged(callback: (
+	playerId: number,
+	hitCount: number,
+	maxHits: number,
+	hpServerTime: number,
+	adaptiveDelaySec: number
+) -> ())
 	notifyHpChangedEvent.OnClientEvent:Connect(callback)
 end
 
-function NetMsg.FireNotifyDead(playerId: number, killerId: number?)
-	notifyDeadEvent:FireAllClients(playerId, killerId)
+function NetMsg.FireNotifyDead(playerId: number, killerId: number?, deadServerTime: number, adaptiveDelaySec: number)
+	notifyDeadEvent:FireAllClients(playerId, killerId, deadServerTime, adaptiveDelaySec)
 end
 
-function NetMsg.ConnectNotifyDead(callback: (playerId: number, killerId: number?) -> ())
+function NetMsg.ConnectNotifyDead(callback: (playerId: number, killerId: number?, deadServerTime: number, adaptiveDelaySec: number) -> ())
 	notifyDeadEvent.OnClientEvent:Connect(callback)
 end
 

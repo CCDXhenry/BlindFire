@@ -197,14 +197,29 @@ local function SeatPlayerOnVehicle(player: Player, targetPosition: Vector3)
 		return
 	end
 
-	local primaryPart = vehicleModel.PrimaryPart
+	local primaryPart: BasePart? = vehicleModel.PrimaryPart
 	if primaryPart ~= nil then
 		primaryPart.Anchored = false
+		pcall(function()
+			primaryPart:SetNetworkOwner(player)
+		end)
 	end
 	MoveModelKeepRotation(vehicleModel, targetPosition)
 	if primaryPart ~= nil then
+		local rotationOnly = primaryPart.CFrame - primaryPart.Position
+		primaryPart.CFrame = CFrame.new(targetPosition) * rotationOnly
 		primaryPart.AssemblyLinearVelocity = Vector3.zero
 		primaryPart.AssemblyAngularVelocity = Vector3.zero
+	end
+	if unitInfo ~= nil then
+		local proxyPart = unitInfo.rootPart
+		local proxyRotation = proxyPart.CFrame - proxyPart.Position
+		proxyPart.CFrame = CFrame.new(targetPosition) * proxyRotation
+		proxyPart.AssemblyLinearVelocity = Vector3.zero
+		proxyPart.AssemblyAngularVelocity = Vector3.zero
+		pcall(function()
+			proxyPart:SetNetworkOwner(nil)
+		end)
 	end
 	NetMsg.FireNotifyTeleport(player.UserId, targetPosition)
 

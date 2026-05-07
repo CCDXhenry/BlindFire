@@ -27,6 +27,7 @@ local arenaSeatPrepareJumpLock: boolean = false
 local characterAddedConnection: RBXScriptConnection? = nil
 local scriptDestroyingConnection: RBXScriptConnection? = nil
 local renderSteppedConnection: RBXScriptConnection? = nil
+local localPlayer = players.LocalPlayer
 
 local function GetOwnVehicleSeat(): Seat?
 	local character = players.LocalPlayer.Character
@@ -97,23 +98,27 @@ local function UpdateJumpSuppressionForCombatSeat()
 	humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
 end
 
-local function UpdateVehicleOcclusionProtection()
-	local character = players.LocalPlayer.Character
-	if character == nil then return end
-
-	local seat = GetOwnVehicleSeat()
-	if seat ~= nil then
-		local model = seat:FindFirstAncestorOfClass("Model")
-		if model ~= nil and model.Parent ~= character then
-			-- 将载具模型本地父级设为角色，防止 Invisicam 将其视为遮挡物而变透明
-			model.Parent = character
-		end
+local function UpdateLocalCameraSubject()
+	local camera = workspaceService.CurrentCamera
+	if camera == nil then
+		return
+	end
+	local character = localPlayer.Character
+	if character == nil then
+		return
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid == nil then
+		return
+	end
+	if camera.CameraSubject ~= humanoid then
+		camera.CameraSubject = humanoid
 	end
 end
 
 local function OnRenderStepped()
 	UpdateJumpSuppressionForCombatSeat()
-	UpdateVehicleOcclusionProtection()
+	UpdateLocalCameraSubject()
 end
 
 local function OnCombatFireAction(actionName: string, inputState: Enum.UserInputState, _inputObject: InputObject): Enum.ContextActionResult

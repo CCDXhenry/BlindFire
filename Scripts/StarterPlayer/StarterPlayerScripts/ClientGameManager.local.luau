@@ -14,6 +14,7 @@ local clientScripts = scripts:WaitForChild("Client")
 local ClientGameInfo = require(clientScripts:FindFirstChild("ClientGameInfo"))
 local UIManager = require(clientScripts:FindFirstChild("UIManager"))
 local BulletClientManager = require(clientScripts:FindFirstChild("BulletClientManager"))
+local VehicleClientManager = require(clientScripts:FindFirstChild("VehicleClientManager"))
 local CombatCameraManager = require(clientScripts:FindFirstChild("CombatCameraManager"))
 local GuideManager = require(clientScripts:FindFirstChild("GuideManager"))
 local LeaderboardClient = require(clientScripts:WaitForChild("LeaderboardClient"))
@@ -66,6 +67,7 @@ local function OnNotifyPlayerInfoInit(
 	end
 	SoundTool.PlayBGM(bgmSound)
 	-- 初始化核心玩法客户端管理器
+	VehicleClientManager.Init()
 	BulletClientManager.Init()
 	CombatCameraManager.Init()
 	GuideManager.Init()
@@ -242,6 +244,7 @@ task.spawn(function()
 end)
 
 BulletClientManager.Init()
+VehicleClientManager.Init()
 CombatCameraManager.Init()
 GuideManager.Init()
 ClientGameInfo.Init()

@@ -184,7 +184,7 @@ local function OnNotifyUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 	RefreshAfkButton()
 end
 
-local function OnNotifyDead(playerId: number, _killerId: number?)
+local function OnNotifyDead(playerId: number, _killerId: number?, _deadServerTime: number, _adaptiveDelaySec: number)
 	if playerId ~= localPlayerId then
 		return
 	end

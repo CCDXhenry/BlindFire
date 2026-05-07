@@ -265,13 +265,13 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 	_dt: number,
 	applyHorizontalDrive: boolean,
 	customSpeed: number?
-)
+): boolean
 	local _, yaw, _ = root.CFrame:ToEulerAnglesYXZ()
 	state.spinAngleRad = yaw
 
 	if not applyHorizontalDrive then
 		drive.Force = Vector3.zero
-		return
+		return false
 	end
 
 	local mass = root.AssemblyMass
@@ -280,6 +280,7 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 
 	local targetDir = Vector3.new(state.targetVelX, 0, state.targetVelZ)
 	local isTargetVelInvalid = (targetDir.Magnitude < 1e-4) or isNaN(state.targetVelX) or isNaN(state.targetVelZ)
+	local didChangeDirection = false
 
 	if isTargetVelInvalid then
 		-- 自愈逻辑：如果 applyHorizontalDrive 为 true 但速度矢量为 0 或 NaN，则根据当前旋转角恢复基础速度
@@ -288,6 +289,7 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 		state.targetVelZ = recoveredZ
 		targetDir = Vector3.new(recoveredX, 0, recoveredZ)
 		root.AssemblyLinearVelocity = targetDir
+		didChangeDirection = true
 	end
 
 	-- 静态卡死检测：如果驱动开启，但长时间位移极小
@@ -308,6 +310,7 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 					targetDir = Vector3.new(recoveredX, 0, recoveredZ)
 					root.AssemblyLinearVelocity = Vector3.new(targetDir.X, root.AssemblyLinearVelocity.Y, targetDir.Z)
 					state.stuckTime = 0
+					didChangeDirection = true
 					warn(string.format("[VehicleLocomotionTool] Stuck detected for unit, resetting targetVel"))
 				end
 			else
@@ -362,11 +365,13 @@ function VehicleLocomotionTool.UpdateBaseDiskLocomotion(
 						local r = rFlat.Unit * speed
 						state.targetVelX = r.X
 						state.targetVelZ = r.Z
+						didChangeDirection = true
 					end
 				end
 			end
 		end
 	end
+	return didChangeDirection
 end
 
 export type UnitInfoLike = {
@@ -377,7 +382,7 @@ export type UnitInfoLike = {
 
 export type VehicleBumpUnitInfo = DriveState & {
 	rootPart: BasePart,
-	unitModel: Model,
+	unitModel: Model?,
 }
 
 function VehicleLocomotionTool.ResolveVehicleOverlaps(selfInfo: UnitInfoLike, unitInfoMap: { [number]: UnitInfoLike }, selfId: number, dt: number)
@@ -409,9 +414,12 @@ local function horizontalHalfExtentXZ(root: BasePart): number
 	return 0.5 * math.max(root.Size.X, root.Size.Z)
 end
 
-local function vehiclesPhysicallyTouching(root: BasePart, otherVehicle: Model): boolean
+local function vehiclesPhysicallyTouching(root: BasePart, otherRoot: BasePart, otherVehicle: Model?): boolean
 	for _, p in root:GetTouchingParts() do
-		if p:IsA("BasePart") and p:IsDescendantOf(otherVehicle) then
+		if p == otherRoot then
+			return true
+		end
+		if otherVehicle ~= nil and p:IsA("BasePart") and p:IsDescendantOf(otherVehicle) then
 			return true
 		end
 	end
@@ -481,7 +489,8 @@ function VehicleLocomotionTool.ResolveAllVehicleBumps(
 				continue
 			end
 			-- 在可能接触的范围内，再做精确物理查询
-			local touching = vehiclesPhysicallyTouching(rootA, uB.unitModel) or vehiclesPhysicallyTouching(rootB, uA.unitModel)
+			local touching = vehiclesPhysicallyTouching(rootA, rootB, uB.unitModel)
+				or vehiclesPhysicallyTouching(rootB, rootA, uA.unitModel)
 			if not touching and dist > maxCenterDist then
 				continue
 			end

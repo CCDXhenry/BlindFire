@@ -19,6 +19,7 @@ local GuideManager = require(clientScripts:WaitForChild("GuideManager"))
 local NumberExtension = require(coreSharedScripts:WaitForChild("NumberExtension"))
 local tweenService: TweenService = game:GetService("TweenService")
 local runService: RunService = game:GetService("RunService")
+local workspaceService: Workspace = game:GetService("Workspace")
 local toolOriginsFolder = replicatedStorage:FindFirstChild("Tools")
 local soundFolder = replicatedStorage:WaitForChild("Sounds")
 local soundService: SoundService = game:FindFirstChild("SoundService")
@@ -234,6 +235,22 @@ local function PlayDamageFlash(hitDirection: Vector3?)
 
 	damageOverlay.Visible = true
 	damageFlashInTween:Play()
+end
+
+local function ComputeHitFeedbackDelaySeconds(hitServerTime: number, adaptiveDelaySec: number?): number
+	local nowServer = workspaceService:GetServerTimeNow()
+	local maxLeadSec = math.max(0, GameConfig.HitVfxAlignMaxLeadMs) / 1000
+	local maxDelaySec = math.max(0, GameConfig.HitVfxAlignMaxDelayMs) / 1000
+	local alignAlpha = math.clamp(GameConfig.HitVfxAlignLerpAlpha, 0, 1)
+	local renderBackSec = math.max(0, GameConfig.VehicleInterpolationBackTimeMs) / 1000
+	local alignedHitServerTime = math.max(hitServerTime, nowServer - maxLeadSec)
+	local staticDelaySec = math.clamp(alignedHitServerTime + renderBackSec * alignAlpha - nowServer, 0, maxDelaySec)
+	if adaptiveDelaySec ~= nil and adaptiveDelaySec > 0 then
+		local adaptiveMinSec = math.max(0, GameConfig.HitVfxAdaptiveMinDelayMs or 0) / 1000
+		local adaptiveMaxSec = math.max(adaptiveMinSec, GameConfig.HitVfxAdaptiveMaxDelayMs or 0) / 1000
+		return math.clamp(adaptiveDelaySec, adaptiveMinSec, adaptiveMaxSec)
+	end
+	return staticDelaySec
 end
 local function PlayPopTween(ui: ImageLabel, popTime: number, maxScale: number, hideOnMax: boolean)
 	ui.ImageTransparency = 0
@@ -660,11 +677,15 @@ local function UserIdInList(userIds: { number }, userId: number): boolean
 	return false
 end
 
-local function OnNotifyDeadForRoundTip(playerId: number)
+local function OnNotifyDeadForRoundTip(playerId: number, _killerId: number?, deadServerTime: number, adaptiveDelaySec: number)
 	if playerId ~= players.LocalPlayer.UserId then
 		return
 	end
-	ShowGameTip(GameTexts.RoundDefeat.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundDefeat.key, nil, TOP_TIP_FAILURE_COLOR)
+	local sampleServerTime = if deadServerTime == deadServerTime then deadServerTime else workspaceService:GetServerTimeNow()
+	local delaySec = ComputeHitFeedbackDelaySeconds(sampleServerTime, adaptiveDelaySec)
+	task.delay(delaySec, function()
+		ShowGameTip(GameTexts.RoundDefeat.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundDefeat.key, nil, TOP_TIP_FAILURE_COLOR)
+	end)
 end
 
 local function OnNotifyRoundOutcome(endReason: GameConfig.RoundEndReason, aliveUserIds: { number })
@@ -693,13 +714,17 @@ local function OnNotifyRoundOutcome(endReason: GameConfig.RoundEndReason, aliveU
 	end
 end
 
-local function OnNotifyDeadForKillSound(_playerId: number, killerId: number?)
+local function OnNotifyDeadForKillSound(_playerId: number, killerId: number?, deadServerTime: number, adaptiveDelaySec: number)
 	if killerId ~= players.LocalPlayer.UserId then
 		return
 	end
-	if killSoundOrigin ~= nil and killSoundOrigin:IsA("Sound") then
-		SoundTool.PlayGlobalSoundEffect(killSoundOrigin, false)
-	end
+	local sampleServerTime = if deadServerTime == deadServerTime then deadServerTime else workspaceService:GetServerTimeNow()
+	local delaySec = ComputeHitFeedbackDelaySeconds(sampleServerTime, adaptiveDelaySec)
+	task.delay(delaySec, function()
+		if killSoundOrigin ~= nil and killSoundOrigin:IsA("Sound") then
+			SoundTool.PlayGlobalSoundEffect(killSoundOrigin, false)
+		end
+	end)
 end
 
 local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: number)
@@ -749,8 +774,23 @@ NetMsg.ConnectNotifyRoundOutcome(OnNotifyRoundOutcome)
 NetMsg.ConnectNotifyDead(OnNotifyDeadForRoundTip)
 NetMsg.ConnectNotifyDead(OnNotifyDeadForKillSound)
 
-NetMsg.ConnectNotifyHit(function(targetPlayerId, fromPlayerId, hitDirection, hitCount)
+NetMsg.ConnectNotifyHit(function(
+	targetPlayerId,
+	_fromPlayerId,
+	hitDirection,
+	_hitCount,
+	_bulletId,
+	_hitPosition,
+	hitServerTime,
+	adaptiveDelaySec,
+	_targetRttSec,
+	_targetJitterSec
+)
 	if targetPlayerId == players.LocalPlayer.UserId then
-		PlayDamageFlash(hitDirection)
+		local sampleServerTime = if hitServerTime == hitServerTime then hitServerTime else workspaceService:GetServerTimeNow()
+		local delaySec = ComputeHitFeedbackDelaySeconds(sampleServerTime, adaptiveDelaySec)
+		task.delay(delaySec, function()
+			PlayDamageFlash(hitDirection)
+		end)
 	end
 end)

@@ -323,7 +323,7 @@ GameConfig.RoundStartCountdown = 3
 -- 战斗阶段持续时长（秒）
 GameConfig.RoundFightDuration = 120
 -- 大厅到传送倒计时
-GameConfig.MatchCountdown = 45
+GameConfig.MatchCountdown = 10
 -- 准备入座延迟
 GameConfig.ArenaSeatPrepareDelay = 0.22
 -- 返回大厅解座等待
@@ -457,6 +457,18 @@ GameConfig.RoundEndReason = {
 
 export type RoundEndReason = typeof(GameConfig.RoundEndReason.LastStanding) | typeof(GameConfig.RoundEndReason.TimeExpired)
 
+GameConfig.DirectionChangeReason = {
+	Fire = "Fire",
+	WallCollision = "WallCollision",
+	VehicleCollision = "VehicleCollision",
+	BulletHit = "BulletHit",
+}
+
+export type DirectionChangeReason = typeof(GameConfig.DirectionChangeReason.Fire)
+	| typeof(GameConfig.DirectionChangeReason.WallCollision)
+	| typeof(GameConfig.DirectionChangeReason.VehicleCollision)
+	| typeof(GameConfig.DirectionChangeReason.BulletHit)
+
 -- 单位初始化信息（服务端广播给所有客户端）
 export type UnitInitInfo = {
 	-- 玩家 UserId
@@ -474,6 +486,93 @@ export type UnitInitInfo = {
 	-- 当前单位所用载具配置 id（用于客户端查 VehicleDataMap 等）
 	vehicleId: number,
 }
+
+export type VehicleDirectionSyncInfo = {
+	playerId: number,
+	reason: DirectionChangeReason,
+	serverPosition: Vector3,
+	forceDirection: Vector3,
+	serverTime: number,
+}
+
+export type VehicleInputCmd = {
+	seq: number,
+	clientTime: number,
+	moveDir: Vector3,
+	spinDir: number,
+	firePressed: boolean?,
+}
+
+export type VehicleStateSnapshot = {
+	playerId: number,
+	serverTick: number,
+	serverTime: number,
+	ackInputSeq: number,
+	position: Vector3,
+	velocity: Vector3,
+	yaw: number,
+	angVelY: number,
+	spinDir: number,
+	vehicleId: number,
+}
+
+GameConfig.VehicleSyncLerpAlpha = 0.2
+GameConfig.VehicleHardSnapDistance = 10
+GameConfig.VehicleSnapshotHz = 20
+GameConfig.VehicleInputSendHz = 30
+-- 本地硬 reconcile 的固定位置误差门槛
+GameConfig.VehicleReconcilePosThreshold = 6
+-- 本地硬 reconcile 的速度相关门槛：允许 N 秒位移作为缓冲（N * 当前速度），与上者取较大值
+-- 用于高速载具在网络抖动下不会被频繁硬纠拉扯
+GameConfig.VehicleReconcilePosThresholdSecPerStud = 0.18
+GameConfig.VehicleReconcileYawThreshold = math.rad(18)
+GameConfig.VehicleInterpolationBackTimeMs = 100
+GameConfig.VehicleExtrapolationMaxMs = 120
+GameConfig.EnableRemoteVisualSmoothing = true
+-- 命中特效时间对齐：允许的最大延后触发窗口（毫秒）
+GameConfig.HitVfxAlignMaxDelayMs = 180
+-- 命中特效时间对齐：允许使用的最大提前窗口（毫秒）
+GameConfig.HitVfxAlignMaxLeadMs = 20
+-- 命中特效时间对齐强度（0~1），按插值回退时间缩放额外延迟
+GameConfig.HitVfxAlignLerpAlpha = 1
+-- 自适应命中反馈延时最小值（毫秒）
+GameConfig.HitVfxAdaptiveMinDelayMs = 40
+-- 自适应命中反馈延时最大值（毫秒）
+GameConfig.HitVfxAdaptiveMaxDelayMs = 180
+-- RTT 对反馈延时贡献系数（ms per ms）
+GameConfig.HitVfxAdaptiveRttScale = 0.6
+-- 抖动对反馈延时贡献系数（ms per ms）
+GameConfig.HitVfxAdaptiveJitterScale = 0.8
+-- 反馈延时变化速率限制（毫秒/秒）
+GameConfig.HitVfxAdaptiveSlewRateMsPerSec = 220
+-- RTT 平滑 EMA 系数（0~1，越大越灵敏）
+GameConfig.HitAdaptiveRttEmaAlpha = 0.25
+-- RTT 抖动 EMA 系数（0~1，越大越灵敏）
+GameConfig.HitAdaptiveJitterEmaAlpha = 0.2
+-- RTT 统计最小采样间隔（秒）
+GameConfig.HitAdaptiveRttSampleIntervalSec = 0.03
+-- RTT 样本下限（秒）
+GameConfig.HitAdaptiveRttMinSec = 0.01
+-- RTT 样本上限（秒）
+GameConfig.HitAdaptiveRttMaxSec = 0.8
+-- 命中回溯：历史缓存时长（毫秒）
+GameConfig.HitRewindHistoryMs = 1000
+-- 命中回溯：允许回溯窗口（毫秒）
+GameConfig.HitRewindWindowMs = 220
+-- 命中回溯：最大补偿时长（毫秒）
+GameConfig.HitRewindMaxCompensationMs = 180
+-- 命中回溯：最小历史样本数
+GameConfig.HitRewindMinSamples = 3
+-- 命中回溯：代理碰撞半径补偿（Studs）
+GameConfig.HitRewindTargetRadiusStuds = 4.2
+-- 本地软校正：线速度向服务端目标插值的「收敛速率（秒^-1）」，越大收敛越快
+GameConfig.VehicleVelocityConvergeRate = 10
+-- 本地软校正：位置误差转换为额外速度项的弹簧增益（单位：秒^-1）
+GameConfig.VehiclePosCorrectionGain = 6
+-- 本地软校正：弹簧速度的最大幅度，避免误差大时一次反弹过冲
+GameConfig.VehiclePosCorrectionMaxSpeed = 35
+-- 客户端 spinDir 反向抖动抑制窗口（毫秒），避免快照/事件来回切换造成净旋转 0
+GameConfig.VehicleSpinDirDebounceMs = 80
 
 GameConfig.VisibleParameters = {
 	{ key = "UnitSpeed", alias = "单位移动速度" },
@@ -583,7 +682,11 @@ function GameConfig.GetGroupRewardVehicleIdList(): { number }
 	end)
 
 	groupRewardVehicleIdListCache = groupRewardVehicleIdList
-	return table.clone(groupRewardVehicleIdListCache)
+	local cachedList = groupRewardVehicleIdListCache
+	if cachedList == nil then
+		return {}
+	end
+	return table.clone(cachedList)
 end
 
 return GameConfig

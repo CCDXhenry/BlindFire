@@ -16,6 +16,7 @@ local coreSharedScripts = coreScripts:WaitForChild("Shared")
 local SoundTool = require(coreSharedScripts:FindFirstChild("SoundTool"))
 local clientScripts = scripts:WaitForChild("Client")
 local ClientGameInfo = require(clientScripts:FindFirstChild("ClientGameInfo"))
+local VehicleClientManager = require(clientScripts:FindFirstChild("VehicleClientManager"))
 
 type ClientUnitState = {
 	playerId: number,
@@ -82,6 +83,8 @@ local isInitialized: boolean = false
 local _hasWarnedMissingTurretActuator: boolean = false
 local isLocalAfk: boolean = false
 local prewarmedBulletResourceNameMap: { [string]: boolean } = {}
+local hitDelaySecByTargetMap: { [number]: number } = {}
+local lastDeadServerTimeByPlayerMap: { [number]: number } = {}
 
 local HttpService = game:GetService("HttpService")
 local soundOriginsFolder = replicatedStorage:FindFirstChild("Sounds")
@@ -92,6 +95,47 @@ local impactSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirs
 local deathSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("DeathSound") else nil
 local unitFireSoundCache: { [Model]: Instance } = {}
 local unitMissingFireSoundCache: { [Model]: boolean } = {}
+
+local function CreateHitExplosion(hitPosition: Vector3)
+	local explosion = Instance.new("Explosion")
+	explosion.Position = hitPosition
+	explosion.BlastRadius = 0
+	explosion.DestroyJointRadiusPercent = 0
+	explosion.Visible = true
+	explosion.Parent = workspaceService
+end
+
+local function ResolveHitVfxPosition(targetPlayerId: number, fallbackPosition: Vector3, sampleServerTime: number): Vector3
+	local visualPosition = VehicleClientManager.GetVehicleVisualPositionAtServerTime(targetPlayerId, sampleServerTime)
+	if visualPosition ~= nil then
+		return visualPosition
+	end
+	return fallbackPosition
+end
+
+local function ComputeHitVfxDelaySeconds(targetPlayerId: number, hitServerTime: number, adaptiveDelaySec: number?): number
+	local nowServer = workspaceService:GetServerTimeNow()
+	local maxLeadSec = math.max(0, GameConfig.HitVfxAlignMaxLeadMs) / 1000
+	local maxDelaySec = math.max(0, GameConfig.HitVfxAlignMaxDelayMs) / 1000
+	local alignAlpha = math.clamp(GameConfig.HitVfxAlignLerpAlpha, 0, 1)
+	local renderBackSec = math.max(0, GameConfig.VehicleInterpolationBackTimeMs) / 1000
+	local alignedHitServerTime = math.max(hitServerTime, nowServer - maxLeadSec)
+	local staticDelaySec = math.clamp(alignedHitServerTime + renderBackSec * alignAlpha - nowServer, 0, maxDelaySec)
+	local desiredDelaySec = staticDelaySec
+	if adaptiveDelaySec ~= nil and adaptiveDelaySec > 0 then
+		local adaptiveMinSec = math.max(0, GameConfig.HitVfxAdaptiveMinDelayMs or 0) / 1000
+		local adaptiveMaxSec = math.max(adaptiveMinSec, GameConfig.HitVfxAdaptiveMaxDelayMs or 0) / 1000
+		desiredDelaySec = math.clamp(adaptiveDelaySec, adaptiveMinSec, adaptiveMaxSec)
+	end
+	local previousDelaySec = hitDelaySecByTargetMap[targetPlayerId]
+	if previousDelaySec ~= nil then
+		local slewRateMsPerSec = math.max(0, GameConfig.HitVfxAdaptiveSlewRateMsPerSec or 220)
+		local maxDeltaSec = slewRateMsPerSec / 1000 * (1 / 30)
+		desiredDelaySec = math.clamp(desiredDelaySec, previousDelaySec - maxDeltaSec, previousDelaySec + maxDeltaSec)
+	end
+	hitDelaySecByTargetMap[targetPlayerId] = desiredDelaySec
+	return math.clamp(desiredDelaySec, 0, maxDelaySec)
+end
 
 local function PlayLocalCombatSound(soundOrigin: Instance?, worldPosition: Vector3)
 	if soundOrigin == nil or not soundOrigin:IsA("Sound") then
@@ -473,6 +517,17 @@ local function UpdateInvincibilityEffect(model: Model, isInvincible: boolean)
 	end
 end
 
+local function GetLocalHitAlignedDelaySeconds(): number
+	local delay = hitDelaySecByTargetMap[localPlayerId]
+	if delay == nil then
+		return 0
+	end
+	if delay ~= delay then
+		return 0
+	end
+	return math.max(0, delay)
+end
+
 function BulletClientManager.Init()
 	if isInitialized then
 		return
@@ -504,6 +559,7 @@ end
 function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 	local playerId: number = unitInitInfo.playerId
 	local isLocal: boolean = (playerId == localPlayerId)
+	lastDeadServerTimeByPlayerMap[playerId] = nil
 
 	pendingUnitInits[playerId] = unitInitInfo
 
@@ -600,7 +656,20 @@ function BulletClientManager.OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 	if unitModel ~= nil then
 		UpdateInvincibilityEffect(unitModel, unitModel:GetAttribute("IsInvincible") == true)
 		unitModel:GetAttributeChangedSignal("IsInvincible"):Connect(function()
-			UpdateInvincibilityEffect(unitModel, unitModel:GetAttribute("IsInvincible") == true)
+			local isInvincible = unitModel:GetAttribute("IsInvincible") == true
+			if isLocal and isInvincible then
+				local delaySec = GetLocalHitAlignedDelaySeconds()
+				if delaySec > 0 then
+					task.delay(delaySec, function()
+						if unitModel.Parent == nil then
+							return
+						end
+						UpdateInvincibilityEffect(unitModel, unitModel:GetAttribute("IsInvincible") == true)
+					end)
+					return
+				end
+			end
+			UpdateInvincibilityEffect(unitModel, isInvincible)
 		end)
 	end
 end
@@ -609,6 +678,19 @@ function BulletClientManager.OnDirectionFlip(playerId: number)
 	local state: ClientUnitState? = unitStateMap[playerId]
 	if state == nil then
 		return
+	end
+	if playerId == localPlayerId then
+		local delaySec = GetLocalHitAlignedDelaySeconds()
+		if delaySec > 0 then
+			task.delay(delaySec, function()
+				local latest = unitStateMap[playerId]
+				if latest == nil then
+					return
+				end
+				latest.spinDir = -latest.spinDir
+			end)
+			return
+		end
 	end
 	state.spinDir = -state.spinDir
 end
@@ -754,52 +836,95 @@ function BulletClientManager.OnHit(
 	_hitDirection: Vector3,
 	_hitCount: number,
 	_bulletId: string,
-	hitPosition: Vector3
+	hitPosition: Vector3,
+	hitServerTime: number,
+	adaptiveDelaySec: number,
+	_targetRttSec: number,
+	_targetJitterSec: number
 )
 	local targetState = unitStateMap[targetPlayerId]
 	if targetState == nil then
 		return
 	end
-	PlayGlobalCombatSound(hitSoundOrigin)
+	local sampleServerTime = if hitServerTime == hitServerTime then hitServerTime else workspaceService:GetServerTimeNow()
+	local delaySec = ComputeHitVfxDelaySeconds(targetPlayerId, sampleServerTime, adaptiveDelaySec)
 	if targetPlayerId == localPlayerId then
-		PlayGlobalCombatSound(struckSoundOrigin)
+		-- 命中反馈延后窗口内抑制服务端纠偏，避免本地先被击退/拉扯而“视觉子弹还没到”
+		local nowServer = workspaceService:GetServerTimeNow()
+		VehicleClientManager.SetLocalHitCorrectionSuppression(nowServer + delaySec)
 	end
-	targetState.spinDir = (math.random(0, 1) == 0) and 1 or -1
-	local sign = (math.random(0, 1) == 0) and 1 or -1
-	targetState.spinImpulseRadPerSec += GameConfig.TurretSpinImpulseOnHitRadPerSec * sign
-
-	local finalExplosionPos = hitPosition
-	if targetPlayerId == localPlayerId then
-		finalExplosionPos = targetState.unitPart.Position
-	end
-
-	local explosion = Instance.new("Explosion")
-	explosion.Position = finalExplosionPos
-	explosion.BlastRadius = 0
-	explosion.DestroyJointRadiusPercent = 0
-	explosion.Visible = true
-	explosion.Parent = workspaceService
+	task.delay(delaySec, function()
+		local latestTargetState = unitStateMap[targetPlayerId]
+		if latestTargetState == nil then
+			return
+		end
+		PlayGlobalCombatSound(hitSoundOrigin)
+		if targetPlayerId == localPlayerId then
+			PlayGlobalCombatSound(struckSoundOrigin)
+		end
+		latestTargetState.spinDir = (math.random(0, 1) == 0) and 1 or -1
+		local sign = (math.random(0, 1) == 0) and 1 or -1
+		latestTargetState.spinImpulseRadPerSec += GameConfig.TurretSpinImpulseOnHitRadPerSec * sign
+		local finalExplosionPos = ResolveHitVfxPosition(targetPlayerId, hitPosition, sampleServerTime + delaySec)
+		if targetPlayerId == localPlayerId then
+			finalExplosionPos = latestTargetState.unitPart.Position
+		end
+		CreateHitExplosion(finalExplosionPos)
+	end)
 end
 
-function BulletClientManager.OnHpChanged(playerId: number, hitCount: number, maxHits: number)
+function BulletClientManager.OnHpChanged(
+	playerId: number,
+	hitCount: number,
+	maxHits: number,
+	_hpServerTime: number,
+	adaptiveDelaySec: number
+)
 	local state = unitStateMap[playerId]
 	if state == nil then
+		return
+	end
+	if playerId == localPlayerId and adaptiveDelaySec ~= nil and adaptiveDelaySec > 0 then
+		task.delay(adaptiveDelaySec, function()
+			local latest = unitStateMap[playerId]
+			if latest == nil then
+				return
+			end
+			latest.hitCount = hitCount
+			latest.maxHits = maxHits
+		end)
 		return
 	end
 	state.hitCount = hitCount
 	state.maxHits = maxHits
 end
 
-function BulletClientManager.OnDead(playerId: number)
+function BulletClientManager.OnDead(playerId: number, _killerId: number?, deadServerTime: number, adaptiveDelaySec: number)
 	local state = unitStateMap[playerId]
 	if state == nil then
 		return
 	end
-	state.targetVelX = 0
-	state.targetVelZ = 0
-	if playerId == localPlayerId then
-		PlayGlobalCombatSound(deathSoundOrigin)
+	local sampleServerTime = if deadServerTime == deadServerTime then deadServerTime else workspaceService:GetServerTimeNow()
+	local lastDeadServerTime = lastDeadServerTimeByPlayerMap[playerId]
+	if lastDeadServerTime ~= nil and sampleServerTime <= lastDeadServerTime then
+		return
 	end
+	lastDeadServerTimeByPlayerMap[playerId] = sampleServerTime
+	local delaySec = ComputeHitVfxDelaySeconds(playerId, sampleServerTime, adaptiveDelaySec)
+	task.delay(delaySec, function()
+		local latestState = unitStateMap[playerId]
+		if latestState == nil then
+			return
+		end
+		if lastDeadServerTimeByPlayerMap[playerId] ~= sampleServerTime then
+			return
+		end
+		latestState.targetVelX = 0
+		latestState.targetVelZ = 0
+		if playerId == localPlayerId then
+			PlayGlobalCombatSound(deathSoundOrigin)
+		end
+	end)
 end
 
 function BulletClientManager.OnImpact(hitPosition: Vector3)
@@ -823,6 +948,8 @@ function BulletClientManager.OnMatchStateChanged(newState: GameConfig.MatchState
 		table.clear(pendingUnitInits)
 		table.clear(unitFireSoundCache)
 		table.clear(unitMissingFireSoundCache)
+		table.clear(hitDelaySecByTargetMap)
+		table.clear(lastDeadServerTimeByPlayerMap)
 	end
 end
 

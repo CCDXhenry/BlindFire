@@ -126,7 +126,7 @@ local function OnUnitInit(unitInitInfo: GameConfig.UnitInitInfo)
 	end
 end
 
-local function OnDead(playerId: number, _killerId: number?)
+local function OnDead(playerId: number, _killerId: number?, _deadServerTime: number, _adaptiveDelaySec: number)
 	if playerId == localPlayer.UserId then
 		isLocalDead = true
 	end

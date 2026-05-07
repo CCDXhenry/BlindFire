@@ -32,6 +32,7 @@ local PlayerInfoUIManager = {}
 
 local playerUIMap: { [number]: PlayerInfoUIRecord } = {}
 local connectionMap: { [number]: RBXScriptConnection } = {}
+local lastDeadServerTimeMap: { [number]: number } = {}
 local isFighting = false
 
 local SegmentNamePrefix = "SegmentFrame_"
@@ -348,18 +349,40 @@ function PlayerInfoUIManager.Init()
 		RemoveUIForPlayer(playerId)
 	end)
 
-	NetMsg.ConnectNotifyHpChanged(function(playerId, hitCount, maxHits)
+	NetMsg.ConnectNotifyHpChanged(function(playerId, hitCount, maxHits, _hpServerTime, adaptiveDelaySec)
+		local hpDelaySec = math.max(0, adaptiveDelaySec or 0)
+		if hpDelaySec > 0 then
+			task.delay(hpDelaySec, function()
+				UpdateHpUI(playerId, hitCount, maxHits)
+			end)
+			return
+		end
 		UpdateHpUI(playerId, hitCount, maxHits)
 	end)
 
-	NetMsg.ConnectNotifyDead(function(playerId, killerId)
-		RemoveUIForPlayer(playerId)
+	NetMsg.ConnectNotifyDead(function(playerId, _killerId, deadServerTime, adaptiveDelaySec)
+		local sampleDeadServerTime = if deadServerTime == deadServerTime then deadServerTime else 0
+		local lastDeadServerTime = lastDeadServerTimeMap[playerId]
+		if lastDeadServerTime ~= nil and sampleDeadServerTime <= lastDeadServerTime then
+			return
+		end
+		lastDeadServerTimeMap[playerId] = sampleDeadServerTime
+		local deadDelaySec = math.max(0, adaptiveDelaySec or 0)
+		task.delay(deadDelaySec, function()
+			if lastDeadServerTimeMap[playerId] ~= sampleDeadServerTime then
+				return
+			end
+			RemoveUIForPlayer(playerId)
+		end)
 	end)
 
 	NetMsg.ConnectNotifyMatchState(function(matchState, countdown)
 		isFighting = (matchState == GameConfig.MatchState.Fighting or matchState == GameConfig.MatchState.GameStartCountdown)
 		for playerId, data in playerUIMap do
 			UpdateUIVisibility(data.ui, data.isParticipant)
+		end
+		if matchState == GameConfig.MatchState.InLobby then
+			table.clear(lastDeadServerTimeMap)
 		end
 	end)
 	
