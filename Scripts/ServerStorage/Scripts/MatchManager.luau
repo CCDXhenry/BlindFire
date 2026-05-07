@@ -36,6 +36,10 @@ local seatRetryCountMap: { [number]: number } = {}
 local arenaTargetPositionMap: { [number]: Vector3 } = {}
 
 local currentMatchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
+-- 与 currentMatchState 解耦：避免「等待玩家」循环中重复 Fire InLobby
+local lastBroadcastMatchState: GameConfig.MatchState? = nil
+local currentPhaseDuration: number = 0
+local currentPhaseStartClock: number = 0
 local lastLobbySpawnIndex = 0
 local roundWorkerThread: thread? = nil
 local roundStartCallback: OnRoundStartCallback? = nil
@@ -68,6 +72,12 @@ local function OnRequestSyncAfkState(player: Player)
 		local otherId = otherPlayer.UserId
 		NetMsg.FireNotifyAfkStateToPlayer(player, otherId, PlayerStateManager.IsPlayerAfk(otherId))
 	end
+end
+
+local function OnRequestSyncMatchState(player: Player)
+	local remainRaw = currentPhaseDuration - (os.clock() - currentPhaseStartClock)
+	local remainSec = math.ceil(math.max(remainRaw, 0))
+	NetMsg.FireNotifyMatchStateToPlayer(player, currentMatchState, remainSec)
 end
 
 local function LogInfo(message: string)
@@ -424,10 +434,27 @@ local function TeleportAllPlayersToLobby()
 end
 
 local function BroadcastMatchState(matchState: GameConfig.MatchState, countdown: number)
+	if matchState == GameConfig.MatchState.InLobby and lastBroadcastMatchState == GameConfig.MatchState.InLobby then
+		return
+	end
+	lastBroadcastMatchState = matchState
 	currentMatchState = matchState
+	currentPhaseDuration = countdown
+	currentPhaseStartClock = os.clock()
 	CombatManager.SetMatchState(matchState)
 	LogInfo(string.format("StateChanged state=%s countdown=%d", matchState, countdown))
 	NetMsg.FireNotifyMatchState(matchState, countdown)
+end
+
+-- 仅按秒轮询是否应提前结束本阶段，不再次广播 MatchState
+local function RunPhaseWithAbortPolling(durationSec: number, shouldAbort: () -> boolean): boolean
+	for _ = 1, durationSec do
+		if shouldAbort() then
+			return true
+		end
+		task.wait(1)
+	end
+	return false
 end
 
 local function RunMatchLoop()
@@ -448,16 +475,14 @@ local function RunMatchLoop()
 
 		LogInfo(string.format("MatchCountdown start seconds=%d", GameConfig.MatchCountdown))
 		CombatManager.SetAllVehiclesAnchored(true)
-		local matchAborted = false
-		for countdown = GameConfig.MatchCountdown, 1, -1 do
+		BroadcastMatchState(GameConfig.MatchState.MatchCountdown, GameConfig.MatchCountdown)
+		local matchAborted = RunPhaseWithAbortPolling(GameConfig.MatchCountdown, function(): boolean
 			if PlayerStateManager.GetNonAfkOnlinePlayerCount() < GameConfig.MinPlayerToStart then
 				LogInfo("MatchCountdown aborted: player count below minimum")
-				matchAborted = true
-				break
+				return true
 			end
-			BroadcastMatchState(GameConfig.MatchState.MatchCountdown, countdown)
-			task.wait(1)
-		end
+			return false
+		end)
 		if matchAborted then
 			continue
 		end
@@ -491,16 +516,14 @@ local function RunMatchLoop()
 		CombatManager.SetAllVehiclesAnchored(false)
 
 		LogInfo(string.format("GameStartCountdown start seconds=%d", GameConfig.RoundStartCountdown))
-		local gameStartAborted = false
-		for countdown = GameConfig.RoundStartCountdown, 1, -1 do
+		BroadcastMatchState(GameConfig.MatchState.GameStartCountdown, GameConfig.RoundStartCountdown)
+		local gameStartAborted = RunPhaseWithAbortPolling(GameConfig.RoundStartCountdown, function(): boolean
 			if #GetNonAfkPlayers() <= 1 then
 				LogInfo("GameStartCountdown aborted: not enough players")
-				gameStartAborted = true
-				break
+				return true
 			end
-			BroadcastMatchState(GameConfig.MatchState.GameStartCountdown, countdown)
-			task.wait(1)
-		end
+			return false
+		end)
 
 		if gameStartAborted then
 			LogInfo("GameStart aborted, returning players to lobby")
@@ -513,7 +536,7 @@ local function RunMatchLoop()
 			continue
 		end
 
-		BroadcastMatchState(GameConfig.MatchState.Fighting, 0)
+		BroadcastMatchState(GameConfig.MatchState.Fighting, GameConfig.RoundFightDuration)
 		local roundInfoMap = PlayerStateManager.GetAllPlayerRoundInfoMap()
 		for _, participantPlayer in players:GetPlayers() do
 			local roundInfo = roundInfoMap[participantPlayer.UserId]
@@ -526,22 +549,17 @@ local function RunMatchLoop()
 		end
 		ArenaManager.StartShrinking(GameConfig.RoundFightDuration)
 		LogInfo(string.format("FightPhase start seconds=%d", GameConfig.RoundFightDuration))
-		-- 与 MatchCountdown / GameStartCountdown 一致：先广播再 wait，避免首秒无数字、客户端慢约 1s
-		local fightEndedEarly = false
-		for remain = GameConfig.RoundFightDuration, 1, -1 do
+		local fightEndedEarly = RunPhaseWithAbortPolling(GameConfig.RoundFightDuration, function(): boolean
 			if isStopRequested then
-				fightEndedEarly = true
 				LogInfo("Fighting phase ended early: stop requested via command.")
-				break
+				return true
 			end
 			if PlayerStateManager.GetAlivePlayerCount() <= 1 then
-				fightEndedEarly = true
 				LogInfo("Fighting phase ended early: at most one player remains alive.")
-				break
+				return true
 			end
-			BroadcastMatchState(GameConfig.MatchState.Fighting, remain)
-			task.wait(1)
-		end
+			return false
+		end)
 
 		local endReason: GameConfig.RoundEndReason = if fightEndedEarly
 			then GameConfig.RoundEndReason.LastStanding
@@ -588,6 +606,7 @@ function MatchManager.Init(onRoundStart: OnRoundStartCallback)
 	ArenaManager.Init()
 	NetMsg.ConnectRequestSetAfkState(OnRequestSetAfkState)
 	NetMsg.ConnectRequestSyncAfkState(OnRequestSyncAfkState)
+	NetMsg.ConnectRequestSyncMatchState(OnRequestSyncMatchState)
 	if roundWorkerThread ~= nil then
 		LogInfo("Init skipped reason=already_initialized")
 		return

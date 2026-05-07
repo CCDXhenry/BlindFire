@@ -631,6 +631,37 @@ function HideDownTipText()
 end
 
 local lastNotifiedMatchState: GameConfig.MatchState? = nil
+local phaseCountdownThread: thread? = nil
+
+local function StopPhaseCountdown()
+	if phaseCountdownThread ~= nil then
+		local activeThread = phaseCountdownThread
+		phaseCountdownThread = nil
+		task.cancel(activeThread)
+	end
+end
+
+local function StartPhaseCountdown(phase: GameConfig.MatchState, initialRemain: number)
+	if initialRemain <= 0 then
+		return
+	end
+	phaseCountdownThread = task.spawn(function()
+		local remain = initialRemain
+		while remain >= 1 do
+			if phase == GameConfig.MatchState.Fighting then
+				ApplyFightingTopTipCountdownText(remain)
+			elseif phase == GameConfig.MatchState.MatchCountdown or phase == GameConfig.MatchState.GameStartCountdown then
+				if countdownText ~= nil then
+					countdownText.Visible = true
+					countdownText.TextColor3 = EARTHQUAKE_WARNING_COLOR
+					ApplyCountdownFormatToLabel(countdownText, remain)
+				end
+			end
+			task.wait(1)
+			remain -= 1
+		end
+	end)
+end
 
 local function GetMatchPhaseTipEntry(matchState: GameConfig.MatchState): ({ key: string, source: string }, Color3)
 	if matchState == GameConfig.MatchState.InLobby then
@@ -645,7 +676,7 @@ local function GetMatchPhaseTipEntry(matchState: GameConfig.MatchState): ({ key:
 	return GameTexts.MatchPhaseInLobby, TOP_TIP_DEFAULT_COLOR
 end
 
--- 阶段顶栏停留时长与对应阶段倒计时一致（含战斗 RoundFightDuration / 服务器 remain）
+-- 阶段顶栏停留时长：与 Notify 推送的剩余秒数一致（阶段开始时一般为整段时长）
 local function GetPhaseTopTipDuration(matchState: GameConfig.MatchState, countdown: number): number
 	if matchState == GameConfig.MatchState.MatchCountdown then
 		if countdown > 0 then
@@ -662,6 +693,11 @@ local function GetPhaseTopTipDuration(matchState: GameConfig.MatchState, countdo
 			return countdown
 		end
 		return GameConfig.RoundFightDuration
+	elseif matchState == GameConfig.MatchState.Settlement then
+		if countdown > 0 then
+			return countdown
+		end
+		return GameConfig.SettlementDuration
 	elseif matchState == GameConfig.MatchState.InLobby then
 		return 999999
 	end
@@ -737,11 +773,17 @@ local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: 
 		lastNotifiedMatchState = matchState
 	end
 
+	StopPhaseCountdown()
+
 	if matchState == GameConfig.MatchState.Fighting then
 		if countdownText ~= nil then
 			countdownText.Visible = false
 		end
-		ApplyFightingTopTipCountdownText(countdown)
+		if countdown > 0 then
+			StartPhaseCountdown(GameConfig.MatchState.Fighting, countdown)
+		else
+			ApplyFightingTopTipCountdownText(0)
+		end
 		return
 	end
 
@@ -750,9 +792,7 @@ local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: 
 	end
 	if matchState == GameConfig.MatchState.MatchCountdown or matchState == GameConfig.MatchState.GameStartCountdown then
 		if countdown > 0 then
-			countdownText.Visible = true
-			countdownText.TextColor3 = EARTHQUAKE_WARNING_COLOR
-			ApplyCountdownFormatToLabel(countdownText, countdown)
+			StartPhaseCountdown(matchState, countdown)
 		else
 			countdownText.Visible = false
 		end
@@ -793,4 +833,9 @@ NetMsg.ConnectNotifyHit(function(
 			PlayDamageFlash(hitDirection)
 		end)
 	end
+end)
+
+-- 等待所有 NotifyMatchState 监听者就绪后，主动向服务端拉取一次当前阶段，避免错过阶段切换瞬间的广播
+task.defer(function()
+	NetMsg.FireRequestSyncMatchState()
 end)

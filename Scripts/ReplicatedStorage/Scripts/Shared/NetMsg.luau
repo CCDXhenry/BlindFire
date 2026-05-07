@@ -68,6 +68,7 @@ end
 
 local requestGuideProgressEvent: RemoteEvent = EnsureRemoteEvent("RequestGuideProgress")
 local notifyGuideProgressUpdatedEvent: RemoteEvent = EnsureRemoteEvent("NotifyGuideProgressUpdated")
+local requestSyncMatchStateEvent: RemoteEvent = EnsureRemoteEvent("RequestSyncMatchState")
 if notifyVehicleDirectionChangedEvent == nil then
 	notifyVehicleDirectionChangedEvent = EnsureRemoteEvent("NotifyVehicleDirectionChanged")
 end
@@ -396,6 +397,18 @@ end
 
 function NetMsg.FireNotifyMatchState(matchState: GameConfig.MatchState, countdown: number)
 	notifyMatchStateEvent:FireAllClients(matchState, countdown)
+end
+
+function NetMsg.FireNotifyMatchStateToPlayer(player: Player, matchState: GameConfig.MatchState, countdown: number)
+	notifyMatchStateEvent:FireClient(player, matchState, countdown)
+end
+
+function NetMsg.FireRequestSyncMatchState()
+	requestSyncMatchStateEvent:FireServer()
+end
+
+function NetMsg.ConnectRequestSyncMatchState(callback: (player: Player) -> ())
+	requestSyncMatchStateEvent.OnServerEvent:Connect(callback)
 end
 
 function NetMsg.ConnectNotifyMatchState(callback: (matchState: GameConfig.MatchState, countdown: number) -> ())

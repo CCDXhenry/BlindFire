@@ -24,7 +24,7 @@ local disableJumpActionId: string = ""
 local isLocalParticipant = false
 local isLocalDead = false
 local lastMatchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
-local lastCountdown = 0
+local phaseEndClock: number = 0
 local isWaitingForRelease = false
 local wasDisabledLastFrame = false
 local jumpCasBound = false
@@ -52,6 +52,7 @@ local function UnbindJumpSuppressCas()
 end
 
 local function OnUpdate()
+	local lastCountdown = math.floor(math.max(phaseEndClock - os.clock(), 0) + 1e-4)
 	local shouldSuppressByState = false
 	if lastMatchState == GameConfig.MatchState.MatchCountdown then
 		if lastCountdown <= 2 then
@@ -112,7 +113,7 @@ end
 
 local function OnMatchStateChanged(matchState: GameConfig.MatchState, countdown: number)
 	lastMatchState = matchState
-	lastCountdown = countdown
+	phaseEndClock = os.clock() + countdown
 
 	if matchState == GameConfig.MatchState.InLobby or matchState == GameConfig.MatchState.MatchCountdown then
 		isLocalDead = false
