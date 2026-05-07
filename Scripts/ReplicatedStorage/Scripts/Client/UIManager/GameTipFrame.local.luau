@@ -102,6 +102,7 @@ local MATCH_PHASE_TOP_TIP_DURATION = 3
 local ROUND_OUTCOME_GAME_TIP_TWEEN: number = GameConfig.GameTipTweenType.StayFlyUp
 local DefaultPhaseTextScale = 1
 local FightingPhaseTextScale = 0.5
+local isLocalPlayerDeadInRound = false
 
 --AddRewardTipFrame
 local addRewardTipFrameOrigin: Frame = gameTipFrame:FindFirstChild("AddRewardTipFrame") :: Frame
@@ -717,6 +718,7 @@ local function OnNotifyDeadForRoundTip(playerId: number, _killerId: number?, dea
 	if playerId ~= players.LocalPlayer.UserId then
 		return
 	end
+	isLocalPlayerDeadInRound = true
 	local sampleServerTime = if deadServerTime == deadServerTime then deadServerTime else workspaceService:GetServerTimeNow()
 	local delaySec = ComputeHitFeedbackDelaySeconds(sampleServerTime, adaptiveDelaySec)
 	task.delay(delaySec, function()
@@ -725,6 +727,9 @@ local function OnNotifyDeadForRoundTip(playerId: number, _killerId: number?, dea
 end
 
 local function OnNotifyRoundOutcome(endReason: GameConfig.RoundEndReason, aliveUserIds: { number })
+	if isLocalPlayerDeadInRound then
+		return
+	end
 	local myId: number = players.LocalPlayer.UserId
 	if endReason == GameConfig.RoundEndReason.LastStanding and #aliveUserIds == 0 then
 		ShowGameTip(GameTexts.RoundNoSurvivors.source, ROUND_OUTCOME_GAME_TIP_TWEEN, GameTexts.RoundNoSurvivors.key, nil, TOP_TIP_DEFAULT_COLOR)
@@ -764,6 +769,9 @@ local function OnNotifyDeadForKillSound(_playerId: number, killerId: number?, de
 end
 
 local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: number)
+	if matchState == GameConfig.MatchState.InLobby or matchState == GameConfig.MatchState.GameStartCountdown then
+		isLocalPlayerDeadInRound = false
+	end
 	ApplyMatchStateTextScale(matchState)
 
 	if matchState ~= lastNotifiedMatchState then
