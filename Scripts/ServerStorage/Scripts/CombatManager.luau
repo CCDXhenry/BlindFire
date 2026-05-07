@@ -455,7 +455,7 @@ end
 local function CreateVehiclePhysicsProxyPart(playerId: number, visualRootPart: BasePart): BasePart
 	local proxyPart = Instance.new("Part")
 	proxyPart.Name = VEHICLE_PROXY_PART_NAME_PREFIX .. tostring(playerId)
-	proxyPart.Transparency = 0.3
+	proxyPart.Transparency = 1
 	proxyPart.Size = visualRootPart.Size
 	if visualRootPart:IsA("Part") then
 		proxyPart.Shape = (visualRootPart :: Part).Shape

@@ -323,7 +323,7 @@ GameConfig.RoundStartCountdown = 3
 -- 战斗阶段持续时长（秒）
 GameConfig.RoundFightDuration = 120
 -- 大厅到传送倒计时
-GameConfig.MatchCountdown = 10
+GameConfig.MatchCountdown = 45
 -- 准备入座延迟
 GameConfig.ArenaSeatPrepareDelay = 0.22
 -- 返回大厅解座等待
