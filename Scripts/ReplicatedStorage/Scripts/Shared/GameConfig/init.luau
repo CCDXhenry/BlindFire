@@ -295,7 +295,7 @@ export type ClientOtherPlayerInfo = ClientOtherPlayerSyncInfo & {}
 -- Demo 核心玩法常量
 -- ============================================================
 
-GameConfig.MinPlayerToStart = 8
+GameConfig.MinPlayerToStart = 4
 GameConfig.MaxPlayerToStart = 8
 GameConfig.EnableAIBotFill = true
 GameConfig.AIBotMinFireInterval = 2
