@@ -2138,6 +2138,19 @@ local function ResolveProjectileHit(
 		return
 	end
 
+	if PlayerStateManager.GetAlivePlayerCount() <= 1 then
+		LogProjectileHitResolve(
+			string.format(
+				"LAST_STANDING_SKIP_DAMAGE bullet=%s shooter=%d target=%d hitPos=%s",
+				bulletId,
+				shooterId,
+				targetPlayerId,
+				FormatVector3(hitPosition)
+			)
+		)
+		return
+	end
+
 	local targetUnitInfo = unitInfoMap[targetPlayerId]
 	local isProtected = false
 	if targetUnitInfo ~= nil then
