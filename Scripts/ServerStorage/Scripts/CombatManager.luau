@@ -179,7 +179,7 @@ local vehiclePoseHistoryMap: { [number]: { VehiclePoseSample } } = {}
 local playerDeadCallback: OnPlayerDeadCallback? = nil
 local botInfoMap: { [number]: BotInfo } = {}
 local botLobbyVisualRestoreMap: { [Model]: BotLobbyVisualRestore } = {}
-local nextBotId = -1
+local nextBotId = -100
 
 local serverMatchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
 local serverSnapshotTick = 0
@@ -1464,7 +1464,7 @@ function CombatManager.DestroyAllUnits()
 		CombatManager.DestroyUnitForPlayer(playerId, true)
 	end
 	table.clear(botInfoMap)
-	nextBotId = -1
+	nextBotId = -100
 	BroadcastBotMetaSync()
 end
 

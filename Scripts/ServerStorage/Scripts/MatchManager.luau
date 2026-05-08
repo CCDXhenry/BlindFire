@@ -82,32 +82,31 @@ local function GetRealtimeOnlinePlayerCount(): number
 	return #players:GetPlayers()
 end
 
+local function CalculateTargetRoundCount(onlinePlayerCount: number): number
+	if onlinePlayerCount <= 0 then
+		return 0
+	end
+	local minStartCount = GameConfig.MinPlayerToStart
+	local maxStartCount = math.max(minStartCount, GameConfig.MaxPlayerToStart)
+	return math.clamp(onlinePlayerCount, minStartCount, maxStartCount)
+end
+
+local function CalculateRequiredBotCount(realPlayerCount: number, onlinePlayerCount: number): number
+	-- 仅在有真人在线时补位；按“本局目标人数”补齐（不超过上限）
+	if onlinePlayerCount <= 0 then
+		return 0
+	end
+	local targetRoundCount = CalculateTargetRoundCount(onlinePlayerCount)
+	return math.max(0, targetRoundCount - realPlayerCount)
+end
+
 local function RefreshBotFillByRealPlayerCount(realPlayerCount: number, onlinePlayerCount: number)
 	if not GameConfig.EnableAIBotFill then
 		CombatManager.EnsureBotCount(0)
 		return
 	end
-	local requiredBots = 0
-	-- 规则1：仅 1 名非 AFK 真人时补 1 个 bot
-	if realPlayerCount == 1 then
-		requiredBots = 1
-	end
-	-- 规则2：仅 1 名玩家且该玩家 AFK 时补 2 个 bot，满足开局
-	if onlinePlayerCount == 1 and realPlayerCount == 0 then
-		requiredBots = 2
-	end
+	local requiredBots = CalculateRequiredBotCount(realPlayerCount, onlinePlayerCount)
 	CombatManager.EnsureBotCount(requiredBots)
-end
-
-local function CalculateRequiredBotCount(realPlayerCount: number, onlinePlayerCount: number): number
-	local requiredBots = 0
-	if realPlayerCount == 1 then
-		requiredBots = 1
-	end
-	if onlinePlayerCount == 1 and realPlayerCount == 0 then
-		requiredBots = 2
-	end
-	return requiredBots
 end
 
 local function CollectLobbySpawnBaseParts(): { BasePart }
@@ -241,16 +240,31 @@ local function RepositionFillBotsToLobbySpawns()
 	end
 end
 
-local function BuildRoundParticipantIds(realPlayers: { Player }): { number }
+local function BuildRoundParticipantIds(realPlayers: { Player }, targetRoundCount: number): ({ Player }, { number })
+	local selectedRealPlayers: { Player } = {}
 	local participantIds: { number } = {}
 	for _, player in ipairs(realPlayers) do
+		if #participantIds >= targetRoundCount then
+			break
+		end
+		table.insert(selectedRealPlayers, player)
 		table.insert(participantIds, player.UserId)
 	end
 	for _, botId in CombatManager.GetBotIds() do
+		if #participantIds >= targetRoundCount then
+			break
+		end
 		table.insert(participantIds, botId)
 	end
-	LogBotDebug(string.format("BuildRoundParticipantIds real=%d bot=%d total=%d", #realPlayers, #CombatManager.GetBotIds(), #participantIds))
-	return participantIds
+	LogBotDebug(string.format(
+		"BuildRoundParticipantIds realSelected=%d realInput=%d botCurrent=%d total=%d targetRound=%d",
+		#selectedRealPlayers,
+		#realPlayers,
+		#CombatManager.GetBotIds(),
+		#participantIds,
+		targetRoundCount
+	))
+	return selectedRealPlayers, participantIds
 end
 
 local function OnRequestSetAfkState(player: Player, isAfk: boolean)
@@ -738,17 +752,20 @@ local function RunMatchLoop()
 		while true do
 			local nonAfkPlayerCount = GetRealtimeNonAfkOnlinePlayerCount()
 			local onlinePlayerCount = GetRealtimeOnlinePlayerCount()
+			local targetRoundCount = CalculateTargetRoundCount(onlinePlayerCount)
 			RefreshBotFillByRealPlayerCount(nonAfkPlayerCount, onlinePlayerCount)
 			RepositionFillBotsToLobbySpawns()
 			local participantCount = nonAfkPlayerCount + #CombatManager.GetBotIds()
 			LogBotDebug(string.format(
-				"InLobbyTick state=%s online=%d real=%d bot=%d participant=%d minStart=%d",
+				"InLobbyTick state=%s online=%d real=%d bot=%d participant=%d minStart=%d maxStart=%d targetRound=%d",
 				tostring(currentMatchState),
 				onlinePlayerCount,
 				nonAfkPlayerCount,
 				#CombatManager.GetBotIds(),
 				participantCount,
-				GameConfig.MinPlayerToStart
+				GameConfig.MinPlayerToStart,
+				GameConfig.MaxPlayerToStart,
+				targetRoundCount
 			))
 			if participantCount >= GameConfig.MinPlayerToStart then
 				lockedBotCountForRound = #CombatManager.GetBotIds()
@@ -769,6 +786,7 @@ local function RunMatchLoop()
 			local botCountBeforeRefresh = #CombatManager.GetBotIds()
 			local currentOnlineCount = GetRealtimeOnlinePlayerCount()
 			local currentNonAfkCount = GetRealtimeNonAfkOnlinePlayerCount()
+			local currentTargetRoundCount = CalculateTargetRoundCount(currentOnlineCount)
 			local requiredBotCount = CalculateRequiredBotCount(currentNonAfkCount, currentOnlineCount)
 			-- MatchCountdown 期间只补位不删位，避免玩家 AFK 状态波动导致已创建 bot 被删除
 			if requiredBotCount > botCountBeforeRefresh then
@@ -779,14 +797,16 @@ local function RunMatchLoop()
 			if botCountAfterRefresh ~= botCountBeforeRefresh then
 				RepositionFillBotsToLobbySpawns()
 			end
-			local currentParticipantCount = currentOnlineCount + #CombatManager.GetBotIds()
+			local currentParticipantCount = currentNonAfkCount + #CombatManager.GetBotIds()
 			LogBotDebug(string.format(
-				"MatchCountdownTick online=%d real=%d bot=%d participant=%d minStart=%d",
+				"MatchCountdownTick online=%d real=%d bot=%d participant=%d minStart=%d maxStart=%d targetRound=%d",
 				currentOnlineCount,
 				currentNonAfkCount,
 				#CombatManager.GetBotIds(),
 				currentParticipantCount,
-				GameConfig.MinPlayerToStart
+				GameConfig.MinPlayerToStart,
+				GameConfig.MaxPlayerToStart,
+				currentTargetRoundCount
 			))
 			if currentParticipantCount < GameConfig.MinPlayerToStart then
 				LogInfo("MatchCountdown aborted: player count below minimum")
@@ -799,19 +819,19 @@ local function RunMatchLoop()
 			continue
 		end
 
-		-- MatchCountdown 结束前只做“补位不删位”的最后校正
+		-- MatchCountdown 结束前做最终人数锁定（允许回收多余 bot）
 		local onlinePlayerCountAtLock = GetRealtimeOnlinePlayerCount()
 		local nonAfkPlayerCountAtLock = GetRealtimeNonAfkOnlinePlayerCount()
-		local requiredBotCountAtLock = CalculateRequiredBotCount(nonAfkPlayerCountAtLock, onlinePlayerCountAtLock)
-		if requiredBotCountAtLock > #CombatManager.GetBotIds() then
-			CombatManager.EnsureBotCount(requiredBotCountAtLock)
-		end
+		local targetRoundCountAtLock = CalculateTargetRoundCount(onlinePlayerCountAtLock)
+		local selectedRealCountAtLock = math.min(nonAfkPlayerCountAtLock, targetRoundCountAtLock)
+		local requiredBotCountAtLock = math.max(0, targetRoundCountAtLock - selectedRealCountAtLock)
+		CombatManager.EnsureBotCount(requiredBotCountAtLock)
 		lockedBotCountForRound = #CombatManager.GetBotIds()
 		-- 本局 bot 数在这里最终锁定；直到对局结束前不再增删
 		CombatManager.EnsureBotCount(lockedBotCountForRound)
 		RepositionFillBotsToLobbySpawns()
-		local roundParticipantPlayers = _GetNonAfkPlayers()
-		local participantIds = BuildRoundParticipantIds(roundParticipantPlayers)
+		local nonAfkPlayersAtLock = _GetNonAfkPlayers()
+		local roundParticipantPlayers, participantIds = BuildRoundParticipantIds(nonAfkPlayersAtLock, targetRoundCountAtLock)
 		if #participantIds < GameConfig.MinPlayerToStart then
 			LogInfo("Match start aborted: non-afk player count below minimum")
 			LogBotDebug(string.format("MatchStart aborted participants=%d minStart=%d", #participantIds, GameConfig.MinPlayerToStart))
@@ -840,10 +860,12 @@ local function RunMatchLoop()
 		BroadcastMatchState(GameConfig.MatchState.GameStartCountdown, GameConfig.RoundStartCountdown)
 		local gameStartAborted = RunPhaseWithAbortPolling(GameConfig.RoundStartCountdown, function(): boolean
 			local currentOnlineCount = GetRealtimeOnlinePlayerCount()
-			local participantCount = currentOnlineCount + #CombatManager.GetBotIds()
+			local currentNonAfkCount = GetRealtimeNonAfkOnlinePlayerCount()
+			local participantCount = currentNonAfkCount + #CombatManager.GetBotIds()
 			LogBotDebug(string.format(
-				"GameStartCountdownTick online=%d bot=%d participant=%d",
+				"GameStartCountdownTick online=%d real=%d bot=%d participant=%d",
 				currentOnlineCount,
+				currentNonAfkCount,
 				#CombatManager.GetBotIds(),
 				participantCount
 			))

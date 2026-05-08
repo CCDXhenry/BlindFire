@@ -295,14 +295,15 @@ export type ClientOtherPlayerInfo = ClientOtherPlayerSyncInfo & {}
 -- Demo 核心玩法常量
 -- ============================================================
 
-GameConfig.MinPlayerToStart = 2
+GameConfig.MinPlayerToStart = 8
+GameConfig.MaxPlayerToStart = 8
 GameConfig.EnableAIBotFill = true
 GameConfig.AIBotMinFireInterval = 2
 GameConfig.AIBotMaxFireInterval = 5
 GameConfig.AIBotNamePrefix = "BOT"
 -- 竞技场控制
 GameConfig.ArenaBaseHalfSize = 40
-GameConfig.ArenaExtraHalfSizePerPlayer = 10
+GameConfig.ArenaExtraHalfSizePerPlayer = 7.5
 -- 场地边长一半（初始值，由 ArenaManager 动态修改）
 GameConfig.ArenaHalfSize = 60
 GameConfig.ArenaMinHalfSize = 30
@@ -327,7 +328,7 @@ GameConfig.RoundStartCountdown = 3
 -- 战斗阶段持续时长（秒）
 GameConfig.RoundFightDuration = 120
 -- 大厅到传送倒计时
-GameConfig.MatchCountdown = 45
+GameConfig.MatchCountdown = 30
 -- 准备入座延迟
 GameConfig.ArenaSeatPrepareDelay = 0.22
 -- 返回大厅解座等待
