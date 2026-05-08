@@ -2273,7 +2273,8 @@ local function ResolveProjectileHit(
 		hitServerTime,
 		adaptiveDelaySec,
 		targetRttSec,
-		targetJitterSec
+		targetJitterSec,
+		isProtected
 	)
 	NetMsg.FireNotifyHpChanged(targetPlayerId, hitCount, maxHits, hitServerTime, adaptiveDelaySec)
 	local targetPlayer = players:GetPlayerByUserId(targetPlayerId)

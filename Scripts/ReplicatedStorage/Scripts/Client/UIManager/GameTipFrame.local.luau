@@ -832,7 +832,8 @@ NetMsg.ConnectNotifyHit(function(
 	hitServerTime,
 	adaptiveDelaySec,
 	_targetRttSec,
-	_targetJitterSec
+	_targetJitterSec,
+	_isProtected
 )
 	if targetPlayerId == players.LocalPlayer.UserId then
 		local sampleServerTime = if hitServerTime == hitServerTime then hitServerTime else workspaceService:GetServerTimeNow()

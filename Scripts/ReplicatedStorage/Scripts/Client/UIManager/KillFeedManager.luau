@@ -206,8 +206,12 @@ local function OnNotifyHit(
 	_hitServerTime: number,
 	_adaptiveDelaySec: number,
 	_targetRttSec: number,
-	_targetJitterSec: number
+	_targetJitterSec: number,
+	isProtected: boolean
 )
+	if isProtected then
+		return
+	end
 	local previousHitCount = playerHitCountMap[targetPlayerId]
 	if previousHitCount ~= nil and hitCount <= previousHitCount then
 		return

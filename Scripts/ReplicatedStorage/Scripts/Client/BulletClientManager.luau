@@ -152,14 +152,6 @@ local function PlayGlobalCombatSound(soundOrigin: Instance?)
 	SoundTool.PlayGlobalSoundEffect(soundOrigin, false)
 end
 
-local function IsTargetModelInvincible(targetState: ClientUnitState): boolean
-	local targetModel = targetState.model
-	if targetModel == nil then
-		return false
-	end
-	return targetModel:GetAttribute("IsInvincible") == true
-end
-
 local function ClearCachedFireSoundForModel(unitModel: Model?)
 	if unitModel == nil then
 		return
@@ -849,7 +841,8 @@ function BulletClientManager.OnHit(
 	hitServerTime: number,
 	adaptiveDelaySec: number,
 	_targetRttSec: number,
-	_targetJitterSec: number
+	_targetJitterSec: number,
+	isProtected: boolean
 )
 	local targetState = unitStateMap[targetPlayerId]
 	if targetState == nil then
@@ -867,13 +860,12 @@ function BulletClientManager.OnHit(
 		if latestTargetState == nil then
 			return
 		end
-		local isTargetInvincible = IsTargetModelInvincible(latestTargetState)
-		if isTargetInvincible then
+		if isProtected then
 			PlayGlobalCombatSound(invincibleSoundOrigin or hitSoundOrigin)
 		else
 			PlayGlobalCombatSound(hitSoundOrigin)
 		end
-		if targetPlayerId == localPlayerId and not isTargetInvincible then
+		if targetPlayerId == localPlayerId and not isProtected then
 			PlayGlobalCombatSound(struckSoundOrigin)
 		end
 		latestTargetState.spinDir = (math.random(0, 1) == 0) and 1 or -1

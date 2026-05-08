@@ -311,7 +311,8 @@ function NetMsg.FireNotifyHit(
 	hitServerTime: number,
 	adaptiveDelaySec: number,
 	targetRttSec: number,
-	targetJitterSec: number
+	targetJitterSec: number,
+	isProtected: boolean
 )
 	notifyHitEvent:FireAllClients(
 		targetPlayerId,
@@ -323,7 +324,8 @@ function NetMsg.FireNotifyHit(
 		hitServerTime,
 		adaptiveDelaySec,
 		targetRttSec,
-		targetJitterSec
+		targetJitterSec,
+		isProtected
 	)
 end
 
@@ -337,7 +339,8 @@ function NetMsg.ConnectNotifyHit(callback: (
 	hitServerTime: number,
 	adaptiveDelaySec: number,
 	targetRttSec: number,
-	targetJitterSec: number
+	targetJitterSec: number,
+	isProtected: boolean
 ) -> ())
 	notifyHitEvent.OnClientEvent:Connect(callback)
 end
