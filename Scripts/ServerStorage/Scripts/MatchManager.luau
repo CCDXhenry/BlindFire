@@ -823,15 +823,28 @@ local function RunMatchLoop()
 		local onlinePlayerCountAtLock = GetRealtimeOnlinePlayerCount()
 		local nonAfkPlayerCountAtLock = GetRealtimeNonAfkOnlinePlayerCount()
 		local targetRoundCountAtLock = CalculateTargetRoundCount(onlinePlayerCountAtLock)
-		local selectedRealCountAtLock = math.min(nonAfkPlayerCountAtLock, targetRoundCountAtLock)
-		local requiredBotCountAtLock = math.max(0, targetRoundCountAtLock - selectedRealCountAtLock)
-		CombatManager.EnsureBotCount(requiredBotCountAtLock)
-		lockedBotCountForRound = #CombatManager.GetBotIds()
+		local roundCapacityAtLock = math.max(GameConfig.MinPlayerToStart, GameConfig.MaxPlayerToStart)
+		local selectedRealCountAtLock = math.min(nonAfkPlayerCountAtLock, roundCapacityAtLock)
+		local currentBotCountAtLock = #CombatManager.GetBotIds()
+		local maxBotAllowedAtLock = math.max(0, roundCapacityAtLock - selectedRealCountAtLock)
+		-- 开局锁定时尽量保留已创建 bot，仅在超过本局容量上限时裁剪
+		lockedBotCountForRound = math.min(currentBotCountAtLock, maxBotAllowedAtLock)
+		LogBotDebug(string.format(
+			"LockBotCountDecision online=%d nonAfk=%d targetRound=%d roundCap=%d realSelected=%d botCurrent=%d botMaxAllowed=%d botLocked=%d",
+			onlinePlayerCountAtLock,
+			nonAfkPlayerCountAtLock,
+			targetRoundCountAtLock,
+			roundCapacityAtLock,
+			selectedRealCountAtLock,
+			currentBotCountAtLock,
+			maxBotAllowedAtLock,
+			lockedBotCountForRound
+		))
 		-- 本局 bot 数在这里最终锁定；直到对局结束前不再增删
 		CombatManager.EnsureBotCount(lockedBotCountForRound)
 		RepositionFillBotsToLobbySpawns()
 		local nonAfkPlayersAtLock = _GetNonAfkPlayers()
-		local roundParticipantPlayers, participantIds = BuildRoundParticipantIds(nonAfkPlayersAtLock, targetRoundCountAtLock)
+		local roundParticipantPlayers, participantIds = BuildRoundParticipantIds(nonAfkPlayersAtLock, roundCapacityAtLock)
 		if #participantIds < GameConfig.MinPlayerToStart then
 			LogInfo("Match start aborted: non-afk player count below minimum")
 			LogBotDebug(string.format("MatchStart aborted participants=%d minStart=%d", #participantIds, GameConfig.MinPlayerToStart))
