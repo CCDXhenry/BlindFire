@@ -9,6 +9,7 @@ local GameTexts = {
 	RoundVictory = { key = "RoundVictory", source = "Victory!" },
 	RoundNoSurvivors = { key = "RoundNoSurvivors", source = "Round over — no survivors" },
 	RoundTimeDraw = { key = "RoundTimeDraw", source = "Time! Surviving draw" },
+	KillFeedHit = { key = "KillFeedHit", source = "{1} hits {2}" },
 	KillFeedDefeated = { key = "KillFeedDefeated", source = "{1} eliminates {2}" },
 	InsufficientCoin = { key = "InsufficientCoin", source = "Insufficient Coins!" },
 	AfkOff = { key = "AfkOff", source = "[T] AFK: OFF" },
