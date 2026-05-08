@@ -46,8 +46,13 @@ local RingHighlightColor: Color3 = Color3.fromRGB(170, 255, 190)
 local RingHighlightDurationSeconds: number = 0.25
 local FireRingUpdateIntervalSec: number = 1 / 20
 local fireRingUpdateAccumSec: number = 0
+local RealPlayerAdorneeRetryIntervalSec: number = 0.25
+local RealPlayerAdorneeRetryLogIntervalSec: number = 2
+local realPlayerAdorneeRetryAccumSec: number = 0
 
 local RemoveUIForPlayer: (number) -> ()
+local realPlayerAdorneeLastWarnClockMap: { [number]: number } = {}
+local realPlayerAdorneePendingMap: { [number]: boolean } = {}
 
 local function CollectFireRingSegmentFrames(fireCooldownFrame: Frame): { Frame }
 	local segmentList: { Frame } = {}
@@ -226,6 +231,40 @@ local function UpdateUIVisibility(ui: BillboardGui, isParticipant: boolean)
 	end
 end
 
+local function TryAttachUiToRealPlayer(playerId: number, ui: BillboardGui, isParticipant: boolean): (boolean, string?)
+	local player = players:GetPlayerByUserId(playerId)
+	if player == nil then
+		return false, "player_missing"
+	end
+	local character = player.Character
+	if character == nil then
+		return false, "character_missing"
+	end
+
+	local humanoid = character:FindFirstChild("Humanoid")
+	if humanoid ~= nil and humanoid:IsA("Humanoid") then
+		humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+		humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+	end
+
+	local head = character:FindFirstChild("Head")
+	if head == nil or not head:IsA("BasePart") then
+		return false, "head_missing"
+	end
+	ui.Adornee = head
+
+	local playerGui = players.LocalPlayer:FindFirstChild("PlayerGui")
+	if playerGui == nil then
+		return false, "player_gui_missing"
+	end
+	if ui.Parent ~= playerGui then
+		ui.Parent = playerGui
+		BillboardManager.Track(ui)
+	end
+	UpdateUIVisibility(ui, isParticipant)
+	return true, nil
+end
+
 local function GetDisplayNameByPlayerId(playerId: number): string
 	local player = players:GetPlayerByUserId(playerId)
 	if player ~= nil then
@@ -291,6 +330,40 @@ local function RefreshBotUiAdornee(playerId: number)
 	end
 end
 
+local function RefreshRealPlayerUiAdornee(playerId: number)
+	local data = playerUIMap[playerId]
+	if data == nil then
+		return
+	end
+	if players:GetPlayerByUserId(playerId) == nil then
+		return
+	end
+
+	local playerGui = players.LocalPlayer:FindFirstChild("PlayerGui")
+	if data.ui.Adornee ~= nil and playerGui ~= nil and data.ui.Parent == playerGui then
+		realPlayerAdorneePendingMap[playerId] = nil
+		return
+	end
+
+	local attached, reason = TryAttachUiToRealPlayer(playerId, data.ui, data.isParticipant)
+	if attached then
+		if realPlayerAdorneePendingMap[playerId] then
+			print(string.format("[PlayerInfoUIManager] RecoveredPlayerNameUI userId=%d", playerId))
+		end
+		realPlayerAdorneePendingMap[playerId] = nil
+		realPlayerAdorneeLastWarnClockMap[playerId] = nil
+		return
+	end
+
+	realPlayerAdorneePendingMap[playerId] = true
+	local nowClock = os.clock()
+	local lastWarnClock = realPlayerAdorneeLastWarnClockMap[playerId]
+	if lastWarnClock == nil or nowClock - lastWarnClock >= RealPlayerAdorneeRetryLogIntervalSec then
+		warn(string.format("[PlayerInfoUIManager] PendingPlayerNameUI userId=%d reason=%s", playerId, reason or "unknown"))
+		realPlayerAdorneeLastWarnClockMap[playerId] = nowClock
+	end
+end
+
 -- PlayerInfoUIOffset 为在模板 BillboardGui.StudsOffset 基础上的附加偏移；仅在 CreateUIForPlayer 时按载具设一次
 local function updatePlayerInfoUiStudsOffsetFromVehicle(playerId: number)
 	local data = playerUIMap[playerId]
@@ -329,31 +402,21 @@ local function CreateUIForPlayer(playerId: number, isParticipant: boolean, vehic
 		end
 		
 		if player then
-			local localPlayer = players.LocalPlayer
 			local function SetupAdornee()
 				if not ui or ui.Parent == nil then return end -- Validate UI is not destroyed
-				local character = player.Character
-				if not character then return end
-				
-				-- Hide default Roblox name UI
-				local humanoid = character:WaitForChild("Humanoid", 5) :: Humanoid?
-				if humanoid then
-					humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
-					humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
-				end
-
-				-- Setup Name Label
-				-- Wait for the head if the character exists but head isn't ready
-				local currentHead = character:WaitForChild("Head", 5) :: BasePart?
-				if currentHead then
-					ui.Adornee = currentHead
-					local playerGui = localPlayer:WaitForChild("PlayerGui", 5)
-					if playerGui then
-						ui.Parent = playerGui
-						BillboardManager.Track(ui)
-						UpdateUIVisibility(ui, isParticipant)
+				local attached, reason = TryAttachUiToRealPlayer(playerId, ui, isParticipant)
+				if not attached then
+					realPlayerAdorneePendingMap[playerId] = true
+					local nowClock = os.clock()
+					local lastWarnClock = realPlayerAdorneeLastWarnClockMap[playerId]
+					if lastWarnClock == nil or nowClock - lastWarnClock >= RealPlayerAdorneeRetryLogIntervalSec then
+						warn(string.format("[PlayerInfoUIManager] InitialPlayerNameUIBindFailed userId=%d reason=%s", playerId, reason or "unknown"))
+						realPlayerAdorneeLastWarnClockMap[playerId] = nowClock
 					end
+					return
 				end
+				realPlayerAdorneePendingMap[playerId] = nil
+				realPlayerAdorneeLastWarnClockMap[playerId] = nil
 			end
 			
 			SetupAdornee()
@@ -400,6 +463,23 @@ local function CreateUIForPlayer(playerId: number, isParticipant: boolean, vehic
 	updatePlayerInfoUiStudsOffsetFromVehicle(playerId)
 end
 
+local function EnsureRealPlayerNameUI(player: Player)
+	if player.UserId == players.LocalPlayer.UserId then
+		return
+	end
+	local existingRecord = playerUIMap[player.UserId]
+	if existingRecord ~= nil and existingRecord.ui.Parent ~= nil then
+		return
+	end
+	CreateUIForPlayer(player.UserId, false, 1)
+end
+
+local function EnsureRealPlayerNameUIForAll()
+	for _, player in players:GetPlayers() do
+		EnsureRealPlayerNameUI(player)
+	end
+end
+
 RemoveUIForPlayer = function(playerId: number)
 	local data = playerUIMap[playerId]
 	if data then
@@ -407,6 +487,8 @@ RemoveUIForPlayer = function(playerId: number)
 		BillboardManager.Untrack(ui)
 		ui:Destroy()
 		playerUIMap[playerId] = nil
+		realPlayerAdorneePendingMap[playerId] = nil
+		realPlayerAdorneeLastWarnClockMap[playerId] = nil
 	end
 	local conn = connectionMap[playerId]
 	if conn then
@@ -445,6 +527,11 @@ function PlayerInfoUIManager.Init()
 	end)
 
 	NetMsg.ConnectNotifyUnitRemove(function(playerId)
+		if players:GetPlayerByUserId(playerId) ~= nil then
+			-- 真人玩家在大厅不依赖 Unit 生命周期，避免被误删导致名字丢失
+			RefreshRealPlayerUiAdornee(playerId)
+			return
+		end
 		RemoveUIForPlayer(playerId)
 	end)
 
@@ -477,8 +564,10 @@ function PlayerInfoUIManager.Init()
 
 	NetMsg.ConnectNotifyMatchState(function(matchState, countdown)
 		isFighting = (matchState == GameConfig.MatchState.Fighting or matchState == GameConfig.MatchState.GameStartCountdown)
+		EnsureRealPlayerNameUIForAll()
 		for playerId, data in playerUIMap do
 			UpdateUIVisibility(data.ui, data.isParticipant)
+			RefreshRealPlayerUiAdornee(playerId)
 			RefreshBotUiAdornee(playerId)
 		end
 		if matchState == GameConfig.MatchState.InLobby then
@@ -487,6 +576,15 @@ function PlayerInfoUIManager.Init()
 	end)
 	
 	NetMsg.FireRequestSyncUnit()
+	EnsureRealPlayerNameUIForAll()
+
+	players.PlayerAdded:Connect(function(player: Player)
+		EnsureRealPlayerNameUI(player)
+	end)
+
+	players.PlayerRemoving:Connect(function(player: Player)
+		RemoveUIForPlayer(player.UserId)
+	end)
 
 	-- Local player respawn handling
 	players.LocalPlayer.CharacterAdded:Connect(function()
@@ -505,13 +603,22 @@ function PlayerInfoUIManager.Init()
 
 	runService.Heartbeat:Connect(function(deltaTime: number)
 		fireRingUpdateAccumSec += deltaTime
-		if fireRingUpdateAccumSec < FireRingUpdateIntervalSec then
-			return
+		if fireRingUpdateAccumSec >= FireRingUpdateIntervalSec then
+			local updateDeltaTime = fireRingUpdateAccumSec
+			fireRingUpdateAccumSec = 0
+			UpdateLocalFireCooldownRingDisplay(updateDeltaTime)
 		end
-		local updateDeltaTime = fireRingUpdateAccumSec
-		fireRingUpdateAccumSec = 0
-		UpdateLocalFireCooldownRingDisplay(updateDeltaTime)
+
+		realPlayerAdorneeRetryAccumSec += deltaTime
+		local shouldRetryRealPlayerAdornee = realPlayerAdorneeRetryAccumSec >= RealPlayerAdorneeRetryIntervalSec
+		if shouldRetryRealPlayerAdornee then
+			realPlayerAdorneeRetryAccumSec = 0
+		end
+
 		for playerId, _ in playerUIMap do
+			if shouldRetryRealPlayerAdornee then
+				RefreshRealPlayerUiAdornee(playerId)
+			end
 			RefreshBotUiAdornee(playerId)
 		end
 	end)
