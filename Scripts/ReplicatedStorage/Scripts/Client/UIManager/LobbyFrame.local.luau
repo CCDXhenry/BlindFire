@@ -39,7 +39,6 @@ local vehiclesButton: ImageButton = lobbyFrame:FindFirstChild("VehiclesButton") 
 local vehiclesRedPoint: ImageLabel = vehiclesButton:FindFirstChild("VehiclesRedPoint") :: ImageLabel
 local afkButton: ImageButton = lobbyFrame:WaitForChild("AFKButton") :: ImageButton
 local afkButtonTextLabel: TextLabel = afkButton:WaitForChild("TextLabel") :: TextLabel
-local afkButtonLockImage: ImageLabel = afkButton:WaitForChild("LockImage") :: ImageLabel
 
 local AFK_OFF_COLOR = Color3.fromRGB(220, 60, 60)
 local AFK_ON_COLOR = Color3.fromRGB(60, 180, 75)
@@ -119,11 +118,10 @@ local function RefreshVehiclesRedPoint()
 end
 
 local function RefreshAfkButton()
-	local isAfkButtonVisible = not IsAfkButtonHiddenByBattleState()
 	local isAfkToggleLocked = IsAfkToggleLockedByMatchCountdown()
+	local isAfkButtonVisible = (not IsAfkButtonHiddenByBattleState()) and (not isAfkToggleLocked)
 	afkButton.Visible = isAfkButtonVisible
-	afkButton.Active = isAfkButtonVisible and (not isAfkToggleLocked)
-	afkButtonLockImage.Visible = isAfkButtonVisible and isAfkToggleLocked
+	afkButton.Active = isAfkButtonVisible
 	local afkTextInfo = if isAfk then GameTexts.AfkOn else GameTexts.AfkOff
 	TranslationTool.CustomAutoLocalizeTextLabel(afkButtonTextLabel, afkTextInfo.source, afkTextInfo.key, nil)
 	afkButton.Image = if isAfk then GameConfig.AFKOnImage else GameConfig.AFKOffImage
