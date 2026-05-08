@@ -3,7 +3,7 @@ local CombatCameraManager = {}
 
 local players = game:GetService("Players")
 local runService = game:GetService("RunService")
-local userInputService = game:GetService("UserInputService")
+local _userInputService = game:GetService("UserInputService")
 local workspaceService = game:GetService("Workspace")
 local contextActionService = game:GetService("ContextActionService")
 
@@ -28,6 +28,37 @@ local characterAddedConnection: RBXScriptConnection? = nil
 local scriptDestroyingConnection: RBXScriptConnection? = nil
 local renderSteppedConnection: RBXScriptConnection? = nil
 local localPlayer = players.LocalPlayer
+
+local INITIAL_CAMERA_ZOOM_APPLY_DELAY_SEC = 0.15
+local hasAppliedInitialZoomOnce = false
+
+local function ApplyInitialCameraZoomOnce()
+	if hasAppliedInitialZoomOnce then
+		return
+	end
+	hasAppliedInitialZoomOnce = true
+
+	local player = localPlayer
+	-- 初次进入服务器时，临时钳住缩放距离，避免默认过近；随后恢复范围以允许滚轮调整。
+	local originalMin = player.CameraMinZoomDistance
+	local originalMax = player.CameraMaxZoomDistance
+	local minValue = math.min(originalMin, originalMax)
+	local maxValue = math.max(originalMin, originalMax)
+	local initialDistance = GameConfig.InitialCameraZoomDistance or 50
+	local desired = math.clamp(initialDistance, minValue, maxValue)
+
+	player.CameraMinZoomDistance = desired
+	player.CameraMaxZoomDistance = desired
+
+	task.delay(INITIAL_CAMERA_ZOOM_APPLY_DELAY_SEC, function()
+		-- 若期间有其他逻辑接管缩放（或玩家设置被改），避免“恢复”覆盖外部写入。
+		if player.CameraMinZoomDistance ~= desired or player.CameraMaxZoomDistance ~= desired then
+			return
+		end
+		player.CameraMinZoomDistance = originalMin
+		player.CameraMaxZoomDistance = originalMax
+	end)
+end
 
 local function GetOwnVehicleSeat(): Seat?
 	local character = players.LocalPlayer.Character
@@ -138,6 +169,7 @@ end
 
 local function OnCharacterAdded(_character: Model)
 	RestoreJumpSuppressionIfNeeded()
+	ApplyInitialCameraZoomOnce()
 end
 
 local function OnScriptDestroying()
@@ -180,6 +212,11 @@ function CombatCameraManager.Init()
 	NetMsg.ConnectNotifyArenaSeatPrepare(function()
 		arenaSeatPrepareJumpLock = true
 	end)
+
+	-- 覆盖“脚本初始化晚于角色生成”的情况：本次进服仍只会执行一次
+	if localPlayer.Character ~= nil then
+		ApplyInitialCameraZoomOnce()
+	end
 end
 
 return CombatCameraManager

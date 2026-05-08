@@ -578,6 +578,9 @@ GameConfig.VehiclePosCorrectionMaxSpeed = 35
 -- 客户端 spinDir 反向抖动抑制窗口（毫秒），避免快照/事件来回切换造成净旋转 0
 GameConfig.VehicleSpinDirDebounceMs = 80
 
+-- 客户端相机：玩家首次进入服务器（仅一次）时的初始缩放距离（studs）
+GameConfig.InitialCameraZoomDistance = 50
+
 GameConfig.VisibleParameters = {
 	{ key = "UnitSpeed", alias = "单位移动速度" },
 	{ key = "UnitMaxHorizontalSpeed", alias = "水平速度上限" },
