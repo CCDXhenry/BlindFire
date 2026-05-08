@@ -163,7 +163,10 @@ local function GetVehicleSpeed(vehicleId: number): number
 end
 
 local function IsVehicleVisualActiveState(state: GameConfig.MatchState): boolean
-	return state == GameConfig.MatchState.Fighting or state == GameConfig.MatchState.GameStartCountdown
+	-- MatchCountdown：StartRound 与本局入场 teleport 均仍处备战阶段，必须与 GameStartCountdown 一样更新代理/视觉，否则远端（含机器人）会卡在地下看不见
+	return state == GameConfig.MatchState.Fighting
+		or state == GameConfig.MatchState.GameStartCountdown
+		or state == GameConfig.MatchState.MatchCountdown
 end
 
 local function NormalizeHorizontalDirection(direction: Vector3): Vector3

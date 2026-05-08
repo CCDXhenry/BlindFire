@@ -296,6 +296,10 @@ export type ClientOtherPlayerInfo = ClientOtherPlayerSyncInfo & {}
 -- ============================================================
 
 GameConfig.MinPlayerToStart = 2
+GameConfig.EnableAIBotFill = true
+GameConfig.AIBotMinFireInterval = 2
+GameConfig.AIBotMaxFireInterval = 5
+GameConfig.AIBotNamePrefix = "BOT"
 -- 竞技场控制
 GameConfig.ArenaBaseHalfSize = 40
 GameConfig.ArenaExtraHalfSizePerPlayer = 10
@@ -607,8 +611,10 @@ GameConfig.VisibleParameters = {
 
 local BulletData = require(script.BulletData)
 local VehiclesData = require(script.VehiclesData)
+local NPCNameData = require(script.NPCNameData)
 
 GameConfig.BulletDataMap = BulletData :: { [number]: BulletData }
+GameConfig.NPCNameDataMap = NPCNameData :: { [number]: { id: number, labelName_t: string } }
 GameConfig.VehicleDataMap = {} :: { [number]: VehicleData }
 local groupRewardVehicleIdListCache: { number }? = nil
 

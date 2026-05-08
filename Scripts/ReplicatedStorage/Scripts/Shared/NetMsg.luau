@@ -47,6 +47,7 @@ local notifyLeaderboardUpdateEvent: RemoteEvent = remoteEventsFolder:FindFirstCh
 local notifyLeaderboardResetTimeEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyLeaderboardResetTime") :: RemoteEvent
 local requestClaimGroupRewardEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestClaimGroupReward") :: RemoteEvent
 local notifyPlayerClaimedGroupRewardEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPlayerClaimedGroupReward") :: RemoteEvent
+local notifyBotMetaSyncEvent: RemoteEvent
 
 local function EnsureRemoteEvent(remoteEventName: string): RemoteEvent
 	local remoteEvent = remoteEventsFolder:FindFirstChild(remoteEventName)
@@ -69,6 +70,7 @@ end
 local requestGuideProgressEvent: RemoteEvent = EnsureRemoteEvent("RequestGuideProgress")
 local notifyGuideProgressUpdatedEvent: RemoteEvent = EnsureRemoteEvent("NotifyGuideProgressUpdated")
 local requestSyncMatchStateEvent: RemoteEvent = EnsureRemoteEvent("RequestSyncMatchState")
+notifyBotMetaSyncEvent = EnsureRemoteEvent("NotifyBotMetaSync")
 if notifyVehicleDirectionChangedEvent == nil then
 	notifyVehicleDirectionChangedEvent = EnsureRemoteEvent("NotifyVehicleDirectionChanged")
 end
@@ -530,6 +532,18 @@ end
 
 function NetMsg.ConnectNotifyPlayerClaimedGroupReward(callback: () -> ())
 	notifyPlayerClaimedGroupRewardEvent.OnClientEvent:Connect(callback)
+end
+
+function NetMsg.FireNotifyBotMetaSyncToAll(botMetaMap: { [string]: { name: string, isBot: boolean } })
+	notifyBotMetaSyncEvent:FireAllClients(botMetaMap)
+end
+
+function NetMsg.FireNotifyBotMetaSyncToPlayer(player: Player, botMetaMap: { [string]: { name: string, isBot: boolean } })
+	notifyBotMetaSyncEvent:FireClient(player, botMetaMap)
+end
+
+function NetMsg.ConnectNotifyBotMetaSync(callback: (botMetaMap: { [string]: { name: string, isBot: boolean } }) -> ())
+	notifyBotMetaSyncEvent.OnClientEvent:Connect(callback)
 end
 
 function NetMsg.FireRequestGuideProgress(guideType: number)

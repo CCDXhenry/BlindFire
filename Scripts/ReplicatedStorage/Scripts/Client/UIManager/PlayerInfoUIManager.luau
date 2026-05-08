@@ -33,6 +33,7 @@ local PlayerInfoUIManager = {}
 local playerUIMap: { [number]: PlayerInfoUIRecord } = {}
 local connectionMap: { [number]: RBXScriptConnection } = {}
 local lastDeadServerTimeMap: { [number]: number } = {}
+local botMetaMap: { [string]: { name: string, isBot: boolean } } = {}
 local isFighting = false
 
 local SegmentNamePrefix = "SegmentFrame_"
@@ -225,6 +226,71 @@ local function UpdateUIVisibility(ui: BillboardGui, isParticipant: boolean)
 	end
 end
 
+local function GetDisplayNameByPlayerId(playerId: number): string
+	local player = players:GetPlayerByUserId(playerId)
+	if player ~= nil then
+		return player.DisplayName or player.Name
+	end
+	local botMeta = botMetaMap[tostring(playerId)]
+	if botMeta ~= nil and botMeta.isBot then
+		return botMeta.name
+	end
+	return "Player " .. tostring(playerId)
+end
+
+local function ResolveBotAdorneePart(playerId: number): BasePart?
+	local lobbyNpc = workspace:FindFirstChild("BotLobbyNpc_" .. tostring(playerId))
+	if lobbyNpc ~= nil and lobbyNpc:IsA("Model") then
+		local head = lobbyNpc:FindFirstChild("Head")
+		if head ~= nil and head:IsA("BasePart") then
+			return head
+		end
+		local hrp = lobbyNpc:FindFirstChild("HumanoidRootPart")
+		if hrp ~= nil and hrp:IsA("BasePart") then
+			return hrp
+		end
+	end
+
+	local vehicleModel = workspace:FindFirstChild("Vehicle_" .. tostring(playerId))
+	if vehicleModel ~= nil and vehicleModel:IsA("Model") then
+		local vehicleNpc = vehicleModel:FindFirstChild("BotNpcCharacter")
+		if vehicleNpc ~= nil and vehicleNpc:IsA("Model") then
+			local head = vehicleNpc:FindFirstChild("Head")
+			if head ~= nil and head:IsA("BasePart") then
+				return head
+			end
+			local hrp = vehicleNpc:FindFirstChild("HumanoidRootPart")
+			if hrp ~= nil and hrp:IsA("BasePart") then
+				return hrp
+			end
+		end
+		local baseDisk = vehicleModel:FindFirstChild("BaseDisk")
+		if baseDisk ~= nil and baseDisk:IsA("BasePart") then
+			return baseDisk
+		end
+	end
+	return nil
+end
+
+local function RefreshBotUiAdornee(playerId: number)
+	local data = playerUIMap[playerId]
+	if data == nil then
+		return
+	end
+	if players:GetPlayerByUserId(playerId) ~= nil then
+		return
+	end
+	local targetAdornee = ResolveBotAdorneePart(playerId)
+	if targetAdornee ~= nil then
+		data.ui.Adornee = targetAdornee
+		local localPlayerGui = players.LocalPlayer:FindFirstChild("PlayerGui")
+		if localPlayerGui ~= nil and data.ui.Parent ~= localPlayerGui then
+			data.ui.Parent = localPlayerGui
+			BillboardManager.Track(data.ui)
+		end
+	end
+end
+
 -- PlayerInfoUIOffset 为在模板 BillboardGui.StudsOffset 基础上的附加偏移；仅在 CreateUIForPlayer 时按载具设一次
 local function updatePlayerInfoUiStudsOffsetFromVehicle(playerId: number)
 	local data = playerUIMap[playerId]
@@ -254,6 +320,13 @@ local function CreateUIForPlayer(playerId: number, isParticipant: boolean, vehic
 		
 		ui = playerInfoUITemplate:Clone()
 		ui.Parent = replicatedStorage -- Just a holder until we can adonree
+		local controllerFrame = ui:FindFirstChild("ControllerFrame")
+		if controllerFrame then
+			local playerNameLabel = controllerFrame:FindFirstChild("PlayerName") :: TextLabel?
+			if playerNameLabel then
+				playerNameLabel.Text = GetDisplayNameByPlayerId(playerId)
+			end
+		end
 		
 		if player then
 			local localPlayer = players.LocalPlayer
@@ -270,14 +343,6 @@ local function CreateUIForPlayer(playerId: number, isParticipant: boolean, vehic
 				end
 
 				-- Setup Name Label
-				local controllerFrame = ui:FindFirstChild("ControllerFrame")
-				if controllerFrame then
-					local playerNameLabel = controllerFrame:FindFirstChild("PlayerName") :: TextLabel?
-					if playerNameLabel then
-						playerNameLabel.Text = player.DisplayName or player.Name
-					end
-				end
-
 				-- Wait for the head if the character exists but head isn't ready
 				local currentHead = character:WaitForChild("Head", 5) :: BasePart?
 				if currentHead then
@@ -294,6 +359,17 @@ local function CreateUIForPlayer(playerId: number, isParticipant: boolean, vehic
 			SetupAdornee()
 			local conn = player.CharacterAdded:Connect(SetupAdornee)
 			connectionMap[playerId] = conn
+		else
+			local botAdornee = ResolveBotAdorneePart(playerId)
+			if botAdornee ~= nil then
+				ui.Adornee = botAdornee
+				local playerGui = players.LocalPlayer:WaitForChild("PlayerGui", 5)
+				if playerGui then
+					ui.Parent = playerGui
+					BillboardManager.Track(ui)
+					UpdateUIVisibility(ui, isParticipant)
+				end
+			end
 		end
 		
 		playerUIMap[playerId] = {
@@ -340,6 +416,29 @@ RemoveUIForPlayer = function(playerId: number)
 end
 
 function PlayerInfoUIManager.Init()
+	NetMsg.ConnectNotifyBotMetaSync(function(latestBotMetaMap)
+		botMetaMap = latestBotMetaMap
+		-- 某些大厅时序下，bot 可能没有新的 UnitInit，但需要显示名字 UI；此处兜底补建
+		for idText, meta in botMetaMap do
+			if meta.isBot then
+				local botId = tonumber(idText)
+				if botId ~= nil and playerUIMap[botId] == nil then
+					CreateUIForPlayer(botId, false, 1)
+				end
+			end
+		end
+		for playerId, data in playerUIMap do
+			local controllerFrame = data.ui:FindFirstChild("ControllerFrame")
+			if controllerFrame then
+				local playerNameLabel = controllerFrame:FindFirstChild("PlayerName") :: TextLabel?
+				if playerNameLabel then
+					playerNameLabel.Text = GetDisplayNameByPlayerId(playerId)
+				end
+			end
+			RefreshBotUiAdornee(playerId)
+		end
+	end)
+
 	NetMsg.ConnectNotifyUnitInit(function(unitInitInfo)
 		CreateUIForPlayer(unitInitInfo.playerId, unitInitInfo.isParticipant, unitInitInfo.vehicleId)
 		UpdateHpUI(unitInitInfo.playerId, 0, unitInitInfo.maxHits)
@@ -380,6 +479,7 @@ function PlayerInfoUIManager.Init()
 		isFighting = (matchState == GameConfig.MatchState.Fighting or matchState == GameConfig.MatchState.GameStartCountdown)
 		for playerId, data in playerUIMap do
 			UpdateUIVisibility(data.ui, data.isParticipant)
+			RefreshBotUiAdornee(playerId)
 		end
 		if matchState == GameConfig.MatchState.InLobby then
 			table.clear(lastDeadServerTimeMap)
@@ -411,6 +511,9 @@ function PlayerInfoUIManager.Init()
 		local updateDeltaTime = fireRingUpdateAccumSec
 		fireRingUpdateAccumSec = 0
 		UpdateLocalFireCooldownRingDisplay(updateDeltaTime)
+		for playerId, _ in playerUIMap do
+			RefreshBotUiAdornee(playerId)
+		end
 	end)
 
 	print("[PlayerInfoUIManager] Initialized")

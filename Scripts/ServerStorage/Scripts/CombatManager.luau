@@ -94,6 +94,39 @@ type ProjectileVisual = {
 	linearVelocity: LinearVelocity,
 }
 
+type BotInfo = {
+	botId: number,
+	name: string,
+	vehicleId: number,
+	modelName: string?,
+	nextFireTime: number,
+}
+
+type BotLobbyPartSnap = {
+	part: BasePart,
+	transparency: number,
+	canCollide: boolean,
+	castShadow: boolean,
+	canTouch: boolean,
+	canQuery: boolean,
+}
+
+type BotLobbyDecalSnap = {
+	decal: Decal,
+	transparency: number,
+}
+
+type BotLobbyVisualRestore = {
+	partSnaps: { BotLobbyPartSnap },
+	decalSnaps: { BotLobbyDecalSnap },
+	proxyCanCollide: boolean,
+	proxyCanTouch: boolean,
+	proxyCanQuery: boolean,
+}
+
+local BOT_LOBBY_STAND_OFFSET_Y = 3
+local BOT_LOBBY_WS_NPC_PREFIX = "BotLobbyNpc"
+
 local heartbeatConnection: RBXScriptConnection? = nil
 local activeServerBullets: { [string]: ServerBullet } = {}
 -- 每个 shooterId 当前存活子弹数，O(1) 查询替代遍历
@@ -114,6 +147,9 @@ local SERVER_PROJECTILE_NAME_PREFIX = "ServerProjectile_"
 local SERVER_BULLETS_FOLDER_NAME = "ServerBullets"
 local SERVER_BULLET_SHOOTER_USER_ID_ATTR = "ShooterUserId"
 local SERVER_BULLET_TEMPLATE_NAME_ATTR = "TemplateName"
+local BOT_NAME_ATTR = "BotName"
+local BOT_NPC_CHILD_NAME = "BotNpcCharacter"
+local BOT_ID_PREFIX = "BOT_"
 local PROJECTILE_PREPARED_ATTR = "ServerPreparedProjectileTemplate"
 local PROJECTILE_PHYSICS_ROOT_NAME = "PhysicsRoot"
 local PROJECTILE_VISUAL_WELD_NAME = "VisualWeld"
@@ -134,12 +170,16 @@ local serverBulletsFolder: Folder? = nil
 local modelsFolder: Folder = replicatedStorage:WaitForChild("Models") :: Folder
 local vehiclesFolder: Folder = modelsFolder:WaitForChild("Vehicles") :: Folder
 local bulletModelsFolder: Folder = modelsFolder:WaitForChild("Bullet") :: Folder
+local botsFolder: Folder? = modelsFolder:FindFirstChild("Bots") :: Folder?
 
 local unitInfoMap: { [number]: ServerUnitInfo } = {}
 local vehicleInputStateMap: { [number]: ServerVehicleInputState } = {}
 local playerLatencyStatsMap: { [number]: PlayerLatencyStats } = {}
 local vehiclePoseHistoryMap: { [number]: { VehiclePoseSample } } = {}
 local playerDeadCallback: OnPlayerDeadCallback? = nil
+local botInfoMap: { [number]: BotInfo } = {}
+local botLobbyVisualRestoreMap: { [Model]: BotLobbyVisualRestore } = {}
+local nextBotId = -1
 
 local serverMatchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
 local serverSnapshotTick = 0
@@ -323,6 +363,89 @@ local function GetRandomSpinDir(): number
 	return (math.random(0, 1) == 0) and 1 or -1
 end
 
+local function IsBotId(playerId: number): boolean
+	return botInfoMap[playerId] ~= nil
+end
+
+local function AllocateBotId(): number
+	local candidateId = nextBotId
+	while true do
+		local collisionWithPlayer = players:GetPlayerByUserId(candidateId) ~= nil
+		local collisionWithBot = botInfoMap[candidateId] ~= nil
+		local collisionWithUnit = unitInfoMap[candidateId] ~= nil
+		if not collisionWithPlayer and not collisionWithBot and not collisionWithUnit then
+			nextBotId = candidateId - 1
+			return candidateId
+		end
+		candidateId -= 1
+	end
+end
+
+local function BuildBotMetaMap(): { [string]: { name: string, isBot: boolean } }
+	local botMetaMap: { [string]: { name: string, isBot: boolean } } = {}
+	for botId, botInfo in botInfoMap do
+		botMetaMap[tostring(botId)] = {
+			name = botInfo.name,
+			isBot = true,
+		}
+	end
+	return botMetaMap
+end
+
+local function BroadcastBotMetaSync()
+	NetMsg.FireNotifyBotMetaSyncToAll(BuildBotMetaMap())
+end
+
+local function GetRandomBotName(): string
+	local npcNameDataMap = GameConfig.NPCNameDataMap
+	if npcNameDataMap == nil then
+		return GameConfig.AIBotNamePrefix .. "_" .. tostring(math.abs(nextBotId))
+	end
+	local count = #npcNameDataMap
+	if count <= 0 then
+		return GameConfig.AIBotNamePrefix .. "_" .. tostring(math.abs(nextBotId))
+	end
+	local index = math.random(1, count)
+	local record = npcNameDataMap[index]
+	if typeof(record) == "table" and typeof(record.labelName_t) == "string" then
+		return tostring(record.labelName_t)
+	end
+	return GameConfig.AIBotNamePrefix .. "_" .. tostring(math.abs(nextBotId))
+end
+
+local function GetRandomBotModelName(): string?
+	if botsFolder == nil then
+		return nil
+	end
+	local modelList: { Instance } = {}
+	for _, child in botsFolder:GetChildren() do
+		if child:IsA("Model") then
+			table.insert(modelList, child)
+		end
+	end
+	if #modelList == 0 then
+		return nil
+	end
+	return modelList[math.random(1, #modelList)].Name
+end
+
+local function GetRandomVehicleId(): number
+	local vehicleIdList: { number } = {}
+	for vehicleId in GameConfig.VehicleDataMap do
+		table.insert(vehicleIdList, vehicleId)
+	end
+	if #vehicleIdList == 0 then
+		return 1
+	end
+	return vehicleIdList[math.random(1, #vehicleIdList)]
+end
+
+local function GetBotFireInterval(): number
+	local minInterval = math.max(0.1, GameConfig.AIBotMinFireInterval or 0.8)
+	local maxInterval = math.max(minInterval, GameConfig.AIBotMaxFireInterval or minInterval)
+	return minInterval + math.random() * (maxInterval - minInterval)
+end
+
 local function GetSpawnPosition(): Vector3
 	local arenaCenter, arenaSize = ArenaManager.GetArenaFloorInfo()
 	local halfSize = (arenaSize.X / 2) - GameConfig.ArenaSpawnMargin
@@ -433,6 +556,229 @@ end
 
 local function ApplyCollisionGroupForCharacter(character: Model)
 	ApplyCollisionGroupForModel(character, PLAYER_CHARACTER_COLLISION_GROUP)
+end
+
+-- ReplicatedStorage.Models.Bots：玩家外观模板（Model + Humanoid），用于 AI 入座表现
+local function ResolveBotAppearanceSourceTemplate(preferredTemplateName: string?): Model?
+	if botsFolder == nil then
+		return nil
+	end
+	if preferredTemplateName ~= nil and preferredTemplateName ~= "" then
+		local named = botsFolder:FindFirstChild(preferredTemplateName)
+		if named ~= nil and named:IsA("Model") then
+			return named
+		end
+	end
+	local modelList: { Model } = {}
+	for _, child in botsFolder:GetChildren() do
+		if child:IsA("Model") then
+			table.insert(modelList, child)
+		end
+	end
+	if #modelList == 0 then
+		return nil
+	end
+	return modelList[math.random(1, #modelList)]
+end
+
+local function MountBotCharacterOntoVehicleSeat(unitModel: Model, appearanceTemplateName: string?, displayName: string?)
+	local sourceTemplate = ResolveBotAppearanceSourceTemplate(appearanceTemplateName)
+	if sourceTemplate == nil then
+		return
+	end
+	local seatInstance = unitModel:FindFirstChild("Seat", true)
+	if seatInstance == nil or not seatInstance:IsA("Seat") then
+		_LogWarn("MountBotCharacterOntoVehicleSeat: Seat missing on vehicle template")
+		return
+	end
+	local oldNpc = unitModel:FindFirstChild(BOT_NPC_CHILD_NAME)
+	if oldNpc ~= nil then
+		oldNpc:Destroy()
+	end
+	local npcModel = sourceTemplate:Clone()
+	npcModel.Name = BOT_NPC_CHILD_NAME
+	local humanoid = npcModel:FindFirstChildOfClass("Humanoid")
+	local hrp = npcModel:FindFirstChild("HumanoidRootPart")
+	if humanoid == nil or hrp == nil or not hrp:IsA("BasePart") then
+		npcModel:Destroy()
+		_LogWarn("MountBotCharacterOntoVehicleSeat: template missing Humanoid or HumanoidRootPart")
+		return
+	end
+	local hrpPart = hrp :: BasePart
+	if displayName ~= nil and displayName ~= "" then
+		humanoid.DisplayName = displayName
+	end
+	humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+	ApplyCollisionGroupForCharacter(npcModel)
+	npcModel.Parent = unitModel
+
+	local function TryForceSeat(tryIndex: number)
+		if tryIndex > GameConfig.MaxForceSitRetry then
+			return
+		end
+		if seatInstance.Parent == nil or npcModel.Parent == nil then
+			return
+		end
+		if seatInstance.Occupant == humanoid then
+			return
+		end
+		npcModel:PivotTo(seatInstance.CFrame + Vector3.new(0, 2.5, 0))
+		hrpPart.AssemblyLinearVelocity = Vector3.zero
+		hrpPart.AssemblyAngularVelocity = Vector3.zero
+		humanoid.Sit = false
+		task.defer(function()
+			if seatInstance:IsA("Seat") and seatInstance.Parent ~= nil then
+				seatInstance:Sit(humanoid)
+			end
+		end)
+		task.delay(0.15, function()
+			TryForceSeat(tryIndex + 1)
+		end)
+	end
+	TryForceSeat(1)
+end
+
+local function LobbyWorkspaceNpcName(botId: number): string
+	return BOT_LOBBY_WS_NPC_PREFIX .. "_" .. tostring(botId)
+end
+
+local function DestroyWorkspaceLobbyNpc(botId: number)
+	local named = LobbyWorkspaceNpcName(botId)
+	local inst = workspace:FindFirstChild(named)
+	if inst ~= nil then
+		inst:Destroy()
+	end
+end
+
+local function RemoveInternalBotNpcFromVehicle(unitModel: Model)
+	local oldNpc = unitModel:FindFirstChild(BOT_NPC_CHILD_NAME)
+	if oldNpc ~= nil then
+		oldNpc:Destroy()
+	end
+end
+
+local function CaptureAndHideBotVehicleForLobby(unitInfo: ServerUnitInfo)
+	local unitModel = unitInfo.unitModel
+	if botLobbyVisualRestoreMap[unitModel] ~= nil then
+		return
+	end
+	local partSnaps: { BotLobbyPartSnap } = {}
+	local decalSnaps: { BotLobbyDecalSnap } = {}
+	for _, d in unitModel:GetDescendants() do
+		if d:IsA("BasePart") then
+			local bp = d :: BasePart
+			table.insert(partSnaps, {
+				part = bp,
+				transparency = bp.Transparency,
+				canCollide = bp.CanCollide,
+				castShadow = bp.CastShadow,
+				canTouch = bp.CanTouch,
+				canQuery = bp.CanQuery,
+			})
+			bp.Transparency = 1
+			bp.CastShadow = false
+			bp.CanCollide = false
+			bp.CanTouch = false
+			bp.CanQuery = false
+		elseif d:IsA("Decal") then
+			local dec = d :: Decal
+			table.insert(decalSnaps, { decal = dec, transparency = dec.Transparency })
+			dec.Transparency = 1
+		end
+	end
+	local proxy = unitInfo.rootPart
+	botLobbyVisualRestoreMap[unitModel] = {
+		partSnaps = partSnaps,
+		decalSnaps = decalSnaps,
+		proxyCanCollide = proxy.CanCollide,
+		proxyCanTouch = proxy.CanTouch,
+		proxyCanQuery = proxy.CanQuery,
+	}
+	proxy.CanCollide = false
+	proxy.CanTouch = false
+	proxy.CanQuery = false
+end
+
+local function RestoreBotVehicleLobbyPresentation(unitInfo: ServerUnitInfo?)
+	if unitInfo == nil then
+		return
+	end
+	DestroyWorkspaceLobbyNpc(unitInfo.playerId)
+	local unitModel = unitInfo.unitModel
+	local restore = botLobbyVisualRestoreMap[unitModel]
+	if restore == nil then
+		return
+	end
+	for _, snap in restore.partSnaps do
+		local bp = snap.part
+		if bp.Parent ~= nil then
+			bp.Transparency = snap.transparency
+			bp.CanCollide = snap.canCollide
+			bp.CastShadow = snap.castShadow
+			bp.CanTouch = snap.canTouch
+			bp.CanQuery = snap.canQuery
+		end
+	end
+	for _, ds in restore.decalSnaps do
+		local dec = ds.decal
+		if dec.Parent ~= nil then
+			dec.Transparency = ds.transparency
+		end
+	end
+	local proxy = unitInfo.rootPart
+	if proxy.Parent ~= nil then
+		proxy.CanCollide = restore.proxyCanCollide
+		proxy.CanTouch = restore.proxyCanTouch
+		proxy.CanQuery = restore.proxyCanQuery
+	end
+	botLobbyVisualRestoreMap[unitModel] = nil
+end
+
+local function EnsureWorkspaceLobbyNpcStanding(unitInfo: ServerUnitInfo, botInfo: BotInfo)
+	local botId = unitInfo.playerId
+	local name = LobbyWorkspaceNpcName(botId)
+	local existing = workspace:FindFirstChild(name)
+	local npcModel: Model
+	if existing ~= nil and existing:IsA("Model") then
+		npcModel = existing
+	else
+		DestroyWorkspaceLobbyNpc(botId)
+		local sourceTemplate = ResolveBotAppearanceSourceTemplate(botInfo.modelName)
+		if sourceTemplate == nil then
+			return
+		end
+		npcModel = sourceTemplate:Clone()
+		npcModel.Name = name
+		local humanoid = npcModel:FindFirstChildOfClass("Humanoid")
+		local hrp = npcModel:FindFirstChild("HumanoidRootPart")
+		if humanoid == nil or hrp == nil or not hrp:IsA("BasePart") then
+			npcModel:Destroy()
+			return
+		end
+		if botInfo.name ~= "" then
+			humanoid.DisplayName = botInfo.name
+		end
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
+		humanoid.Sit = false
+		ApplyCollisionGroupForCharacter(npcModel)
+		npcModel.Parent = workspace
+	end
+	local humanoid = npcModel:FindFirstChildOfClass("Humanoid")
+	if humanoid ~= nil then
+		humanoid.Sit = false
+	end
+	local basePos = unitInfo.visualRootPart.Position
+	npcModel:PivotTo(CFrame.new(basePos.X, basePos.Y + BOT_LOBBY_STAND_OFFSET_Y, basePos.Z))
+end
+
+local function ApplyBotLobbyPresentation(unitInfo: ServerUnitInfo)
+	local botInfo = botInfoMap[unitInfo.playerId]
+	if botInfo == nil then
+		return
+	end
+	RemoveInternalBotNpcFromVehicle(unitInfo.unitModel)
+	CaptureAndHideBotVehicleForLobby(unitInfo)
+	EnsureWorkspaceLobbyNpcStanding(unitInfo, botInfo)
 end
 
 local function ConfigureVisualVehicleModelForPresentation(unitModel: Model)
@@ -710,6 +1056,91 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 	return unitInfo
 end
 
+local function CreateUnitModelForBot(
+	botId: number,
+	vehicleId: number,
+	botName: string?,
+	botAppearanceTemplateName: string?
+): ServerUnitInfo?
+	local vehicleConfig = GameConfig.VehicleDataMap[vehicleId]
+	if vehicleConfig == nil then
+		return nil
+	end
+	local vehicleTemplate = GetVehicleTemplate(vehicleConfig.resourceName)
+	if vehicleTemplate == nil then
+		return nil
+	end
+	local unitModel: Model = vehicleTemplate:Clone()
+	unitModel.Name = "Vehicle_" .. tostring(botId)
+	if botName ~= nil then
+		unitModel:SetAttribute(BOT_NAME_ATTR, botName)
+	end
+	pcall(function()
+		unitModel.ModelStreamingMode = Enum.ModelStreamingMode.Persistent
+	end)
+	unitModel.Parent = workspace
+
+	local rootPart = unitModel:FindFirstChild("BaseDisk")
+	if rootPart == nil or not rootPart:IsA("BasePart") then
+		unitModel:Destroy()
+		return nil
+	end
+	local visualRootPart = rootPart :: BasePart
+	unitModel.PrimaryPart = visualRootPart
+	ConfigureVisualVehicleModelForPresentation(unitModel)
+
+	local physicsRootPart = CreateVehiclePhysicsProxyPart(botId, visualRootPart)
+	pcall(function()
+		physicsRootPart:SetNetworkOwner(nil)
+	end)
+	physicsRootPart.Anchored = true
+
+	local spawnPosition = GetSpawnPosition()
+	local undergroundPosition = Vector3.new(spawnPosition.X, UNDERGROUND_Y, spawnPosition.Z)
+	local moveAngle = GetRandomMoveAngle()
+	local spinDir = GetRandomSpinDir()
+	local unitSpeed = vehicleConfig.moveSpeed or GameConfig.UnitSpeed
+	local tvx, tvz = VehicleLocomotionTool.AngleToVelocityXZ(moveAngle, unitSpeed)
+	local initYawRad = math.atan2(tvz, tvx)
+	local initCFrame = CFrame.new(undergroundPosition) * VehicleLocomotionTool.UprightGoalCFrame(initYawRad)
+	physicsRootPart.CFrame = initCFrame
+	unitModel:PivotTo(initCFrame)
+
+	local unitInfo: ServerUnitInfo = {
+		playerId = botId,
+		unitModel = unitModel,
+		visualRootPart = visualRootPart,
+		rootPart = physicsRootPart,
+		spinDir = spinDir,
+		moveAngle = moveAngle,
+		invincibleUntil = 0,
+		targetVelX = tvx,
+		targetVelZ = tvz,
+		spinAngleRad = math.atan2(tvz, tvx),
+		lastWallBounceClock = 0,
+		lastVehicleBumpClock = 0,
+		driveVectorForce = nil,
+		vehicleConfig = vehicleConfig,
+		lastInputSeq = 0,
+		lastInputClientTime = 0,
+	}
+	unitInfoMap[botId] = unitInfo
+	vehicleInputStateMap[botId] = {
+		lastReceivedSeq = 0,
+		lastAppliedSeq = 0,
+		lastReceivedClock = os.clock(),
+		lastCmd = nil,
+	}
+	-- 大厅 / MatchCountdown：不挂座；R15 单独放在 workspace（见 ApplyBotLobbyPresentation）
+	if
+		serverMatchState ~= GameConfig.MatchState.InLobby
+		and serverMatchState ~= GameConfig.MatchState.MatchCountdown
+	then
+		MountBotCharacterOntoVehicleSeat(unitModel, botAppearanceTemplateName, botName)
+	end
+	return unitInfo
+end
+
 local function GetOwnedVehicleModelForPlayer(player: Player): Model?
 	local unitInfo = unitInfoMap[player.UserId]
 	if unitInfo ~= nil then
@@ -742,8 +1173,11 @@ local function unseatPlayerFromOwnedVehicle(player: Player)
 	end
 end
 
-function CombatManager.DestroyUnitForPlayer(playerId: number)
+function CombatManager.DestroyUnitForPlayer(playerId: number, preserveBotMeta: boolean?)
 	local unitInfo = unitInfoMap[playerId]
+	if IsBotId(playerId) then
+		DestroyWorkspaceLobbyNpc(playerId)
+	end
 	if unitInfo == nil then
 		local orphanName = VEHICLE_MODEL_NAME_PREFIX .. tostring(playerId)
 		local orphan = workspace:FindFirstChild(orphanName)
@@ -755,6 +1189,7 @@ function CombatManager.DestroyUnitForPlayer(playerId: number)
 		end
 		return
 	end
+	botLobbyVisualRestoreMap[unitInfo.unitModel] = nil
 	if unitInfo.unitModel.Parent ~= nil then
 		unitInfo.unitModel:Destroy()
 	end
@@ -765,6 +1200,9 @@ function CombatManager.DestroyUnitForPlayer(playerId: number)
 	vehicleInputStateMap[playerId] = nil
 	playerLatencyStatsMap[playerId] = nil
 	vehiclePoseHistoryMap[playerId] = nil
+	if IsBotId(playerId) and preserveBotMeta ~= true then
+		botInfoMap[playerId] = nil
+	end
 	LogInfo(string.format("DestroyUnit userId=%d", playerId))
 end
 
@@ -775,6 +1213,10 @@ function CombatManager.PlayVehicleDeathEffect(playerId: number, hitDirection: Ve
 	end
 
 	local model = unitInfo.unitModel
+	if IsBotId(playerId) then
+		DestroyWorkspaceLobbyNpc(playerId)
+		botLobbyVisualRestoreMap[model] = nil
+	end
 	local physicsRoot = unitInfo.rootPart
 	unitInfoMap[playerId] = nil -- 立即停止模拟更新
 	vehicleInputStateMap[playerId] = nil
@@ -897,7 +1339,41 @@ local function ResetUnitToUnderground(playerId: number)
 end
 
 function CombatManager.SetMatchState(matchState: GameConfig.MatchState)
+	local prevMatchState = serverMatchState
 	serverMatchState = matchState
+
+	if
+		(matchState == GameConfig.MatchState.InLobby or matchState == GameConfig.MatchState.MatchCountdown)
+		and prevMatchState ~= matchState
+	then
+		for playerId, unitInfo in unitInfoMap do
+			if IsBotId(playerId) then
+				ApplyBotLobbyPresentation(unitInfo)
+			end
+		end
+	end
+
+	if matchState == GameConfig.MatchState.GameStartCountdown and prevMatchState ~= matchState then
+		for _, botInfo in botInfoMap do
+			local unitInfo = unitInfoMap[botInfo.botId]
+			if unitInfo ~= nil then
+				RestoreBotVehicleLobbyPresentation(unitInfo)
+				MountBotCharacterOntoVehicleSeat(unitInfo.unitModel, botInfo.modelName, botInfo.name)
+			end
+		end
+	end
+
+	-- 切到 Fighting：统一让机器人入座（此时 TeleportAllPlayersToArena 已完成）
+	if matchState == GameConfig.MatchState.Fighting and prevMatchState ~= matchState then
+		for botId, botInfo in botInfoMap do
+			local unitInfo = unitInfoMap[botId]
+			if unitInfo ~= nil then
+				if unitInfo.unitModel:FindFirstChild(BOT_NPC_CHILD_NAME) == nil then
+					MountBotCharacterOntoVehicleSeat(unitInfo.unitModel, botInfo.modelName, botInfo.name)
+				end
+			end
+		end
+	end
 end
 
 local function StepVehicleSimulation(dt: number)
@@ -980,7 +1456,22 @@ function CombatManager.DestroyAllUnits()
 		table.insert(ids, playerId)
 	end
 	for _, playerId in ids do
-		CombatManager.DestroyUnitForPlayer(playerId)
+		CombatManager.DestroyUnitForPlayer(playerId, true)
+	end
+	table.clear(botInfoMap)
+	nextBotId = -1
+	BroadcastBotMetaSync()
+end
+
+function CombatManager.DestroyAllHumanUnits()
+	local ids: { number } = {}
+	for playerId in unitInfoMap do
+		if not IsBotId(playerId) then
+			table.insert(ids, playerId)
+		end
+	end
+	for _, playerId in ids do
+		CombatManager.DestroyUnitForPlayer(playerId, true)
 	end
 end
 
@@ -1757,8 +2248,10 @@ local function ResolveProjectileHit(
 	NetMsg.FireNotifyHpChanged(targetPlayerId, hitCount, maxHits, hitServerTime, adaptiveDelaySec)
 	local targetPlayer = players:GetPlayerByUserId(targetPlayerId)
 	local shooterPlayer = players:GetPlayerByUserId(shooterId)
+	local shooterIsBot = IsBotId(shooterId)
+	local targetIsBot = IsBotId(targetPlayerId)
 
-	if didApplyDamage and targetPlayer ~= nil then
+	if didApplyDamage and targetPlayer ~= nil and not targetIsBot then
 		local targetInfo = ServerGameInfo.GetPlayerInfo(targetPlayer)
 		if targetInfo ~= nil then
 			AnalyticsTool.AddGameHurtEvent(targetPlayer, targetInfo.vehicleInventory.currentId)
@@ -1766,29 +2259,38 @@ local function ResolveProjectileHit(
 	end
 
 	--增加金币奖励
-	if shooterId ~= targetPlayerId and didApplyDamage then
+	if shooterId ~= targetPlayerId and didApplyDamage and not shooterIsBot then
 		if shooterPlayer ~= nil then
 			PlayerStateManager.AddRoundDealtHit(shooterId)
 			local shooterInfo = ServerGameInfo.GetPlayerInfo(shooterPlayer)
-			if shooterInfo ~= nil then
+			if shooterInfo ~= nil and not targetIsBot then
 				AnalyticsTool.AddCarHitEvent(shooterPlayer, shooterInfo.vehicleInventory.currentId, isDead)
 			end
 			if isDead then
-				PlayerStateManager.AddRoundKill(shooterId)
+				if not targetIsBot then
+					PlayerStateManager.AddRoundKill(shooterId)
+				end
 				--击杀奖励
 				ServerGameInfo.UpdatePlayerCurrency(shooterPlayer, GameConfig.CurrencyType.Coin, 2, GameConfig.ItemCountChangeReason.GainFromKill)
-				LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyKills, 1)
-				LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyEarnings, 2)
+				if not targetIsBot then
+					LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyKills, 1)
+					LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyEarnings, 2)
+				end
 			else
 				--命中奖励
 				ServerGameInfo.UpdatePlayerCurrency(shooterPlayer, GameConfig.CurrencyType.Coin, 1, GameConfig.ItemCountChangeReason.GainFromHit)
-				LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyEarnings, 1)
+				if not targetIsBot then
+					LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyEarnings, 1)
+				end
 			end
 		end
 	end
 
 	if isDead then
 		NetMsg.FireNotifyDead(targetPlayerId, shooterId, hitServerTime, adaptiveDelaySec)
+		if targetIsBot then
+			CombatManager.PlayVehicleDeathEffect(targetPlayerId, hitDirection)
+		end
 		if targetPlayer ~= nil then
 			local targetInfo = ServerGameInfo.GetPlayerInfo(targetPlayer)
 			local roundHitCount, roundKillCount, roundCoinEarned = PlayerStateManager.GetRoundStats(targetPlayerId)
@@ -1827,6 +2329,17 @@ function CombatManager.OnHeartbeat(dt: number)
 
 	local currentServerTime = workspace:GetServerTimeNow()
 	RecordVehiclePoseHistory(currentServerTime)
+	if serverMatchState == GameConfig.MatchState.Fighting then
+		local roundInfoMap = PlayerStateManager.GetAllPlayerRoundInfoMap()
+		local nowClock = os.clock()
+		for botId, botInfo in botInfoMap do
+			local roundInfo = roundInfoMap[botId]
+			if roundInfo ~= nil and roundInfo.isParticipant and roundInfo.isAlive and nowClock >= botInfo.nextFireTime then
+				CombatManager.FireForUnit(botId)
+				botInfo.nextFireTime = nowClock + GetBotFireInterval()
+			end
+		end
+	end
 
 	for bulletId, bullet in activeServerBullets do
 		if bullet.pendingDestroyServerTime ~= nil then
@@ -2234,6 +2747,7 @@ end
 
 function CombatManager.SyncToPlayer(player: Player)
 	LogInfo(string.format("SyncToPlayer userId=%d", player.UserId))
+	NetMsg.FireNotifyBotMetaSyncToPlayer(player, BuildBotMetaMap())
 	-- Sync existing participation units to this new joiner
 	local roundInfoMap = PlayerStateManager.GetAllPlayerRoundInfoMap()
 	for otherId, otherUnitInfo in unitInfoMap do
@@ -2260,12 +2774,22 @@ function CombatManager.SyncToPlayer(player: Player)
 end
 
 function CombatManager.OnPlayerAdded(player: Player)
+	local function HideDefaultNameAndHealth(character: Model)
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if humanoid ~= nil then
+			humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+			humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+		end
+	end
+
 	PlayerStateManager.EnsurePlayerRoundInfo(player)
 	if player.Character ~= nil then
 		ApplyCollisionGroupForCharacter(player.Character)
+		HideDefaultNameAndHealth(player.Character)
 	end
 	player.CharacterAdded:Connect(function(character: Model)
 		ApplyCollisionGroupForCharacter(character)
+		HideDefaultNameAndHealth(character)
 	end)
 	LogInfo(string.format("OnPlayerAdded userId=%d", player.UserId))
 end
@@ -2447,12 +2971,165 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 	end
 
 	LogInfo(string.format("FireAccepted userId=%d bulletId=%s", player.UserId, bulletId))
-	local playerInfo = ServerGameInfo.GetPlayerInfo(player)
-	if playerInfo ~= nil then
-		AnalyticsTool.AddCarFireEvent(player, playerInfo.vehicleInventory.currentId)
+	if not IsBotId(player.UserId) then
+		local playerInfo = ServerGameInfo.GetPlayerInfo(player)
+		if playerInfo ~= nil then
+			AnalyticsTool.AddCarFireEvent(player, playerInfo.vehicleInventory.currentId)
+		end
 	end
 	NetMsg.FireNotifyDirectionFlipToAll(player.UserId)
 	NetMsg.FireNotifyFireAccepted(player.UserId, clientTimestamp, spawnPos, shotDirection, serverTime, bulletId)
+end
+
+function CombatManager.TeleportBotVehicleToArenaPosition(botId: number, targetPosition: Vector3)
+	local unitInfo = unitInfoMap[botId]
+	if unitInfo == nil then
+		local botInfo = botInfoMap[botId]
+		if botInfo ~= nil then
+			local recreated = CreateUnitModelForBot(botId, botInfo.vehicleId, botInfo.name, botInfo.modelName)
+			if recreated ~= nil then
+				unitInfo = recreated
+			end
+		end
+	end
+	if unitInfo == nil then
+		return
+	end
+	local unitInfoNotNil = unitInfo :: ServerUnitInfo
+	RestoreBotVehicleLobbyPresentation(unitInfoNotNil)
+	local vehicleModel = unitInfoNotNil.unitModel
+	local primaryPart = vehicleModel.PrimaryPart
+	if primaryPart ~= nil and primaryPart:IsA("BasePart") then
+		primaryPart.Anchored = false
+		pcall(function()
+			primaryPart:SetNetworkOwner(nil)
+		end)
+	end
+	MoveModelKeepRotation(vehicleModel, targetPosition)
+	if primaryPart ~= nil and primaryPart:IsA("BasePart") then
+		local rotationOnly = primaryPart.CFrame - primaryPart.Position
+		primaryPart.CFrame = CFrame.new(targetPosition) * rotationOnly
+		primaryPart.AssemblyLinearVelocity = Vector3.zero
+		primaryPart.AssemblyAngularVelocity = Vector3.zero
+	end
+	local proxyPart = unitInfoNotNil.rootPart
+	local proxyRotation = proxyPart.CFrame - proxyPart.Position
+	proxyPart.CFrame = CFrame.new(targetPosition) * proxyRotation
+	proxyPart.AssemblyLinearVelocity = Vector3.zero
+	proxyPart.AssemblyAngularVelocity = Vector3.zero
+	pcall(function()
+		proxyPart:SetNetworkOwner(nil)
+	end)
+	NetMsg.FireNotifyTeleport(botId, targetPosition)
+end
+
+function CombatManager.TeleportBotVehicleToLobbySpawn(botId: number, targetPosition: Vector3)
+	local unitInfo = unitInfoMap[botId]
+	if unitInfo == nil then
+		local botInfo = botInfoMap[botId]
+		if botInfo ~= nil then
+			local recreated = CreateUnitModelForBot(botId, botInfo.vehicleId, botInfo.name, botInfo.modelName)
+			if recreated ~= nil then
+				unitInfo = recreated
+			end
+		end
+	end
+	if unitInfo == nil then
+		return
+	end
+	local unitInfoNotNil = unitInfo :: ServerUnitInfo
+	local vehicleModel = unitInfoNotNil.unitModel
+	local primaryPart = vehicleModel.PrimaryPart
+	if primaryPart ~= nil and primaryPart:IsA("BasePart") then
+		-- 大厅 / MatchCountdown 阶段保持锚定，避免物理漂移导致看起来“持续重置”
+		primaryPart.Anchored = true
+		pcall(function()
+			primaryPart:SetNetworkOwner(nil)
+		end)
+	end
+	MoveModelKeepRotation(vehicleModel, targetPosition)
+	if primaryPart ~= nil and primaryPart:IsA("BasePart") then
+		local rotationOnly = primaryPart.CFrame - primaryPart.Position
+		primaryPart.CFrame = CFrame.new(targetPosition) * rotationOnly
+		primaryPart.AssemblyLinearVelocity = Vector3.zero
+		primaryPart.AssemblyAngularVelocity = Vector3.zero
+	end
+	local proxyPart = unitInfoNotNil.rootPart
+	proxyPart.Anchored = true
+	local proxyRotation = proxyPart.CFrame - proxyPart.Position
+	proxyPart.CFrame = CFrame.new(targetPosition) * proxyRotation
+	proxyPart.AssemblyLinearVelocity = Vector3.zero
+	proxyPart.AssemblyAngularVelocity = Vector3.zero
+	pcall(function()
+		proxyPart:SetNetworkOwner(nil)
+	end)
+	NetMsg.FireNotifyTeleport(botId, targetPosition)
+	ApplyBotLobbyPresentation(unitInfoNotNil)
+end
+
+function CombatManager.FireForUnit(playerId: number)
+	local syntheticBulletId = string.format("%s%d_%d", BOT_ID_PREFIX, math.abs(playerId), math.floor(os.clock() * 1000))
+	CombatManager.OnRequestFire({
+		UserId = playerId,
+		Character = nil,
+	} :: any, workspace:GetServerTimeNow(), syntheticBulletId)
+end
+
+local function CreateBot(): number?
+	local botId = AllocateBotId()
+	local botName = GetRandomBotName()
+	local vehicleId = GetRandomVehicleId()
+	local appearanceTemplateName = GetRandomBotModelName()
+	local botUnit = CreateUnitModelForBot(botId, vehicleId, botName, appearanceTemplateName)
+	if botUnit == nil then
+		return nil
+	end
+	botInfoMap[botId] = {
+		botId = botId,
+		name = botName,
+		vehicleId = vehicleId,
+		modelName = appearanceTemplateName,
+		nextFireTime = os.clock() + GetBotFireInterval(),
+	}
+	PlayerStateManager.EnsurePlayerRoundInfoByUserId(botId)
+	return botId
+end
+
+function CombatManager.EnsureBotCount(targetCount: number)
+	targetCount = math.max(0, targetCount)
+	local botIds: { number } = {}
+	for botId in botInfoMap do
+		table.insert(botIds, botId)
+	end
+	table.sort(botIds, function(left, right)
+		return left > right
+	end)
+
+	while #botIds < targetCount do
+		local created = CreateBot()
+		if created == nil then
+			break
+		end
+		table.insert(botIds, created)
+	end
+	while #botIds > targetCount do
+		local removeId = table.remove(botIds)
+		if removeId ~= nil then
+			CombatManager.DestroyUnitForPlayer(removeId)
+			PlayerStateManager.RemovePlayerRoundInfo(removeId)
+			NetMsg.FireNotifyUnitRemoveToAll(removeId)
+			botInfoMap[removeId] = nil
+		end
+	end
+	BroadcastBotMetaSync()
+end
+
+function CombatManager.GetBotIds(): { number }
+	local botIds: { number } = {}
+	for botId in botInfoMap do
+		table.insert(botIds, botId)
+	end
+	return botIds
 end
 
 function CombatManager.StartRound(participantIds: { number })
@@ -2469,11 +3146,18 @@ function CombatManager.StartRound(participantIds: { number })
 	vehiclePoseHistoryMap = {}
 	PlayerStateManager.ResetAllPlayerRoundInfo(participantIds)
 	for _, playerId in participantIds do
+		PlayerStateManager.EnsurePlayerRoundInfoByUserId(playerId)
 		-- 无论之前有没有，都先尝试销毁旧载具并重新创建，以支持比赛间隙的载具切换
-		CombatManager.DestroyUnitForPlayer(playerId)
+		CombatManager.DestroyUnitForPlayer(playerId, true)
 
 		local player = players:GetPlayerByUserId(playerId)
 		local unitInfo = if player then CreateUnitModelForPlayer(player) else nil
+		if unitInfo == nil and IsBotId(playerId) then
+			local botInfo = botInfoMap[playerId]
+			if botInfo ~= nil then
+				unitInfo = CreateUnitModelForBot(playerId, botInfo.vehicleId, botInfo.name, botInfo.modelName)
+			end
+		end
 		
 		if unitInfo == nil then
 			continue

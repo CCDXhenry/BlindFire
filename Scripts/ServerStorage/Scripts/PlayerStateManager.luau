@@ -2,6 +2,7 @@
 local PlayerStateManager = {}
 
 local replicatedStorage: ReplicatedStorage = game:GetService("ReplicatedStorage")
+local players = game:GetService("Players")
 
 local scripts = replicatedStorage:WaitForChild("Scripts")
 local sharedScripts = scripts:WaitForChild("Shared")
@@ -23,9 +24,9 @@ local DEFAULT_LAST_FIRE_TIME = -math.huge
 
 local playerRoundInfoMap: {[number]: PlayerRoundInfo} = {}
 
-local function CreateDefaultPlayerRoundInfo(player: Player): PlayerRoundInfo
+local function CreateDefaultPlayerRoundInfoByUserId(userId: number): PlayerRoundInfo
 	return {
-		userId = player.UserId,
+		userId = userId,
 		isAlive = true,
 		isParticipant = false,
 		isAfk = false,
@@ -37,17 +38,25 @@ local function CreateDefaultPlayerRoundInfo(player: Player): PlayerRoundInfo
 	}
 end
 
+local function CreateDefaultPlayerRoundInfo(player: Player): PlayerRoundInfo
+	return CreateDefaultPlayerRoundInfoByUserId(player.UserId)
+end
+
 function PlayerStateManager.Init()
 	playerRoundInfoMap = {}
 end
 
-function PlayerStateManager.EnsurePlayerRoundInfo(player: Player): PlayerRoundInfo
-	local playerRoundInfo = playerRoundInfoMap[player.UserId]
+function PlayerStateManager.EnsurePlayerRoundInfoByUserId(userId: number): PlayerRoundInfo
+	local playerRoundInfo = playerRoundInfoMap[userId]
 	if playerRoundInfo == nil then
-		playerRoundInfo = CreateDefaultPlayerRoundInfo(player)
-		playerRoundInfoMap[player.UserId] = playerRoundInfo
+		playerRoundInfo = CreateDefaultPlayerRoundInfoByUserId(userId)
+		playerRoundInfoMap[userId] = playerRoundInfo
 	end
 	return playerRoundInfo
+end
+
+function PlayerStateManager.EnsurePlayerRoundInfo(player: Player): PlayerRoundInfo
+	return PlayerStateManager.EnsurePlayerRoundInfoByUserId(player.UserId)
 end
 
 function PlayerStateManager.RemovePlayerRoundInfo(playerId: number)
@@ -100,8 +109,11 @@ end
 
 function PlayerStateManager.GetNonAfkOnlinePlayerCount(): number
 	local count = 0
-	for _, playerRoundInfo in playerRoundInfoMap do
-		if playerRoundInfo.isAfk ~= true then
+	for _, player in players:GetPlayers() do
+		local userId = player.UserId
+		local playerRoundInfo = playerRoundInfoMap[userId]
+		-- 初始化尚未写入 playerRoundInfoMap 时，按在线真人计入，避免分服测试卡在 InLobby
+		if playerRoundInfo == nil or playerRoundInfo.isAfk ~= true then
 			count += 1
 		end
 	end

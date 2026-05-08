@@ -21,10 +21,23 @@ local uiOriginsFolder = replicatedStorage:WaitForChild("UI") :: Folder
 
 local container: Frame? = nil
 local entryTemplate: Frame? = nil
+local botMetaMap: { [string]: { name: string, isBot: boolean } } = {}
 
 local FEED_DURATION = 3
 local FADE_TIME = 0.5
 local MAX_ITEMS = 5
+
+local function GetDisplayNameByPlayerId(playerId: number): string
+	local player = players:GetPlayerByUserId(playerId)
+	if player ~= nil then
+		return player.DisplayName or player.Name
+	end
+	local botMeta = botMetaMap[tostring(playerId)]
+	if botMeta ~= nil and botMeta.isBot then
+		return botMeta.name
+	end
+	return "Player " .. tostring(playerId)
+end
 
 function KillFeedManager.Init(gameScreenGui: ScreenGui)
 	if container then return end
@@ -51,6 +64,9 @@ function KillFeedManager.Init(gameScreenGui: ScreenGui)
 	template:Destroy()
 	
 	container = feedFrame
+	NetMsg.ConnectNotifyBotMetaSync(function(latestBotMetaMap)
+		botMetaMap = latestBotMetaMap
+	end)
 	
 	NetMsg.ConnectNotifyDead(function(victimId: number, killerId: number?, _deadServerTime: number, _adaptiveDelaySec: number)
 		if killerId ~= nil then
@@ -65,8 +81,8 @@ function KillFeedManager.AddEntry(killerId: number, victimId: number)
 	local killer = players:GetPlayerByUserId(killerId)
 	local victim = players:GetPlayerByUserId(victimId)
 	
-	local killerName = killer and killer.DisplayName or "Player " .. tostring(killerId)
-	local victimName = victim and victim.DisplayName or "Player " .. tostring(victimId)
+	local killerName = if killer then (killer.DisplayName or killer.Name) else GetDisplayNameByPlayerId(killerId)
+	local victimName = if victim then (victim.DisplayName or victim.Name) else GetDisplayNameByPlayerId(victimId)
 	
 	local entry = entryTemplate:Clone()
 	entry.Name = "KillEntry"

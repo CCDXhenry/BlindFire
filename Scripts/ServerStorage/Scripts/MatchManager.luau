@@ -25,6 +25,7 @@ local LOBBY_SPAWN_NAME = "LobbySpawnArea"
 local LOBBY_SPAWN_POINTS_FOLDER_NAME = "SpawnPoints"
 local ARENA_SPAWN_FOLDER_NAME = "ArenaSpawnPoints"
 local LOG_PREFIX = "[MatchManager]"
+local BOT_DEBUG_LOG = true
 local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
 -- local MAX_SEAT_RETRY = 30
 -- local SEAT_RETRY_INTERVAL = 0.2
@@ -34,6 +35,7 @@ local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
 
 local seatRetryCountMap: { [number]: number } = {}
 local arenaTargetPositionMap: { [number]: Vector3 } = {}
+local botLobbyTargetPositionMap: { [number]: Vector3? } = {}
 
 local currentMatchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
 -- 与 currentMatchState 解耦：避免「等待玩家」循环中重复 Fire InLobby
@@ -44,8 +46,9 @@ local lastLobbySpawnIndex = 0
 local roundWorkerThread: thread? = nil
 local roundStartCallback: OnRoundStartCallback? = nil
 local isStopRequested: boolean = false
+local LogBotDebug: (message: string) -> ()
 
-local function GetNonAfkPlayers(): { Player }
+local function _GetNonAfkPlayers(): { Player }
 	local result: { Player } = {}
 	for _, player in players:GetPlayers() do
 		if not PlayerStateManager.IsPlayerAfk(player.UserId) then
@@ -53,6 +56,200 @@ local function GetNonAfkPlayers(): { Player }
 		end
 	end
 	return result
+end
+
+local function _GetOnlinePlayers(): { Player }
+	local result: { Player } = {}
+	for _, player in players:GetPlayers() do
+		table.insert(result, player)
+	end
+	return result
+end
+
+local function GetRealtimeNonAfkOnlinePlayerCount(): number
+	local count = 0
+	for _, player in players:GetPlayers() do
+		PlayerStateManager.EnsurePlayerRoundInfo(player)
+		if not PlayerStateManager.IsPlayerAfk(player.UserId) then
+			count += 1
+		end
+	end
+	return count
+end
+
+local function GetRealtimeOnlinePlayerCount(): number
+	return #players:GetPlayers()
+end
+
+local function RefreshBotFillByRealPlayerCount(realPlayerCount: number, onlinePlayerCount: number)
+	if not GameConfig.EnableAIBotFill then
+		CombatManager.EnsureBotCount(0)
+		return
+	end
+	local requiredBots = 0
+	-- 规则1：仅 1 名非 AFK 真人时补 1 个 bot
+	if realPlayerCount == 1 then
+		requiredBots = 1
+	end
+	-- 规则2：仅 1 名玩家且该玩家 AFK 时补 2 个 bot，满足开局
+	if onlinePlayerCount == 1 and realPlayerCount == 0 then
+		requiredBots = 2
+	end
+	CombatManager.EnsureBotCount(requiredBots)
+end
+
+local function CalculateRequiredBotCount(realPlayerCount: number, onlinePlayerCount: number): number
+	local requiredBots = 0
+	if realPlayerCount == 1 then
+		requiredBots = 1
+	end
+	if onlinePlayerCount == 1 and realPlayerCount == 0 then
+		requiredBots = 2
+	end
+	return requiredBots
+end
+
+local function CollectLobbySpawnBaseParts(): { BasePart }
+	local result: { BasePart } = {}
+	local spawnPointsFolder = workspace:FindFirstChild(LOBBY_SPAWN_POINTS_FOLDER_NAME)
+	if spawnPointsFolder then
+		for _, child in spawnPointsFolder:GetChildren() do
+			if child:IsA("BasePart") and string.find(child.Name, "Spawn_") then
+				table.insert(result, child)
+			end
+		end
+	end
+	return result
+end
+
+-- 补位机器人生成在场地地下，需与真玩家一样挪到大厅 Spawn_ 点附近，否则备战/开局阶段看不见
+local function RepositionFillBotsToLobbySpawns()
+	if not GameConfig.EnableAIBotFill then
+		return
+	end
+	local botIds = CombatManager.GetBotIds()
+	if #botIds == 0 then
+		table.clear(botLobbyTargetPositionMap)
+		return
+	end
+	local activeBotIdMap: { [number]: boolean } = {}
+	for _, botId in botIds do
+		activeBotIdMap[botId] = true
+	end
+	for existingBotId in botLobbyTargetPositionMap do
+		if not activeBotIdMap[existingBotId] then
+			botLobbyTargetPositionMap[existingBotId] = nil
+		end
+	end
+
+	local lobbyParts = CollectLobbySpawnBaseParts()
+	if #lobbyParts == 0 then
+		return
+	end
+	for i = #lobbyParts, 2, -1 do
+		local j = math.random(1, i)
+		lobbyParts[i], lobbyParts[j] = lobbyParts[j], lobbyParts[i]
+	end
+
+	local occupiedPositions: { Vector3 } = {}
+	for _, player in players:GetPlayers() do
+		local character = player.Character
+		if character ~= nil then
+			local hrp = character:FindFirstChild("HumanoidRootPart")
+			if hrp ~= nil and hrp:IsA("BasePart") then
+				table.insert(occupiedPositions, hrp.Position)
+			end
+		end
+	end
+
+	local minSeparation = math.max(2, GameConfig.MinSpawnSeparation * 0.4)
+	local function isPositionAvailable(candidate: Vector3): boolean
+		for _, occupied in occupiedPositions do
+			local dist = (candidate * Vector3.new(1, 0, 1) - occupied * Vector3.new(1, 0, 1)).Magnitude
+			if dist < minSeparation then
+				return false
+			end
+		end
+		return true
+	end
+
+	table.sort(botIds)
+	-- 已有 bot 保持原位，避免新增/删减 bot 时把老 bot 也重排
+	for _, botId in botIds do
+		local existingPosition = botLobbyTargetPositionMap[botId]
+		if existingPosition ~= nil then
+			table.insert(occupiedPositions, existingPosition)
+		end
+	end
+
+	for index, botId in ipairs(botIds) do
+		local existingPosition = botLobbyTargetPositionMap[botId]
+		if existingPosition ~= nil then
+			-- bot 可能在被销毁重建后回到地下；若偏离缓存大厅点则拉回缓存位置
+			local unitInfo = CombatManager.GetUnitInfoMap()[botId]
+			if unitInfo ~= nil then
+				local currentPos = unitInfo.rootPart.Position
+				local horizontalDelta = (currentPos * Vector3.new(1, 0, 1) - existingPosition * Vector3.new(1, 0, 1)).Magnitude
+				local isUnderground = currentPos.Y < (GameConfig.UnitY - 20)
+				if isUnderground or horizontalDelta > 2 then
+					CombatManager.TeleportBotVehicleToLobbySpawn(botId, existingPosition)
+				end
+			end
+			continue
+		end
+		local targetPosition: Vector3? = nil
+		local fallbackPart = lobbyParts[(index - 1) % #lobbyParts + 1]
+		for _, part in lobbyParts do
+			local offset = Vector3.new((math.random() - 0.5) * 2, 0, (math.random() - 0.5) * 2)
+			local candidate = Vector3.new(part.Position.X + offset.X, part.Position.Y + GameConfig.UnitY, part.Position.Z + offset.Z)
+			if isPositionAvailable(candidate) then
+				targetPosition = candidate
+				break
+			end
+		end
+		if targetPosition == nil then
+			-- 没有可直接使用的 Spawn_ 点时，围绕 fallback 做多次随机避让，尽量不与真人重叠
+			for _ = 1, 8 do
+				local offset = Vector3.new((math.random() - 0.5) * 6, 0, (math.random() - 0.5) * 6)
+				local candidate = Vector3.new(
+					fallbackPart.Position.X + offset.X,
+					fallbackPart.Position.Y + GameConfig.UnitY,
+					fallbackPart.Position.Z + offset.Z
+				)
+				if isPositionAvailable(candidate) then
+					targetPosition = candidate
+					break
+				end
+			end
+			if targetPosition == nil then
+				local offset = Vector3.new((math.random() - 0.5) * 2, 0, (math.random() - 0.5) * 2)
+				targetPosition = Vector3.new(
+					fallbackPart.Position.X + offset.X,
+					fallbackPart.Position.Y + GameConfig.UnitY,
+					fallbackPart.Position.Z + offset.Z
+				)
+			end
+		end
+		if targetPosition == nil then
+			continue
+		end
+		local targetPositionNotNil = targetPosition :: Vector3
+		CombatManager.TeleportBotVehicleToLobbySpawn(botId, targetPositionNotNil)
+		table.insert(occupiedPositions, targetPositionNotNil)
+		botLobbyTargetPositionMap[botId] = targetPositionNotNil
+	end
+end
+
+local function BuildRoundParticipantIds(realPlayers: { Player }): { number }
+	local participantIds: { number } = {}
+	for _, player in ipairs(realPlayers) do
+		table.insert(participantIds, player.UserId)
+	end
+	for _, botId in CombatManager.GetBotIds() do
+		table.insert(participantIds, botId)
+	end
+	LogBotDebug(string.format("BuildRoundParticipantIds real=%d bot=%d total=%d", #realPlayers, #CombatManager.GetBotIds(), #participantIds))
+	return participantIds
 end
 
 local function OnRequestSetAfkState(player: Player, isAfk: boolean)
@@ -82,6 +279,13 @@ end
 
 local function LogInfo(message: string)
 	--print(string.format("%s %s", LOG_PREFIX, message))
+end
+
+function LogBotDebug(message: string)
+	if not BOT_DEBUG_LOG then
+		return
+	end
+	print(string.format("%s[BotDebug] %s", LOG_PREFIX, message))
 end
 
 local function FormatVector3(vector: Vector3): string
@@ -285,6 +489,9 @@ local function TeleportAllPlayersToArena(participantPlayers: { Player })
 	local spawnPositionList = GetArenaSpawnPositionList()
 	LogInfo(string.format("Found %d spawn points after scaling", #spawnPositionList))
 
+	local botIds = CombatManager.GetBotIds()
+	table.sort(botIds)
+
 	-- Shuffle the predefined spawn points to ensure variety
 	for i = #spawnPositionList, 2, -1 do
 		local j = math.random(1, i)
@@ -292,13 +499,19 @@ local function TeleportAllPlayersToArena(participantPlayers: { Player })
 	end
 
 	local chosenPositions: { Vector3 } = {}
-	LogInfo(string.format("TeleportAllPlayersToArena playerCount=%d spawnPointCount=%d", #participantPlayers, #spawnPositionList))
-	for index, player in ipairs(participantPlayers) do
-		local initialTarget = spawnPositionList[index]
-		local targetPosition: Vector3? = nil
+	LogInfo(
+		string.format(
+			"TeleportAllPlayersToArena playerCount=%d botCount=%d spawnPointCount=%d",
+			#participantPlayers,
+			#botIds,
+			#spawnPositionList
+		)
+	)
 
+	local function assignSpawnForSlot(slotIndex: number): Vector3
+		local initialTarget = spawnPositionList[slotIndex]
+		local targetPosition: Vector3? = nil
 		if initialTarget then
-			-- Ensure predefined point doesn't conflict with already chosen ones
 			local conflict = false
 			for _, otherPos in chosenPositions do
 				local dist = (otherPos * Vector3.new(1, 0, 1) - initialTarget * Vector3.new(1, 0, 1)).Magnitude
@@ -310,17 +523,28 @@ local function TeleportAllPlayersToArena(participantPlayers: { Player })
 			if not conflict then
 				targetPosition = initialTarget
 			else
-				LogInfo(string.format("TeleportAllPlayersToArena: Predefined point index %d conflicts, falling back to random", index))
+				LogInfo(string.format("TeleportAllPlayersToArena: Predefined point index %d conflicts, falling back to random", slotIndex))
 			end
 		end
-
 		if targetPosition == nil then
 			targetPosition = GetRandomArenaPosition(chosenPositions)
 		end
+		return targetPosition
+	end
 
+	for index, player in ipairs(participantPlayers) do
+		local targetPosition = assignSpawnForSlot(index)
 		table.insert(chosenPositions, targetPosition)
 		arenaTargetPositionMap[player.UserId] = targetPosition
 		SeatPlayerOnVehicle(player, targetPosition)
+	end
+
+	for i, botId in ipairs(botIds) do
+		local slotIndex = #participantPlayers + i
+		local targetPosition = assignSpawnForSlot(slotIndex)
+		table.insert(chosenPositions, targetPosition)
+		arenaTargetPositionMap[botId] = targetPosition
+		CombatManager.TeleportBotVehicleToArenaPosition(botId, targetPosition)
 	end
 end
 
@@ -329,6 +553,12 @@ local function StabilizeArenaPlayers()
 		local targetPosition = arenaTargetPositionMap[player.UserId]
 		if targetPosition ~= nil then
 			SeatPlayerOnVehicle(player, targetPosition)
+		end
+	end
+	for _, botId in CombatManager.GetBotIds() do
+		local targetPosition = arenaTargetPositionMap[botId]
+		if targetPosition ~= nil then
+			CombatManager.TeleportBotVehicleToArenaPosition(botId, targetPosition)
 		end
 	end
 end
@@ -394,7 +624,13 @@ local function TeleportPlayerToLobby(player: Player, reloadCharacter: boolean?, 
 end
 
 local function TeleportAllPlayersToLobby()
-	CombatManager.DestroyAllUnits()
+	local staleBotIds = CombatManager.GetBotIds()
+	CombatManager.DestroyAllHumanUnits()
+	-- 每轮结束回大厅时重置 bot 大厅位置缓存，确保所有 bot 都会重新传送回大厅
+	table.clear(botLobbyTargetPositionMap)
+	for _, botId in staleBotIds do
+		arenaTargetPositionMap[botId] = nil
+	end
 
 	local lobbyPoints: { BasePart } = {}
 	local spawnPointsFolder = workspace:FindFirstChild(LOBBY_SPAWN_POINTS_FOLDER_NAME)
@@ -415,11 +651,43 @@ local function TeleportAllPlayersToLobby()
 	end
 
 	local playerList = players:GetPlayers()
+	local lobbySpawnPart = workspace:FindFirstChild(LOBBY_SPAWN_NAME)
+	local roundInfoMap = PlayerStateManager.GetAllPlayerRoundInfoMap()
+	local function IsPositionInsideLobbyArea(position: Vector3): boolean
+		if lobbySpawnPart == nil or not lobbySpawnPart:IsA("BasePart") then
+			return false
+		end
+		local relative = lobbySpawnPart.CFrame:PointToObjectSpace(position)
+		local halfSize = lobbySpawnPart.Size * 0.5
+		return math.abs(relative.X) <= halfSize.X and math.abs(relative.Y) <= halfSize.Y + 8 and math.abs(relative.Z) <= halfSize.Z
+	end
+
+	local function ShouldSkipLobbyReset(targetPlayer: Player): boolean
+		local isAfk = PlayerStateManager.IsPlayerAfk(targetPlayer.UserId)
+		local roundInfo = roundInfoMap[targetPlayer.UserId]
+		local character = targetPlayer.Character
+		if character == nil or character.PrimaryPart == nil then
+			return false
+		end
+		local isInLobbyArea = IsPositionInsideLobbyArea(character.PrimaryPart.Position)
+		if isAfk then
+			return isInLobbyArea
+		end
+		if roundInfo == nil or roundInfo.isAlive then
+			return false
+		end
+		return isInLobbyArea
+	end
+
 	for i, player in ipairs(playerList) do
 		local playerIndex = i
 		local targetPlayer = player
 		task.spawn(function()
 			arenaTargetPositionMap[targetPlayer.UserId] = nil
+			if ShouldSkipLobbyReset(targetPlayer) then
+				LogBotDebug(string.format("SkipLobbyReset userId=%d afkOrDeadInLobby=true", targetPlayer.UserId))
+				return
+			end
 
 			local targetPos: Vector3? = nil
 			if #lobbyPoints > 0 then
@@ -463,22 +731,65 @@ local function RunMatchLoop()
 		-- 每局开始前，重置停止请求，应用并同步参数配置
 		isStopRequested = false
 		ConfigManager.ApplyAndSync()
+		local lockedBotCountForRound = 0
 
-		local nonAfkPlayerCount = PlayerStateManager.GetNonAfkOnlinePlayerCount()
-		if nonAfkPlayerCount < GameConfig.MinPlayerToStart then
+		-- InLobby 阶段每秒判断一次补位机器人创建条件与开局条件
+		while true do
+			local nonAfkPlayerCount = GetRealtimeNonAfkOnlinePlayerCount()
+			local onlinePlayerCount = GetRealtimeOnlinePlayerCount()
+			RefreshBotFillByRealPlayerCount(nonAfkPlayerCount, onlinePlayerCount)
+			RepositionFillBotsToLobbySpawns()
+			local participantCount = nonAfkPlayerCount + #CombatManager.GetBotIds()
+			LogBotDebug(string.format(
+				"InLobbyTick state=%s online=%d real=%d bot=%d participant=%d minStart=%d",
+				tostring(currentMatchState),
+				onlinePlayerCount,
+				nonAfkPlayerCount,
+				#CombatManager.GetBotIds(),
+				participantCount,
+				GameConfig.MinPlayerToStart
+			))
+			if participantCount >= GameConfig.MinPlayerToStart then
+				lockedBotCountForRound = #CombatManager.GetBotIds()
+				LogBotDebug("InLobbyTick satisfied start condition, entering MatchCountdown")
+				break
+			end
 			LogInfo(string.format("WaitingPlayers current=%d required=%d", nonAfkPlayerCount, GameConfig.MinPlayerToStart))
 			CombatManager.SetAllVehiclesAnchored(true)
 			BroadcastMatchState(GameConfig.MatchState.InLobby, 0)
 			task.wait(1)
-			continue
 		end
 
 		LogInfo(string.format("MatchCountdown start seconds=%d", GameConfig.MatchCountdown))
 		CombatManager.SetAllVehiclesAnchored(true)
 		BroadcastMatchState(GameConfig.MatchState.MatchCountdown, GameConfig.MatchCountdown)
+		-- MatchCountdown 期间按实时 AFK 状态补位（例如 1 真人切 AFK 时补到 2 bot）
 		local matchAborted = RunPhaseWithAbortPolling(GameConfig.MatchCountdown, function(): boolean
-			if PlayerStateManager.GetNonAfkOnlinePlayerCount() < GameConfig.MinPlayerToStart then
+			local botCountBeforeRefresh = #CombatManager.GetBotIds()
+			local currentOnlineCount = GetRealtimeOnlinePlayerCount()
+			local currentNonAfkCount = GetRealtimeNonAfkOnlinePlayerCount()
+			local requiredBotCount = CalculateRequiredBotCount(currentNonAfkCount, currentOnlineCount)
+			-- MatchCountdown 期间只补位不删位，避免玩家 AFK 状态波动导致已创建 bot 被删除
+			if requiredBotCount > botCountBeforeRefresh then
+				CombatManager.EnsureBotCount(requiredBotCount)
+			end
+			local botCountAfterRefresh = #CombatManager.GetBotIds()
+			-- 避免 MatchCountdown 每秒随机挪位：仅在 bot 数量发生变化时重排一次大厅位置
+			if botCountAfterRefresh ~= botCountBeforeRefresh then
+				RepositionFillBotsToLobbySpawns()
+			end
+			local currentParticipantCount = currentOnlineCount + #CombatManager.GetBotIds()
+			LogBotDebug(string.format(
+				"MatchCountdownTick online=%d real=%d bot=%d participant=%d minStart=%d",
+				currentOnlineCount,
+				currentNonAfkCount,
+				#CombatManager.GetBotIds(),
+				currentParticipantCount,
+				GameConfig.MinPlayerToStart
+			))
+			if currentParticipantCount < GameConfig.MinPlayerToStart then
 				LogInfo("MatchCountdown aborted: player count below minimum")
+				LogBotDebug("MatchCountdown aborted: participant below min")
 				return true
 			end
 			return false
@@ -487,23 +798,32 @@ local function RunMatchLoop()
 			continue
 		end
 
-		local roundParticipantPlayers = GetNonAfkPlayers()
-		if #roundParticipantPlayers < GameConfig.MinPlayerToStart then
+		-- MatchCountdown 结束前只做“补位不删位”的最后校正
+		local onlinePlayerCountAtLock = GetRealtimeOnlinePlayerCount()
+		local nonAfkPlayerCountAtLock = GetRealtimeNonAfkOnlinePlayerCount()
+		local requiredBotCountAtLock = CalculateRequiredBotCount(nonAfkPlayerCountAtLock, onlinePlayerCountAtLock)
+		if requiredBotCountAtLock > #CombatManager.GetBotIds() then
+			CombatManager.EnsureBotCount(requiredBotCountAtLock)
+		end
+		lockedBotCountForRound = #CombatManager.GetBotIds()
+		-- 本局 bot 数在这里最终锁定；直到对局结束前不再增删
+		CombatManager.EnsureBotCount(lockedBotCountForRound)
+		RepositionFillBotsToLobbySpawns()
+		local roundParticipantPlayers = _GetNonAfkPlayers()
+		local participantIds = BuildRoundParticipantIds(roundParticipantPlayers)
+		if #participantIds < GameConfig.MinPlayerToStart then
 			LogInfo("Match start aborted: non-afk player count below minimum")
+			LogBotDebug(string.format("MatchStart aborted participants=%d minStart=%d", #participantIds, GameConfig.MinPlayerToStart))
 			BroadcastMatchState(GameConfig.MatchState.InLobby, 0)
 			task.wait(1)
 			continue
 		end
 		LogInfo(string.format("ArenaSeatPrepare participants=%d", #roundParticipantPlayers))
 		NetMsg.FireNotifyArenaSeatPrepare(roundParticipantPlayers)
-		ArenaManager.PrepareArena(#roundParticipantPlayers)
+		ArenaManager.PrepareArena(#participantIds)
 
 		if roundStartCallback ~= nil then
 			LogInfo("Invoke roundStartCallback (Early)")
-			local participantIds = {}
-			for _, p in ipairs(roundParticipantPlayers) do
-				table.insert(participantIds, p.UserId)
-			end
 			roundStartCallback(participantIds)
 		end
 
@@ -518,8 +838,17 @@ local function RunMatchLoop()
 		LogInfo(string.format("GameStartCountdown start seconds=%d", GameConfig.RoundStartCountdown))
 		BroadcastMatchState(GameConfig.MatchState.GameStartCountdown, GameConfig.RoundStartCountdown)
 		local gameStartAborted = RunPhaseWithAbortPolling(GameConfig.RoundStartCountdown, function(): boolean
-			if #GetNonAfkPlayers() <= 1 then
+			local currentOnlineCount = GetRealtimeOnlinePlayerCount()
+			local participantCount = currentOnlineCount + #CombatManager.GetBotIds()
+			LogBotDebug(string.format(
+				"GameStartCountdownTick online=%d bot=%d participant=%d",
+				currentOnlineCount,
+				#CombatManager.GetBotIds(),
+				participantCount
+			))
+			if participantCount <= 1 then
 				LogInfo("GameStartCountdown aborted: not enough players")
+				LogBotDebug("GameStartCountdown aborted: participant <= 1")
 				return true
 			end
 			return false
