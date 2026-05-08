@@ -1246,6 +1246,11 @@ function CombatManager.PlayVehicleDeathEffect(playerId: number, hitDirection: Ve
 		return
 	end
 
+	-- 死亡解体前强制将视觉模型对齐到物理代理，避免旧位置爆开
+	if physicsRoot:IsDescendantOf(game) then
+		SyncVisualModelToPhysicsRoot(unitInfo)
+	end
+
 	if physicsRoot:IsDescendantOf(game) then
 		physicsRoot:Destroy()
 	end
