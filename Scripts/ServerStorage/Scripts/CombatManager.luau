@@ -734,14 +734,16 @@ local function RestoreBotVehicleLobbyPresentation(unitInfo: ServerUnitInfo?)
 	botLobbyVisualRestoreMap[unitModel] = nil
 end
 
-local function EnsureWorkspaceLobbyNpcStanding(unitInfo: ServerUnitInfo, botInfo: BotInfo)
+local function EnsureWorkspaceLobbyNpcStanding(unitInfo: ServerUnitInfo, botInfo: BotInfo, forceReposition: boolean?)
 	local botId = unitInfo.playerId
 	local name = LobbyWorkspaceNpcName(botId)
 	local existing = workspace:FindFirstChild(name)
 	local npcModel: Model
+	local createdNewNpc = false
 	if existing ~= nil and existing:IsA("Model") then
 		npcModel = existing
 	else
+		createdNewNpc = true
 		DestroyWorkspaceLobbyNpc(botId)
 		local sourceTemplate = ResolveBotAppearanceSourceTemplate(botInfo.modelName)
 		if sourceTemplate == nil then
@@ -767,18 +769,21 @@ local function EnsureWorkspaceLobbyNpcStanding(unitInfo: ServerUnitInfo, botInfo
 	if humanoid ~= nil then
 		humanoid.Sit = false
 	end
-	local basePos = unitInfo.visualRootPart.Position
-	npcModel:PivotTo(CFrame.new(basePos.X, basePos.Y + BOT_LOBBY_STAND_OFFSET_Y, basePos.Z))
+	local shouldReposition = forceReposition == true or createdNewNpc
+	if shouldReposition then
+		local basePos = unitInfo.visualRootPart.Position
+		npcModel:PivotTo(CFrame.new(basePos.X, basePos.Y + BOT_LOBBY_STAND_OFFSET_Y, basePos.Z))
+	end
 end
 
-local function ApplyBotLobbyPresentation(unitInfo: ServerUnitInfo)
+local function ApplyBotLobbyPresentation(unitInfo: ServerUnitInfo, forceReposition: boolean?)
 	local botInfo = botInfoMap[unitInfo.playerId]
 	if botInfo == nil then
 		return
 	end
 	RemoveInternalBotNpcFromVehicle(unitInfo.unitModel)
 	CaptureAndHideBotVehicleForLobby(unitInfo)
-	EnsureWorkspaceLobbyNpcStanding(unitInfo, botInfo)
+	EnsureWorkspaceLobbyNpcStanding(unitInfo, botInfo, forceReposition)
 end
 
 local function ConfigureVisualVehicleModelForPresentation(unitModel: Model)
@@ -1348,7 +1353,7 @@ function CombatManager.SetMatchState(matchState: GameConfig.MatchState)
 	then
 		for playerId, unitInfo in unitInfoMap do
 			if IsBotId(playerId) then
-				ApplyBotLobbyPresentation(unitInfo)
+				ApplyBotLobbyPresentation(unitInfo, true)
 			end
 		end
 	end
@@ -3077,7 +3082,20 @@ function CombatManager.TeleportBotVehicleToLobbySpawn(botId: number, targetPosit
 		proxyPart:SetNetworkOwner(nil)
 	end)
 	NetMsg.FireNotifyTeleport(botId, targetPosition)
-	ApplyBotLobbyPresentation(unitInfoNotNil)
+	ApplyBotLobbyPresentation(unitInfoNotNil, true)
+end
+
+function CombatManager.GetServerMatchState(): GameConfig.MatchState
+	return serverMatchState
+end
+
+function CombatManager.GetLobbyNpcModel(botId: number): Model?
+	local name = LobbyWorkspaceNpcName(botId)
+	local inst = workspace:FindFirstChild(name)
+	if inst ~= nil and inst:IsA("Model") then
+		return inst
+	end
+	return nil
 end
 
 function CombatManager.FireForUnit(playerId: number)

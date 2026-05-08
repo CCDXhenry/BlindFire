@@ -332,6 +332,18 @@ GameConfig.MatchCountdown = 45
 GameConfig.ArenaSeatPrepareDelay = 0.22
 -- 返回大厅解座等待
 GameConfig.ReturnToLobbyWait = 0.1
+-- 大厅补位机器人 NPC 漫游（LobbySpawnArea 内）
+GameConfig.BotLobbyRoamLobbyAreaName = "LobbySpawnArea"
+GameConfig.BotLobbyRoamWalkSpeed = 10
+GameConfig.BotLobbyRoamIdleMinSec = 1
+GameConfig.BotLobbyRoamIdleMaxSec = 4
+GameConfig.BotLobbyRoamMaxStrideStuds = 18
+GameConfig.BotLobbyRoamReachThresholdStuds = 1.5
+GameConfig.BotLobbyRoamMoveTimeoutSec = 8
+GameConfig.BotLobbyRoamTickIntervalSec = 0.25
+GameConfig.BotLobbyRoamSamplePadding = 2
+GameConfig.BotLobbyRoamMinSampleSeparationStuds = 4
+GameConfig.BotLobbyRoamWalkAnimationId = "rbxassetid://507777826"
 -- 结算阶段时长
 GameConfig.SettlementDuration = 2
 -- 入座重试参数
