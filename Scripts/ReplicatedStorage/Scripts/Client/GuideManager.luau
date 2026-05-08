@@ -15,6 +15,7 @@ local UserInutExtension = require(coreClientScripts:WaitForChild("UserInutExtens
 local GameConfig = require(sharedScripts:WaitForChild("GameConfig"))
 local NetMsg = require(sharedScripts:WaitForChild("NetMsg"))
 local ClientGameInfo = require(clientScripts:WaitForChild("ClientGameInfo"))
+local BulletClientManager = require(clientScripts:WaitForChild("BulletClientManager"))
 
 local isInitialized = false
 local currentMatchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
@@ -52,6 +53,9 @@ function GuideManager.ShouldShowSpaceGuide(): boolean
 	if currentMatchState ~= GameConfig.MatchState.Fighting then
 		return false
 	end
+	if not BulletClientManager.IsLocalInVehicle() then
+		return false
+	end
 	if ClientGameInfo.IsGuideFinished(GameConfig.GuideType.TutorialFireBySpace) then
 		return false
 	end
@@ -60,6 +64,9 @@ end
 
 function GuideManager.ShouldShowButtonGuide(): boolean
 	if currentMatchState ~= GameConfig.MatchState.Fighting then
+		return false
+	end
+	if not BulletClientManager.IsLocalInVehicle() then
 		return false
 	end
 	local inputTypeString: string?, _: Enum.UserInputType = UserInutExtension.GetInputType()
