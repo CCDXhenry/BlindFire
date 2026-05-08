@@ -581,13 +581,25 @@ local function ResolveBotAppearanceSourceTemplate(preferredTemplateName: string?
 	return modelList[math.random(1, #modelList)]
 end
 
+local function ResolveSeatFromVehicleModel(unitModel: Model): Seat?
+	local namedSeat = unitModel:FindFirstChild("Seat", true)
+	if namedSeat ~= nil and namedSeat:IsA("Seat") then
+		return namedSeat
+	end
+	local firstSeat = unitModel:FindFirstChildWhichIsA("Seat", true)
+	if firstSeat ~= nil then
+		return firstSeat
+	end
+	return nil
+end
+
 local function MountBotCharacterOntoVehicleSeat(unitModel: Model, appearanceTemplateName: string?, displayName: string?)
 	local sourceTemplate = ResolveBotAppearanceSourceTemplate(appearanceTemplateName)
 	if sourceTemplate == nil then
 		return
 	end
-	local seatInstance = unitModel:FindFirstChild("Seat", true)
-	if seatInstance == nil or not seatInstance:IsA("Seat") then
+	local seatInstance = ResolveSeatFromVehicleModel(unitModel)
+	if seatInstance == nil then
 		_LogWarn("MountBotCharacterOntoVehicleSeat: Seat missing on vehicle template")
 		return
 	end
@@ -997,8 +1009,8 @@ local function CreateUnitModelForPlayer(player: Player): ServerUnitInfo?
 	ConfigureVisualVehicleModelForPresentation(unitModel)
 	
 	-- 监听座位变动，防止玩家入座后 Roblox 自动将网络所有权转移给客户端导致争夺和卡顿（高速抽搐/周期性停顿根源）
-	local seatInstance = unitModel:FindFirstChild("Seat", true)
-	if seatInstance and seatInstance:IsA("Seat") then
+	local seatInstance = ResolveSeatFromVehicleModel(unitModel)
+	if seatInstance ~= nil then
 		seatInstance:GetPropertyChangedSignal("Occupant"):Connect(function()
 			if seatInstance.Occupant ~= nil then
 				if not visualRootPart.Anchored then
@@ -3018,7 +3030,8 @@ function CombatManager.TeleportBotVehicleToArenaPosition(botId: number, targetPo
 	local vehicleModel = unitInfoNotNil.unitModel
 	local primaryPart = vehicleModel.PrimaryPart
 	if primaryPart ~= nil and primaryPart:IsA("BasePart") then
-		primaryPart.Anchored = false
+		-- 机器人开局传送保持视觉根锚定，避免模板差异导致瞬间下坠；实际移动由 proxy 驱动
+		primaryPart.Anchored = true
 		pcall(function()
 			primaryPart:SetNetworkOwner(nil)
 		end)
@@ -3031,6 +3044,9 @@ function CombatManager.TeleportBotVehicleToArenaPosition(botId: number, targetPo
 		primaryPart.AssemblyAngularVelocity = Vector3.zero
 	end
 	local proxyPart = unitInfoNotNil.rootPart
+	proxyPart.CanCollide = true
+	proxyPart.CanTouch = true
+	proxyPart.CanQuery = true
 	local proxyRotation = proxyPart.CFrame - proxyPart.Position
 	proxyPart.CFrame = CFrame.new(targetPosition) * proxyRotation
 	proxyPart.AssemblyLinearVelocity = Vector3.zero
