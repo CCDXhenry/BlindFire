@@ -1,6 +1,7 @@
 --!strict
 local replicatedStorage: ReplicatedStorage = game:GetService("ReplicatedStorage")
 local players = game:GetService("Players")
+local runService = game:GetService("RunService")
 local userInputService = game:GetService("UserInputService")
 
 local core = replicatedStorage:WaitForChild("Core")
@@ -38,12 +39,16 @@ local vehiclesButton: ImageButton = lobbyFrame:FindFirstChild("VehiclesButton") 
 local vehiclesRedPoint: ImageLabel = vehiclesButton:FindFirstChild("VehiclesRedPoint") :: ImageLabel
 local afkButton: ImageButton = lobbyFrame:WaitForChild("AFKButton") :: ImageButton
 local afkButtonTextLabel: TextLabel = afkButton:WaitForChild("TextLabel") :: TextLabel
+local afkButtonLockImage: ImageLabel = afkButton:WaitForChild("LockImage") :: ImageLabel
 
 local AFK_OFF_COLOR = Color3.fromRGB(220, 60, 60)
 local AFK_ON_COLOR = Color3.fromRGB(60, 180, 75)
+local AFK_LOCK_COUNTDOWN_THRESHOLD_SEC = 3
 
 local isAfk = false
 local matchState: GameConfig.MatchState = GameConfig.MatchState.InLobby
+local matchCountdownRemainSec = 0
+local matchPhaseEndClock = 0
 
 local function IsVehicleAffordable(localPlayerInfo: GameConfig.ClientLocalPlayerInfo, vehicleData: GameConfig.VehicleData): boolean
 	local coinAmount: number = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
@@ -70,6 +75,11 @@ local function IsAfkButtonHiddenByBattleState(): boolean
 		return false
 	end
 	return BulletClientManager.IsLocalInVehicle()
+end
+
+local function IsAfkToggleLockedByMatchCountdown(): boolean
+	return matchState == GameConfig.MatchState.MatchCountdown
+		and matchCountdownRemainSec <= AFK_LOCK_COUNTDOWN_THRESHOLD_SEC
 end
 
 --刷新载具红点
@@ -109,7 +119,11 @@ local function RefreshVehiclesRedPoint()
 end
 
 local function RefreshAfkButton()
-	afkButton.Visible = not IsAfkButtonHiddenByBattleState()
+	local isAfkButtonVisible = not IsAfkButtonHiddenByBattleState()
+	local isAfkToggleLocked = IsAfkToggleLockedByMatchCountdown()
+	afkButton.Visible = isAfkButtonVisible
+	afkButton.Active = isAfkButtonVisible and (not isAfkToggleLocked)
+	afkButtonLockImage.Visible = isAfkButtonVisible and isAfkToggleLocked
 	local afkTextInfo = if isAfk then GameTexts.AfkOn else GameTexts.AfkOff
 	TranslationTool.CustomAutoLocalizeTextLabel(afkButtonTextLabel, afkTextInfo.source, afkTextInfo.key, nil)
 	afkButton.Image = if isAfk then GameConfig.AFKOnImage else GameConfig.AFKOffImage
@@ -140,12 +154,27 @@ local function RefreshView()
 	RefreshAfkButton()
 end
 
+local function OnHeartbeat()
+	if matchState ~= GameConfig.MatchState.MatchCountdown then
+		return
+	end
+	local nextRemainSec = math.max(math.floor(matchPhaseEndClock - os.clock() + 1e-4), 0)
+	if nextRemainSec == matchCountdownRemainSec then
+		return
+	end
+	matchCountdownRemainSec = nextRemainSec
+	RefreshAfkButton()
+end
+
 local function OnLocalPlayerInfoInit()
 	RefreshView()
 end
 
 local function TryToggleAfk()
 	if not afkButton.Visible then
+		return
+	end
+	if IsAfkToggleLockedByMatchCountdown() then
 		return
 	end
 	NetMsg.FireRequestSetAfkState(not isAfk)
@@ -198,8 +227,14 @@ local function OnNotifyUnitRemove(playerId: number)
 	RefreshAfkButton()
 end
 
-local function OnNotifyMatchState(newMatchState: GameConfig.MatchState, _countdown: number)
+local function OnNotifyMatchState(newMatchState: GameConfig.MatchState, countdown: number)
 	matchState = newMatchState
+	matchPhaseEndClock = os.clock() + countdown
+	if newMatchState == GameConfig.MatchState.MatchCountdown then
+		matchCountdownRemainSec = math.max(countdown, 0)
+	else
+		matchCountdownRemainSec = 0
+	end
 	RefreshAfkButton()
 end
 
@@ -219,6 +254,7 @@ local function InitEvents()
 	NetMsg.ConnectNotifyDead(OnNotifyDead)
 	NetMsg.ConnectNotifyUnitRemove(OnNotifyUnitRemove)
 	NetMsg.ConnectNotifyMatchState(OnNotifyMatchState)
+	runService.Heartbeat:Connect(OnHeartbeat)
 end
 
 InitUI()
