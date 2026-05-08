@@ -630,7 +630,7 @@ local VehiclesData = require(script.VehiclesData)
 local NPCNameData = require(script.NPCNameData)
 
 GameConfig.BulletDataMap = BulletData :: { [number]: BulletData }
-GameConfig.NPCNameDataMap = NPCNameData :: { [number]: { id: number, labelName_t: string } }
+GameConfig.NPCNameDataMap = NPCNameData :: { [number]: { id: number, labelName: string } }
 GameConfig.VehicleDataMap = {} :: { [number]: VehicleData }
 local groupRewardVehicleIdListCache: { number }? = nil
 

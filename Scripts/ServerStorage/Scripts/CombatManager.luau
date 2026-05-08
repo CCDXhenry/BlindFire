@@ -407,8 +407,8 @@ local function GetRandomBotName(): string
 	end
 	local index = math.random(1, count)
 	local record = npcNameDataMap[index]
-	if typeof(record) == "table" and typeof(record.labelName_t) == "string" then
-		return tostring(record.labelName_t)
+	if typeof(record) == "table" and typeof(record.labelName) == "string" then
+		return tostring(record.labelName)
 	end
 	return GameConfig.AIBotNamePrefix .. "_" .. tostring(math.abs(nextBotId))
 end
