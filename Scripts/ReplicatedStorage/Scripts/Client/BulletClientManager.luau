@@ -91,6 +91,7 @@ local soundOriginsFolder = replicatedStorage:FindFirstChild("Sounds")
 local fireSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("FireSound") else nil
 local hitSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("HitSound") else nil
 local struckSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("StruckSound") else nil
+local invincibleSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("InvincibleSound") else nil
 local impactSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("ImpactSound") else nil
 local deathSoundOrigin = if soundOriginsFolder then soundOriginsFolder:FindFirstChild("DeathSound") else nil
 local unitFireSoundCache: { [Model]: Instance } = {}
@@ -149,6 +150,14 @@ local function PlayGlobalCombatSound(soundOrigin: Instance?)
 		return
 	end
 	SoundTool.PlayGlobalSoundEffect(soundOrigin, false)
+end
+
+local function IsTargetModelInvincible(targetState: ClientUnitState): boolean
+	local targetModel = targetState.model
+	if targetModel == nil then
+		return false
+	end
+	return targetModel:GetAttribute("IsInvincible") == true
 end
 
 local function ClearCachedFireSoundForModel(unitModel: Model?)
@@ -858,8 +867,13 @@ function BulletClientManager.OnHit(
 		if latestTargetState == nil then
 			return
 		end
-		PlayGlobalCombatSound(hitSoundOrigin)
-		if targetPlayerId == localPlayerId then
+		local isTargetInvincible = IsTargetModelInvincible(latestTargetState)
+		if isTargetInvincible then
+			PlayGlobalCombatSound(invincibleSoundOrigin or hitSoundOrigin)
+		else
+			PlayGlobalCombatSound(hitSoundOrigin)
+		end
+		if targetPlayerId == localPlayerId and not isTargetInvincible then
 			PlayGlobalCombatSound(struckSoundOrigin)
 		end
 		latestTargetState.spinDir = (math.random(0, 1) == 0) and 1 or -1
