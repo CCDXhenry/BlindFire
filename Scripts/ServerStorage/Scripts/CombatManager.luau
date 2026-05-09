@@ -1394,8 +1394,11 @@ function CombatManager.SetMatchState(matchState: GameConfig.MatchState)
 
 	-- 切到 Fighting：统一让机器人入座（此时 TeleportAllPlayersToArena 已完成）
 	if matchState == GameConfig.MatchState.Fighting and prevMatchState ~= matchState then
+		local fightStartClock = os.clock()
 		for botId, botInfo in botInfoMap do
 			local unitInfo = unitInfoMap[botId]
+			-- 机器人开火倒计时从 Fight 阶段开始
+			botInfo.nextFireTime = fightStartClock + GetBotFireInterval()
 			if unitInfo ~= nil then
 				if unitInfo.unitModel:FindFirstChild(BOT_NPC_CHILD_NAME) == nil then
 					MountBotCharacterOntoVehicleSeat(unitInfo.unitModel, botInfo.modelName, botInfo.name)
@@ -3252,7 +3255,7 @@ local function CreateBot(): number?
 		name = botName,
 		vehicleId = vehicleId,
 		modelName = appearanceTemplateName,
-		nextFireTime = os.clock() + GetBotFireInterval(),
+		nextFireTime = math.huge,
 	}
 	PlayerStateManager.EnsurePlayerRoundInfoByUserId(botId)
 	return botId
