@@ -58,6 +58,7 @@ function ServerGameInfo.InitPlayerInfo(player: Player, playerSaveInfo: GameConfi
 		currentGuideType = GameConfig.GuideType.None,
 		isInGroup = isInGroup,
 		weeklyStats = playerSaveInfo.weeklyStats,
+		lifetimeStats = playerSaveInfo.lifetimeStats,
 		hasClaimedGroupReward = playerSaveInfo.hasClaimedGroupReward or false,
 		guideProgress = playerSaveInfo.guideProgress or {
 			FireBySpace = false,
@@ -124,6 +125,7 @@ function ServerGameInfo.CreatePlayerSaveInfoByPlayerInfo(playerInfo: GameConfig.
 		currencies = playerInfo.currencies,
 		vehicleInventory = playerInfo.vehicleInventory,
 		weeklyStats = playerInfo.weeklyStats,
+		lifetimeStats = playerInfo.lifetimeStats,
 		hasClaimedGroupReward = playerInfo.hasClaimedGroupReward,
 		guideProgress = playerInfo.guideProgress,
 	}

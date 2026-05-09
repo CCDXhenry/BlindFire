@@ -185,7 +185,13 @@ export type PlayerSaveInfo = {
 		kills: number,
 		wins: number,
 		earnings: number,
-		lastResetWeek: string,
+		lastResetWeekIndex: number,
+	},
+	--累计统计信息（跨周不重置，用于总榜）
+	lifetimeStats: {
+		kills: number,
+		wins: number,
+		earnings: number,
 	},
 	-- 是否已领取过群组奖励
 	hasClaimedGroupReward: boolean,
@@ -255,7 +261,12 @@ function GameConfig.CreateDefaultPlayerSaveInfo(): PlayerSaveInfo
 			kills = 0,
 			wins = 0,
 			earnings = 0,
-			lastResetWeek = os.date("!%Y_%W"),
+			lastResetWeekIndex = 0,
+		},
+		lifetimeStats = {
+			kills = 0,
+			wins = 0,
+			earnings = 0,
 		},
 	}
 end
@@ -377,10 +388,14 @@ GameConfig.LeaderboardCategory = {
 	WeeklyEarnings = "WeeklyEarnings",
 }
 
--- 排行榜更新频率（秒，1小时）
-GameConfig.LeaderboardUpdateInterval = 12 * 60 * 60
+-- 排行榜更新频率（秒）
+GameConfig.LeaderboardUpdateInterval = 10 * 60
 -- 排行榜显示数量
 GameConfig.LeaderboardDisplayCount = 20
+-- 周榜统一时间基准（UTC Unix 秒）
+GameConfig.LeaderboardWeekStartUnixUtc = 1736226000 -- 2025-01-07 05:00:00 UTC (Tuesday 00:00 EST, fixed UTC-5)
+GameConfig.LeaderboardWeekDurationSeconds = 20 * 60 --7 * 24 * 60 * 60
+GameConfig.LeaderboardDataVersion = "v2"
 
 -- 静态卡死检测阈值
 GameConfig.StuckVelocityThreshold = 0.5

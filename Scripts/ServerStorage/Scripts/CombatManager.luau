@@ -2406,16 +2406,12 @@ local function ResolveProjectileHit(
 				end
 				--击杀奖励
 				ServerGameInfo.UpdatePlayerCurrency(shooterPlayer, GameConfig.CurrencyType.Coin, 2, GameConfig.ItemCountChangeReason.GainFromKill)
-				if not targetIsBot then
-					LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyKills, 1)
-					LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyEarnings, 2)
-				end
+				LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyKills, 1)
+				LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyEarnings, 2)
 			else
 				--命中奖励
 				ServerGameInfo.UpdatePlayerCurrency(shooterPlayer, GameConfig.CurrencyType.Coin, 1, GameConfig.ItemCountChangeReason.GainFromHit)
-				if not targetIsBot then
-					LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyEarnings, 1)
-				end
+				LeaderboardManager.AddStat(shooterPlayer, GameConfig.LeaderboardCategory.WeeklyEarnings, 1)
 			end
 		end
 	end

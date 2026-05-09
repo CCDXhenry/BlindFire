@@ -22,8 +22,8 @@ local httpService = game:GetService("HttpService")
 local topLists: { [string]: { { userId: number, value: number, name: string } } } = {}
 local usernameCache: { [number]: string } = {}
 local lastLeaderboardHashes: { [string]: string } = {}
--- 下次排行榜刷新时间戳（UTC 秒）
-local nextRefreshTimestamp: number = 0
+-- 下次榜单拉取时间戳（UTC 秒）
+local nextLeaderboardPullTimestamp: number = 0
 
 local function WarnIfSlow(operationName: string, startClock: number)
 	local elapsed = os.clock() - startClock
@@ -32,9 +32,31 @@ local function WarnIfSlow(operationName: string, startClock: number)
 	end
 end
 
+local function GetWeekDurationSeconds(): number
+	return GameConfig.LeaderboardWeekDurationSeconds
+end
+
+local function GetWeekStartUnixUtc(): number
+	return GameConfig.LeaderboardWeekStartUnixUtc
+end
+
+local function GetCurrentWeekIndex(nowTimestamp: number?): number
+	local now = nowTimestamp or math.floor(workspace:GetServerTimeNow())
+	local delta = now - GetWeekStartUnixUtc()
+	if delta < 0 then
+		return 0
+	end
+	return math.floor(delta / GetWeekDurationSeconds())
+end
+
 -- 获取本周 Key
 local function GetWeeklyKey(category: string): string
-	return category .. "_" .. os.date("!%Y_%W")
+	local weekIndex = GetCurrentWeekIndex()
+	return string.format("%s_%s_W%d", GameConfig.LeaderboardDataVersion, category, weekIndex)
+end
+
+local function GetOverallKey(category: string): string
+	return string.format("%s_overall_%s", GameConfig.LeaderboardDataVersion, category)
 end
 
 -- 获取 OrderedDataStore
@@ -42,44 +64,44 @@ local function GetOrderedDataStore(category: string): OrderedDataStore
 	return dataStoreService:GetOrderedDataStore(GetWeeklyKey(category))
 end
 
--- 获取到下周一 00:00:00 UTC 的时间戳
 local function GetNextWeekResetTimestamp(): number
-	local now = math.floor(workspace:GetServerTimeNow())
-	local dateTable = os.date("!*t", now)
-	
-	-- wday: 1=Sunday, 2=Monday, ..., 7=Saturday
-	-- 我们需要找到下一个周一 (wday = 2)
-	local daysToMonday = (2 - dateTable.wday + 7) % 7
-	if daysToMonday == 0 then
-		-- 如果今天就是周一，我们需要锁定到下个周一
-		daysToMonday = 7
-	end
-	
-	-- 计算今天 00:00:00 UTC 的时间戳
-	local secondsToday = dateTable.hour * 3600 + dateTable.min * 60 + dateTable.sec
-	local dayStart = now - secondsToday
-	
-	-- 返回下周一的时间戳
-	return dayStart + (daysToMonday * 24 * 60 * 60)
+	local weekIndex = GetCurrentWeekIndex()
+	return GetWeekStartUnixUtc() + ((weekIndex + 1) * GetWeekDurationSeconds())
 end
 
 -- 获取下次排行榜刷新时间戳
 local function GetAlignedNextRefreshTimestamp(nowTimestamp: number): number
-	local dateTable = os.date("!*t", nowTimestamp)
-	local secondsToday = dateTable.hour * 3600 + dateTable.min * 60 + dateTable.sec
-	local dayStartTimestamp = nowTimestamp - secondsToday
 	local refreshInterval = GameConfig.LeaderboardUpdateInterval
-	local elapsedSinceDayStart = nowTimestamp - dayStartTimestamp
-	local passedIntervals = math.floor(elapsedSinceDayStart / refreshInterval)
-	return dayStartTimestamp + (passedIntervals + 1) * refreshInterval
+	local elapsedSinceWeekStart = math.max(0, nowTimestamp - GetWeekStartUnixUtc())
+	local passedIntervals = math.floor(elapsedSinceWeekStart / refreshInterval)
+	return GetWeekStartUnixUtc() + ((passedIntervals + 1) * refreshInterval)
 end
 
-local function GetNextRefreshTimestamp(): number
+local function GetNextWeekResetTimestampCached(): number
 	local now = math.floor(workspace:GetServerTimeNow())
-	if nextRefreshTimestamp > now then
-		return nextRefreshTimestamp
+	return math.max(GetNextWeekResetTimestamp(), now + 1)
+end
+
+local function EnsureStatsForLeaderboard(player: Player, playerInfo: any)
+	local currentWeekIndex = GetCurrentWeekIndex()
+	if playerInfo.weeklyStats == nil then
+		playerInfo.weeklyStats = {
+			kills = 0,
+			wins = 0,
+			earnings = 0,
+			lastResetWeekIndex = currentWeekIndex,
+		}
+		playerInfo.playerInfoChanged = true
 	end
-	return GetAlignedNextRefreshTimestamp(now)
+
+	if playerInfo.lifetimeStats == nil then
+		playerInfo.lifetimeStats = {
+			kills = 0,
+			wins = 0,
+			earnings = 0,
+		}
+		playerInfo.playerInfoChanged = true
+	end
 end
 
 
@@ -88,26 +110,16 @@ function LeaderboardManager.CheckWeeklyReset(player: Player)
 	local ServerGameInfo = require(serverScripts:FindFirstChild("ServerGameInfo"))
 	local playerInfo = ServerGameInfo.GetPlayerInfo(player)
 	if playerInfo == nil then return end
+	EnsureStatsForLeaderboard(player, playerInfo)
+	local currentWeekIndex = GetCurrentWeekIndex()
 
-	local currentWeek = os.date("!%Y_%W")
-	if playerInfo.weeklyStats == nil then
-		playerInfo.weeklyStats = {
-			kills = 0,
-			wins = 0,
-			earnings = 0,
-			lastResetWeek = currentWeek,
-		}
-		playerInfo.playerInfoChanged = true
-	end
-
-	if playerInfo.weeklyStats.lastResetWeek ~= currentWeek then
-		print(string.format("%s Resetting weekly stats for player %d (Last: %s, Current: %s)", 
-			LOG_PREFIX, player.UserId, playerInfo.weeklyStats.lastResetWeek, currentWeek))
-		
+	if playerInfo.weeklyStats.lastResetWeekIndex ~= currentWeekIndex then
+		print(string.format("%s Resetting weekly stats for player %d (LastWeekIndex: %d, CurrentWeekIndex: %d)",
+			LOG_PREFIX, player.UserId, playerInfo.weeklyStats.lastResetWeekIndex, currentWeekIndex))
 		playerInfo.weeklyStats.kills = 0
 		playerInfo.weeklyStats.wins = 0
 		playerInfo.weeklyStats.earnings = 0
-		playerInfo.weeklyStats.lastResetWeek = currentWeek
+		playerInfo.weeklyStats.lastResetWeekIndex = currentWeekIndex
 		playerInfo.playerInfoChanged = true
 	end
 end
@@ -119,13 +131,17 @@ function LeaderboardManager.AddStat(player: Player, category: string, amount: nu
 	local ServerGameInfo = require(serverScripts:FindFirstChild("ServerGameInfo"))
 	local playerInfo = ServerGameInfo.GetPlayerInfo(player)
 	if playerInfo == nil then return end
+	EnsureStatsForLeaderboard(player, playerInfo)
 
 	if category == GameConfig.LeaderboardCategory.WeeklyKills then
 		playerInfo.weeklyStats.kills += amount
+		playerInfo.lifetimeStats.kills += amount
 	elseif category == GameConfig.LeaderboardCategory.WeeklyWins then
 		playerInfo.weeklyStats.wins += amount
+		playerInfo.lifetimeStats.wins += amount
 	elseif category == GameConfig.LeaderboardCategory.WeeklyEarnings then
 		playerInfo.weeklyStats.earnings += amount
+		playerInfo.lifetimeStats.earnings += amount
 	end
 	
 	playerInfo.leaderboardChanges = playerInfo.leaderboardChanges or {}
@@ -213,7 +229,7 @@ function LeaderboardManager.RefreshLeaderboard(category: string)
 			
 			topLists[category] = newList
 			-- 同步给所有客户端
-			NetMsg.FireNotifyLeaderboardUpdate(nil, category, newList, GetNextRefreshTimestamp())
+			NetMsg.FireNotifyLeaderboardUpdate(nil, category, newList, GetNextWeekResetTimestampCached())
 		else
 			warn(string.format("%s Failed to refresh leaderboard for %s: %s", LOG_PREFIX, category, tostring(pages)))
 		end
@@ -227,8 +243,8 @@ function LeaderboardManager.Init()
 	task.spawn(function()
 		-- 初始化时，先立刻拉取一次排行榜数据，避免服务器刚启动时玩家进来看到的是空榜
 		local nowInit = math.floor(workspace:GetServerTimeNow())
-		nextRefreshTimestamp = GetAlignedNextRefreshTimestamp(nowInit)
-		NetMsg.FireNotifyLeaderboardResetTime(nil, nextRefreshTimestamp)
+		nextLeaderboardPullTimestamp = GetAlignedNextRefreshTimestamp(nowInit)
+		NetMsg.FireNotifyLeaderboardResetTime(nil, GetNextWeekResetTimestampCached())
 		
 		for _, category in pairs(GameConfig.LeaderboardCategory) do
 			LeaderboardManager.RefreshLeaderboard(category)
@@ -238,20 +254,13 @@ function LeaderboardManager.Init()
 		while true do
 			-- 先等待到下一个对齐的刷新时间点
 			local now = math.floor(workspace:GetServerTimeNow())
-			nextRefreshTimestamp = GetAlignedNextRefreshTimestamp(now)
-			local waitSeconds = math.max(1, nextRefreshTimestamp - now)
+			nextLeaderboardPullTimestamp = GetAlignedNextRefreshTimestamp(now)
+			local waitSeconds = math.max(1, nextLeaderboardPullTimestamp - now)
 			task.wait(waitSeconds)
 
 			-- 到达时间点，开始刷新
-			print(string.format("%s Starting periodic refresh. Next: %s", LOG_PREFIX, os.date("!%X", nextRefreshTimestamp)))
-			
-			-- 刷新前更新一下目标时间，确保 RefreshLeaderboard 发送的是下一个时间点
-			-- 实际上在这里，下一次刷新应该是 nextRefreshTimestamp + Interval
-			local currentRefreshTarget = nextRefreshTimestamp
-			nextRefreshTimestamp = GetAlignedNextRefreshTimestamp(math.floor(workspace:GetServerTimeNow()) + 1)
-			
-			-- 广播下一次的重置时间给所有客户端（防止后续 DataStore 节流导致客户端收不到倒计时更新）
-			NetMsg.FireNotifyLeaderboardResetTime(nil, nextRefreshTimestamp)
+			print(string.format("%s Starting periodic refresh. NextPullAt: %s", LOG_PREFIX, os.date("!%X", nextLeaderboardPullTimestamp)))
+			NetMsg.FireNotifyLeaderboardResetTime(nil, GetNextWeekResetTimestampCached())
 
 			for _, category in pairs(GameConfig.LeaderboardCategory) do
 				LeaderboardManager.RefreshLeaderboard(category)
@@ -267,12 +276,16 @@ end
 function LeaderboardManager.OnPlayerAdded(player: Player)
 	LeaderboardManager.CheckWeeklyReset(player)
 	
-	local resetTime = GetNextRefreshTimestamp()
+	local resetTime = GetNextWeekResetTimestampCached()
 	NetMsg.FireNotifyLeaderboardResetTime(player, resetTime)
 	
 	for category, topList in pairs(topLists) do
 		NetMsg.FireNotifyLeaderboardUpdate(player, category, topList, resetTime)
 	end
+end
+
+function LeaderboardManager.GetOverallDataStoreKey(category: string): string
+	return GetOverallKey(category)
 end
 
 return LeaderboardManager
