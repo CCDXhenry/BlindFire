@@ -169,8 +169,12 @@ local ShowDownTipTextWithScaleFade: (textSource: string, key: string?, args: { s
 local EARTHQUAKE_WARNING_COLOR = Color3.fromRGB(255, 210, 0)
 local EARTHQUAKE_DANGER_COLOR = Color3.fromRGB(255, 60, 60)
 
-local countdownText: TextLabel? = gameTipFrame:FindFirstChild("CountdownText") :: TextLabel
-if countdownText == nil and topTipText ~= nil then
+local countdownText: TextLabel? = gameTipFrame:FindFirstChild("CountdownText") :: TextLabel?
+local fightingCountdownText: TextLabel? = nil
+if topTipText ~= nil then
+	fightingCountdownText = topTipText:FindFirstChild("CountdownText") :: TextLabel?
+end
+if fightingCountdownText == nil and topTipText ~= nil then
 	local label = Instance.new("TextLabel")
 	label.Name = "CountdownText"
 	label.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -182,8 +186,8 @@ if countdownText == nil and topTipText ~= nil then
 	label.TextColor3 = EARTHQUAKE_WARNING_COLOR
 	label.Text = ""
 	label.Visible = false
-	label.Parent = gameTipFrame
-	countdownText = label
+	label.Parent = topTipText
+	fightingCountdownText = label
 end
 
 -- DamageOverlay
@@ -470,6 +474,7 @@ local function ApplyMatchStateTextScale(matchState: GameConfig.MatchState)
 	local targetScale = if matchState == GameConfig.MatchState.Fighting then FightingPhaseTextScale else DefaultPhaseTextScale
 	ApplyPhaseTextScale(topTipText, targetScale)
 	ApplyPhaseTextScale(countdownText, targetScale)
+	ApplyPhaseTextScale(fightingCountdownText, targetScale)
 end
 
 local function ApplyFightingTopTipCountdownText(countdown: number)
@@ -486,6 +491,32 @@ local function ApplyFightingTopTipCountdownText(countdown: number)
 	local countdownSeconds = math.max(countdown, 0)
 	local countdownSource = string.gsub(GameTexts.CountdownFormat.source, "{1}", tostring(countdownSeconds))
 	topTipText.Text = string.format("%s %s", GameTexts.MatchPhaseFighting.source, countdownSource)
+end
+
+local function ApplyFightingTopTipText()
+	if topTipText == nil then
+		return
+	end
+	topTipText.Visible = true
+	topTipText.TextColor3 = TOP_TIP_SUCCESS_COLOR
+	topTipText.TextTransparency = 0
+	local stroke = topTipText:FindFirstChild("UIStroke") :: UIStroke?
+	if stroke ~= nil then
+		stroke.Transparency = 0
+	end
+	TranslationTool.CustomAutoLocalizeTextLabel(topTipText, GameTexts.MatchPhaseFighting.source, GameTexts.MatchPhaseFighting.key, nil)
+end
+
+local function ApplyFightingSplitTipAndCountdownText(countdown: number)
+	if fightingCountdownText == nil then
+		ApplyFightingTopTipCountdownText(countdown)
+		return
+	end
+	ApplyFightingTopTipText()
+	fightingCountdownText.Visible = true
+	fightingCountdownText.TextColor3 = TOP_TIP_SUCCESS_COLOR
+	local countdownSeconds = math.max(countdown, 0)
+	ApplyCountdownFormatToLabel(fightingCountdownText, countdownSeconds)
 end
 
 local function StartPopUpCountdown(targetTimeLabel: TextLabel?, totalSeconds: number, timeoutCallback: () -> ())
@@ -650,7 +681,7 @@ local function StartPhaseCountdown(phase: GameConfig.MatchState, initialRemain: 
 		local remain = initialRemain
 		while remain >= 1 do
 			if phase == GameConfig.MatchState.Fighting then
-				ApplyFightingTopTipCountdownText(remain)
+				ApplyFightingSplitTipAndCountdownText(remain)
 			elseif phase == GameConfig.MatchState.MatchCountdown or phase == GameConfig.MatchState.GameStartCountdown then
 				if countdownText ~= nil then
 					countdownText.Visible = true
@@ -788,15 +819,22 @@ local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: 
 			countdownText.Visible = false
 		end
 		if countdown > 0 then
+			ApplyFightingSplitTipAndCountdownText(countdown)
 			StartPhaseCountdown(GameConfig.MatchState.Fighting, countdown)
 		else
-			ApplyFightingTopTipCountdownText(0)
+			ApplyFightingSplitTipAndCountdownText(0)
 		end
 		return
 	end
 
 	if countdownText == nil then
+		if fightingCountdownText ~= nil then
+			fightingCountdownText.Visible = false
+		end
 		return
+	end
+	if fightingCountdownText ~= nil then
+		fightingCountdownText.Visible = false
 	end
 	if matchState == GameConfig.MatchState.MatchCountdown or matchState == GameConfig.MatchState.GameStartCountdown then
 		if countdown > 0 then
