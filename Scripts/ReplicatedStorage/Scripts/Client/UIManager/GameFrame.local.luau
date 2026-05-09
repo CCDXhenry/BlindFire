@@ -8,6 +8,7 @@ local core = replicatedStorage:WaitForChild("Core")
 local coreScripts = core:WaitForChild("Scripts")
 local coreClientScripts = coreScripts:WaitForChild("Client")
 local UIAdapter = require(coreClientScripts:FindFirstChild("UIAdapter"))
+local UserInutExtension = require(coreClientScripts:FindFirstChild("UserInutExtension"))
 
 local scripts = replicatedStorage:WaitForChild("Scripts")
 local clientScripts = scripts:WaitForChild("Client")
@@ -150,9 +151,12 @@ local function UpdateGameFrame(deltaTime: number)
 
 	local matchState = BulletClientManager.GetMatchState()
 	local isAlive = BulletClientManager.IsLocalInVehicle()
-	
-	-- Show fire button only if alive AND during GameStartCountdown or Fighting
-	local shouldBeVisible = isAlive
+	local inputTypeString: string?, _ = UserInutExtension.GetInputType()
+	local showTouchFireUi = inputTypeString ~= UserInutExtension.InputTypeString.Keyboard_Mouse
+
+	-- Show touch fire UI only off keyboard/mouse; hide on PC KM. Same phases as before.
+	local shouldBeVisible = showTouchFireUi
+		and isAlive
 		and (matchState == GameConfig.MatchState.GameStartCountdown or matchState == GameConfig.MatchState.Fighting)
 	ApplyFireButtonVisible(shouldBeVisible)
 	
