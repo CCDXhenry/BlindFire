@@ -154,6 +154,7 @@ end
 
 --TopTipText
 local topTipText: TextLabel? = gameTipFrame:FindFirstChild("TopTipText") :: TextLabel
+local topTipText2: TextLabel? = gameTipFrame:FindFirstChild("TopTipText2") :: TextLabel
 local topTipFadeCoroutine: thread?
 local topTipFadeTween: Tween?
 local topTipStrokeFadeTween: Tween?
@@ -170,25 +171,6 @@ local EARTHQUAKE_WARNING_COLOR = Color3.fromRGB(255, 210, 0)
 local EARTHQUAKE_DANGER_COLOR = Color3.fromRGB(255, 60, 60)
 
 local countdownText: TextLabel? = gameTipFrame:FindFirstChild("CountdownText") :: TextLabel?
-local fightingCountdownText: TextLabel? = nil
-if topTipText ~= nil then
-	fightingCountdownText = topTipText:FindFirstChild("CountdownText") :: TextLabel?
-end
-if fightingCountdownText == nil and topTipText ~= nil then
-	local label = Instance.new("TextLabel")
-	label.Name = "CountdownText"
-	label.AnchorPoint = Vector2.new(0.5, 0.5)
-	label.Size = UDim2.new(0, 140, 0, 80)
-	label.Position = UDim2.new(0.5, 0, 0.4, 0)
-	label.BackgroundTransparency = 1
-	label.TextScaled = true
-	label.Font = Enum.Font.GothamBold
-	label.TextColor3 = EARTHQUAKE_WARNING_COLOR
-	label.Text = ""
-	label.Visible = false
-	label.Parent = topTipText
-	fightingCountdownText = label
-end
 
 -- DamageOverlay
 local damageOverlay: Frame? = gameTipFrame:FindFirstChild("DamageOverlay") :: Frame?
@@ -474,7 +456,7 @@ local function ApplyMatchStateTextScale(matchState: GameConfig.MatchState)
 	local targetScale = if matchState == GameConfig.MatchState.Fighting then FightingPhaseTextScale else DefaultPhaseTextScale
 	ApplyPhaseTextScale(topTipText, targetScale)
 	ApplyPhaseTextScale(countdownText, targetScale)
-	ApplyPhaseTextScale(fightingCountdownText, targetScale)
+	ApplyPhaseTextScale(topTipText2, targetScale)
 end
 
 local function ApplyFightingTopTipCountdownText(countdown: number)
@@ -493,30 +475,59 @@ local function ApplyFightingTopTipCountdownText(countdown: number)
 	topTipText.Text = string.format("%s %s", GameTexts.MatchPhaseFighting.source, countdownSource)
 end
 
-local function ApplyFightingTopTipText()
+local function ApplyFightPhaseTopTipText2(countdown: number)
+	if topTipText2 == nil then
+		ApplyFightingTopTipCountdownText(countdown)
+		return
+	end
+	topTipText2.Visible = true
+	topTipText2.TextColor3 = TOP_TIP_SUCCESS_COLOR
+	topTipText2.TextTransparency = 0
+	local stroke2 = topTipText2:FindFirstChild("UIStroke") :: UIStroke?
+	if stroke2 ~= nil then
+		stroke2.Transparency = 0
+	end
+	local secondsText = tostring(math.max(countdown, 0))
+	local fightLine = TranslationTool.FormatByKey(GameTexts.MatchPhaseFighting.source, GameTexts.MatchPhaseFighting.key, {})
+	local countdownLine = TranslationTool.FormatByKey(GameTexts.CountdownFormat.source, GameTexts.CountdownFormat.key, { secondsText })
+	TranslationTool.CustomAutoLocalizeTextLabel(
+		topTipText2,
+		GameTexts.MatchPhaseFightingWithCountdown.source,
+		GameTexts.MatchPhaseFightingWithCountdown.key,
+		{ fightLine, countdownLine }
+	)
+end
+
+local function HideFightTopTipText2()
+	if topTipText2 == nil then
+		return
+	end
+	topTipText2.Visible = false
+	TranslationTool.RemoveCustomAutoLocalizeGui(topTipText2)
+end
+
+local function HideTopTipTextImmediately()
 	if topTipText == nil then
 		return
 	end
-	topTipText.Visible = true
-	topTipText.TextColor3 = TOP_TIP_SUCCESS_COLOR
-	topTipText.TextTransparency = 0
+	if topTipFadeTween then
+		topTipFadeTween:Cancel()
+		topTipFadeTween = nil
+	end
+	if topTipStrokeFadeTween then
+		topTipStrokeFadeTween:Cancel()
+		topTipStrokeFadeTween = nil
+	end
+	if topTipFadeCoroutine ~= nil and coroutine.status(topTipFadeCoroutine) ~= "dead" and topTipFadeCoroutine ~= coroutine.running() then
+		pcall(coroutine.close, topTipFadeCoroutine)
+	end
+	topTipFadeCoroutine = nil
 	local stroke = topTipText:FindFirstChild("UIStroke") :: UIStroke?
 	if stroke ~= nil then
 		stroke.Transparency = 0
 	end
-	TranslationTool.CustomAutoLocalizeTextLabel(topTipText, GameTexts.MatchPhaseFighting.source, GameTexts.MatchPhaseFighting.key, nil)
-end
-
-local function ApplyFightingSplitTipAndCountdownText(countdown: number)
-	if fightingCountdownText == nil then
-		ApplyFightingTopTipCountdownText(countdown)
-		return
-	end
-	ApplyFightingTopTipText()
-	fightingCountdownText.Visible = true
-	fightingCountdownText.TextColor3 = TOP_TIP_SUCCESS_COLOR
-	local countdownSeconds = math.max(countdown, 0)
-	ApplyCountdownFormatToLabel(fightingCountdownText, countdownSeconds)
+	topTipText.TextTransparency = 0
+	topTipText.Visible = false
 end
 
 local function StartPopUpCountdown(targetTimeLabel: TextLabel?, totalSeconds: number, timeoutCallback: () -> ())
@@ -681,7 +692,7 @@ local function StartPhaseCountdown(phase: GameConfig.MatchState, initialRemain: 
 		local remain = initialRemain
 		while remain >= 1 do
 			if phase == GameConfig.MatchState.Fighting then
-				ApplyFightingSplitTipAndCountdownText(remain)
+				ApplyFightPhaseTopTipText2(remain)
 			elseif phase == GameConfig.MatchState.MatchCountdown or phase == GameConfig.MatchState.GameStartCountdown then
 				if countdownText ~= nil then
 					countdownText.Visible = true
@@ -806,9 +817,14 @@ local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: 
 	ApplyMatchStateTextScale(matchState)
 
 	if matchState ~= lastNotifiedMatchState then
-		local entry, tipColor = GetMatchPhaseTipEntry(matchState)
-		local tipDuration = GetPhaseTopTipDuration(matchState, countdown)
-		OnShowTopTipText(entry.source, tipColor, tipDuration, nil, entry.key)
+		if matchState == GameConfig.MatchState.Fighting then
+			HideTopTipTextImmediately()
+		else
+			HideFightTopTipText2()
+			local entry, tipColor = GetMatchPhaseTipEntry(matchState)
+			local tipDuration = GetPhaseTopTipDuration(matchState, countdown)
+			OnShowTopTipText(entry.source, tipColor, tipDuration, nil, entry.key)
+		end
 		lastNotifiedMatchState = matchState
 	end
 
@@ -819,23 +835,19 @@ local function OnNotifyMatchState(matchState: GameConfig.MatchState, countdown: 
 			countdownText.Visible = false
 		end
 		if countdown > 0 then
-			ApplyFightingSplitTipAndCountdownText(countdown)
+			ApplyFightPhaseTopTipText2(countdown)
 			StartPhaseCountdown(GameConfig.MatchState.Fighting, countdown)
 		else
-			ApplyFightingSplitTipAndCountdownText(0)
+			ApplyFightPhaseTopTipText2(0)
 		end
 		return
 	end
 
 	if countdownText == nil then
-		if fightingCountdownText ~= nil then
-			fightingCountdownText.Visible = false
-		end
+		HideFightTopTipText2()
 		return
 	end
-	if fightingCountdownText ~= nil then
-		fightingCountdownText.Visible = false
-	end
+	HideFightTopTipText2()
 	if matchState == GameConfig.MatchState.MatchCountdown or matchState == GameConfig.MatchState.GameStartCountdown then
 		if countdown > 0 then
 			StartPhaseCountdown(matchState, countdown)

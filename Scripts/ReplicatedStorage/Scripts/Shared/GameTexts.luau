@@ -5,6 +5,8 @@ local GameTexts = {
 	MatchPhaseMatchCountdown = { key = "MatchPhaseMatchCountdown", source = "Match starting soon" },
 	MatchPhaseGameStartCountdown = { key = "MatchPhaseGameStartCountdown", source = "Round starts in…" },
 	MatchPhaseFighting = { key = "MatchPhaseFighting", source = "Fight!" },
+	-- TopTipText2: {1} fight phase, {2} countdown; use CustomAutoLocalizeTextLabel (disable AutoLocalize on label in Studio).
+	MatchPhaseFightingWithCountdown = { key = "MatchPhaseFightingWithCountdown", source = "{1} {2}" },
 	RoundDefeat = { key = "RoundDefeat", source = "Eliminated" },
 	RoundVictory = { key = "RoundVictory", source = "Victory!" },
 	RoundNoSurvivors = { key = "RoundNoSurvivors", source = "Round over — no survivors" },
