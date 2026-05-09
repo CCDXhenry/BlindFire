@@ -35,6 +35,7 @@ local connectionMap: { [number]: RBXScriptConnection } = {}
 local lastDeadServerTimeMap: { [number]: number } = {}
 local botMetaMap: { [string]: { name: string, isBot: boolean } } = {}
 local isFighting = false
+local hasRebuiltRealPlayerUiInCurrentLobby = false
 
 local SegmentNamePrefix = "SegmentFrame_"
 local RingColorOn: Color3 = Color3.fromRGB(255, 170, 0)
@@ -231,6 +232,18 @@ local function UpdateUIVisibility(ui: BillboardGui, isParticipant: boolean)
 	end
 end
 
+local function ResolveRealPlayerAdorneePart(character: Model): BasePart?
+	local head = character:FindFirstChild("Head")
+	if head ~= nil and head:IsA("BasePart") then
+		return head
+	end
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	if hrp ~= nil and hrp:IsA("BasePart") then
+		return hrp
+	end
+	return nil
+end
+
 local function TryAttachUiToRealPlayer(playerId: number, ui: BillboardGui, isParticipant: boolean): (boolean, string?)
 	local player = players:GetPlayerByUserId(playerId)
 	if player == nil then
@@ -247,11 +260,11 @@ local function TryAttachUiToRealPlayer(playerId: number, ui: BillboardGui, isPar
 		humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
 	end
 
-	local head = character:FindFirstChild("Head")
-	if head == nil or not head:IsA("BasePart") then
+	local adorneePart = ResolveRealPlayerAdorneePart(character)
+	if adorneePart == nil then
 		return false, "head_missing"
 	end
-	ui.Adornee = head
+	ui.Adornee = adorneePart
 
 	local playerGui = players.LocalPlayer:FindFirstChild("PlayerGui")
 	if playerGui == nil then
@@ -311,9 +324,31 @@ local function ResolveBotAdorneePart(playerId: number): BasePart?
 	return nil
 end
 
+local function IsPlayerInfoUiAlive(ui: BillboardGui): boolean
+	return ui.Parent ~= nil
+end
+
+local function TryReparentUiToPlayerGui(ui: BillboardGui, playerGui: Instance): boolean
+	if ui.Parent == playerGui then
+		return true
+	end
+	local ok = pcall(function()
+		ui.Parent = playerGui
+	end)
+	if not ok then
+		return false
+	end
+	BillboardManager.Track(ui)
+	return true
+end
+
 local function RefreshBotUiAdornee(playerId: number)
 	local data = playerUIMap[playerId]
 	if data == nil then
+		return
+	end
+	if not IsPlayerInfoUiAlive(data.ui) then
+		RemoveUIForPlayer(playerId)
 		return
 	end
 	if players:GetPlayerByUserId(playerId) ~= nil then
@@ -324,8 +359,10 @@ local function RefreshBotUiAdornee(playerId: number)
 		data.ui.Adornee = targetAdornee
 		local localPlayerGui = players.LocalPlayer:FindFirstChild("PlayerGui")
 		if localPlayerGui ~= nil and data.ui.Parent ~= localPlayerGui then
-			data.ui.Parent = localPlayerGui
-			BillboardManager.Track(data.ui)
+			local attachedToGui = TryReparentUiToPlayerGui(data.ui, localPlayerGui)
+			if not attachedToGui then
+				RemoveUIForPlayer(playerId)
+			end
 		end
 	end
 end
@@ -335,12 +372,27 @@ local function RefreshRealPlayerUiAdornee(playerId: number)
 	if data == nil then
 		return
 	end
+	if not IsPlayerInfoUiAlive(data.ui) then
+		RemoveUIForPlayer(playerId)
+		return
+	end
 	if players:GetPlayerByUserId(playerId) == nil then
 		return
 	end
 
 	local playerGui = players.LocalPlayer:FindFirstChild("PlayerGui")
-	if data.ui.Adornee ~= nil and playerGui ~= nil and data.ui.Parent == playerGui then
+	local realPlayer = players:GetPlayerByUserId(playerId)
+	local currentCharacter = if realPlayer ~= nil then realPlayer.Character else nil
+	local currentAdorneeTarget = if currentCharacter ~= nil and currentCharacter:IsA("Model")
+		then ResolveRealPlayerAdorneePart(currentCharacter)
+		else nil
+	local currentAdornee = data.ui.Adornee :: Instance?
+	local isCurrentAdorneeValid = currentAdornee ~= nil
+		and currentAdornee:IsDescendantOf(workspace)
+	local isBoundToCurrentHead = isCurrentAdorneeValid
+		and currentAdorneeTarget ~= nil
+		and currentAdornee == currentAdorneeTarget
+	if isBoundToCurrentHead and playerGui ~= nil and data.ui.Parent == playerGui then
 		realPlayerAdorneePendingMap[playerId] = nil
 		return
 	end
@@ -353,6 +405,30 @@ local function RefreshRealPlayerUiAdornee(playerId: number)
 		realPlayerAdorneePendingMap[playerId] = nil
 		realPlayerAdorneeLastWarnClockMap[playerId] = nil
 		return
+	end
+
+	-- In lobby/settlement, some real players may not have Character/Head yet after death.
+	-- Fallback to vehicle/lobby model adornee so name UI can still be shown.
+	if not isFighting then
+		local fallbackAdornee = ResolveBotAdorneePart(playerId)
+		local localPlayerGui = players.LocalPlayer:FindFirstChild("PlayerGui")
+		if fallbackAdornee ~= nil and localPlayerGui ~= nil then
+			data.ui.Adornee = fallbackAdornee
+			if data.ui.Parent ~= localPlayerGui then
+				local attachedToGui = TryReparentUiToPlayerGui(data.ui, localPlayerGui)
+				if not attachedToGui then
+					RemoveUIForPlayer(playerId)
+					return
+				end
+			end
+			UpdateUIVisibility(data.ui, data.isParticipant)
+			if realPlayerAdorneePendingMap[playerId] then
+				print(string.format("[PlayerInfoUIManager] RecoveredPlayerNameUI userId=%d source=lobby_fallback", playerId))
+			end
+			realPlayerAdorneePendingMap[playerId] = nil
+			realPlayerAdorneeLastWarnClockMap[playerId] = nil
+			return
+		end
 	end
 
 	realPlayerAdorneePendingMap[playerId] = true
@@ -480,6 +556,21 @@ local function EnsureRealPlayerNameUIForAll()
 	end
 end
 
+local function ForceRebuildRealPlayerNameUiInLobby()
+	local localUserId = players.LocalPlayer.UserId
+	local removeIdList: { number } = {}
+	for playerId, _ in playerUIMap do
+		if playerId ~= localUserId and players:GetPlayerByUserId(playerId) ~= nil then
+			table.insert(removeIdList, playerId)
+		end
+	end
+	for _, playerId in removeIdList do
+		RemoveUIForPlayer(playerId)
+	end
+	EnsureRealPlayerNameUIForAll()
+	NetMsg.FireRequestSyncUnit()
+end
+
 RemoveUIForPlayer = function(playerId: number)
 	local data = playerUIMap[playerId]
 	if data then
@@ -558,13 +649,28 @@ function PlayerInfoUIManager.Init()
 			if lastDeadServerTimeMap[playerId] ~= sampleDeadServerTime then
 				return
 			end
+			if players:GetPlayerByUserId(playerId) ~= nil then
+				-- Keep real-player name UI after death; lobby/settlement can fallback to vehicle/base part.
+				RefreshRealPlayerUiAdornee(playerId)
+				return
+			end
 			RemoveUIForPlayer(playerId)
 		end)
 	end)
 
 	NetMsg.ConnectNotifyMatchState(function(matchState, countdown)
 		isFighting = (matchState == GameConfig.MatchState.Fighting or matchState == GameConfig.MatchState.GameStartCountdown)
-		EnsureRealPlayerNameUIForAll()
+		if matchState == GameConfig.MatchState.InLobby then
+			if not hasRebuiltRealPlayerUiInCurrentLobby then
+				ForceRebuildRealPlayerNameUiInLobby()
+				hasRebuiltRealPlayerUiInCurrentLobby = true
+			else
+				EnsureRealPlayerNameUIForAll()
+			end
+		else
+			hasRebuiltRealPlayerUiInCurrentLobby = false
+			EnsureRealPlayerNameUIForAll()
+		end
 		for playerId, data in playerUIMap do
 			UpdateUIVisibility(data.ui, data.isParticipant)
 			RefreshRealPlayerUiAdornee(playerId)
@@ -613,6 +719,9 @@ function PlayerInfoUIManager.Init()
 		local shouldRetryRealPlayerAdornee = realPlayerAdorneeRetryAccumSec >= RealPlayerAdorneeRetryIntervalSec
 		if shouldRetryRealPlayerAdornee then
 			realPlayerAdorneeRetryAccumSec = 0
+			if not isFighting then
+				EnsureRealPlayerNameUIForAll()
+			end
 		end
 
 		for playerId, _ in playerUIMap do

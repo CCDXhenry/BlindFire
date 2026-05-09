@@ -394,7 +394,7 @@ GameConfig.LeaderboardUpdateInterval = 10 * 60
 GameConfig.LeaderboardDisplayCount = 20
 -- 周榜统一时间基准（UTC Unix 秒）
 GameConfig.LeaderboardWeekStartUnixUtc = 1736226000 -- 2025-01-07 05:00:00 UTC (Tuesday 00:00 EST, fixed UTC-5)
-GameConfig.LeaderboardWeekDurationSeconds = 20 * 60 --7 * 24 * 60 * 60
+GameConfig.LeaderboardWeekDurationSeconds = 7 * 24 * 60 * 60
 GameConfig.LeaderboardDataVersion = "v2"
 
 -- 静态卡死检测阈值

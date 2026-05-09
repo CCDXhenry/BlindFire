@@ -84,7 +84,7 @@ function BillboardManager.Track(gui: BillboardGui)
 		end),
 		gui:GetPropertyChangedSignal("Adornee"):Connect(function()
 			local adornee = gui.Adornee
-			gui.Enabled = adornee.Parent ~= nil
+			gui.Enabled = adornee ~= nil and adornee.Parent ~= nil
 			UpdateSingleInfoScale(gui)
 		end),
 		gui.AncestryChanged:Connect(function()
