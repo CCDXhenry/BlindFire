@@ -16,6 +16,7 @@ local core = replicatedStorage:WaitForChild("Core")
 local coreScripts = core:WaitForChild("Scripts")
 local coreClientScripts = coreScripts:WaitForChild("Client")
 local TranslationTool = require(coreClientScripts:FindFirstChild("TranslationTool"))
+local UIAdapter = require(coreClientScripts:FindFirstChild("UIAdapter"))
 
 local uiOriginsFolder = replicatedStorage:WaitForChild("UI") :: Folder
 
@@ -252,6 +253,8 @@ function KillFeedManager.Init(gameScreenGui: ScreenGui)
 	entryTemplate = template:Clone()
 	template:Destroy()
 	container = feedFrame
+
+	UIAdapter.AddAdaptiveFrame(feedFrame, UIAdapter.AdaptiveType.Center)
 
 	NetMsg.ConnectNotifyBotMetaSync(OnNotifyBotMetaSync)
 	NetMsg.ConnectNotifyHpChanged(OnNotifyHpChanged)
