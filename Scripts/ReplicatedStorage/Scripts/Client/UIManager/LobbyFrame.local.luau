@@ -51,21 +51,42 @@ local matchPhaseEndClock = 0
 
 local function IsVehicleAffordable(localPlayerInfo: GameConfig.ClientLocalPlayerInfo, vehicleData: GameConfig.VehicleData): boolean
 	local coinAmount: number = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
-	local rbAmount: number = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Rb)] or 0
-	local rbCost = vehicleData.costRb or vehicleData.costCoin
 
 	if vehicleData.costType == GameConfig.CostType.Coin then
 		return coinAmount >= vehicleData.costCoin
-	elseif vehicleData.costType == GameConfig.CostType.Rb then
-		return rbAmount >= rbCost
 	elseif vehicleData.costType == GameConfig.CostType.CoinOrRb then
-		return coinAmount >= vehicleData.costCoin or rbAmount >= rbCost
-	elseif vehicleData.costType == GameConfig.CostType.GroupReward then
-		-- 群组奖励载具不参与大厅载具红点判定
-		return false
+		return coinAmount >= vehicleData.costCoin
 	end
 
 	return false
+end
+
+local function GetCheapestAffordableUnownedVehicleId(localPlayerInfo: GameConfig.ClientLocalPlayerInfo): number?
+	local cheapestVehicleData: GameConfig.VehicleData? = nil
+	local cheapestVehicleId: number? = nil
+
+	for vehicleId, vehicleData in pairs(GameConfig.VehicleDataMap) do
+		local isOwned = localPlayerInfo.vehicleInventory.ownedList[tostring(vehicleId)] == true
+		if not isOwned and IsVehicleAffordable(localPlayerInfo, vehicleData) then
+			if cheapestVehicleData == nil then
+				cheapestVehicleData = vehicleData
+				cheapestVehicleId = vehicleId
+			else
+				local isCheaper = vehicleData.costCoin < cheapestVehicleData.costCoin
+				local isSameCostBetterSort = vehicleData.costCoin == cheapestVehicleData.costCoin
+					and vehicleData.sortId < cheapestVehicleData.sortId
+				local isSameCostSameSortBetterId = vehicleData.costCoin == cheapestVehicleData.costCoin
+					and vehicleData.sortId == cheapestVehicleData.sortId
+					and vehicleId < (cheapestVehicleId :: number)
+				if isCheaper or isSameCostBetterSort or isSameCostSameSortBetterId then
+					cheapestVehicleData = vehicleData
+					cheapestVehicleId = vehicleId
+				end
+			end
+		end
+	end
+
+	return cheapestVehicleId
 end
 
 local function IsAfkButtonHiddenByBattleState(): boolean
@@ -89,32 +110,7 @@ local function RefreshVehiclesRedPoint()
 		return
 	end
 
-	local maxOwnedId = 0
-	for idStr, owned in pairs(localPlayerInfo.vehicleInventory.ownedList) do
-		if owned then
-			local id = tonumber(idStr)
-			if id and id > maxOwnedId then
-				maxOwnedId = id
-			end
-		end
-	end
-
-	local hasAffordableBetter = false
-	for _, vehicleData in pairs(GameConfig.VehicleDataMap) do
-		-- 只考虑比当前最强车更强的载具
-		if vehicleData.id > maxOwnedId then
-			local isOwned = localPlayerInfo.vehicleInventory.ownedList[tostring(vehicleData.id)]
-			
-			if not isOwned then
-				if IsVehicleAffordable(localPlayerInfo, vehicleData) then
-					hasAffordableBetter = true
-					break
-				end
-			end
-		end
-	end
-
-	vehiclesRedPoint.Visible = hasAffordableBetter
+	vehiclesRedPoint.Visible = GetCheapestAffordableUnownedVehicleId(localPlayerInfo) ~= nil
 end
 
 local function RefreshAfkButton()

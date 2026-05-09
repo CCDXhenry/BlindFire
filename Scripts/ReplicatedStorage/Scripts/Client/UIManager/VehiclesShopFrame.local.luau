@@ -57,6 +57,39 @@ local function IsVehicleAffordable(vehicleData: GameConfig.VehicleData): boolean
 	return false
 end
 
+local function GetCheapestAffordableUnownedVehicleId(playerInfo: GameConfig.ClientLocalPlayerInfo): number?
+	local coinAmount = playerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
+	local cheapestVehicleData: GameConfig.VehicleData? = nil
+	local cheapestVehicleId: number? = nil
+
+	for vehicleId, vehicleData in pairs(GameConfig.VehicleDataMap) do
+		local isOwned = playerInfo.vehicleInventory.ownedList[tostring(vehicleId)] == true
+		local isCoinPurchasable = vehicleData.costType == GameConfig.CostType.Coin
+			or vehicleData.costType == GameConfig.CostType.CoinOrRb
+		local canAffordByCoin = coinAmount >= vehicleData.costCoin
+
+		if not isOwned and isCoinPurchasable and canAffordByCoin then
+			if cheapestVehicleData == nil then
+				cheapestVehicleData = vehicleData
+				cheapestVehicleId = vehicleId
+			else
+				local isCheaper = vehicleData.costCoin < cheapestVehicleData.costCoin
+				local isSameCostBetterSort = vehicleData.costCoin == cheapestVehicleData.costCoin
+					and vehicleData.sortId < cheapestVehicleData.sortId
+				local isSameCostSameSortBetterId = vehicleData.costCoin == cheapestVehicleData.costCoin
+					and vehicleData.sortId == cheapestVehicleData.sortId
+					and vehicleId < (cheapestVehicleId :: number)
+				if isCheaper or isSameCostBetterSort or isSameCostSameSortBetterId then
+					cheapestVehicleData = vehicleData
+					cheapestVehicleId = vehicleId
+				end
+			end
+		end
+	end
+
+	return cheapestVehicleId
+end
+
 local function PlayBuyBtnIntroAnim(buyBtn: ImageButton)
 	-- 防止重复播放
 	if buyBtn:GetAttribute("IntroPlayed") then
@@ -455,32 +488,8 @@ local function InitFrame()
 	vehiclesBtnPre.Visible = false
 	vehiclesBtnPre.Parent = nil
 
-	-- 自动跳转到能够购买的车辆（比自己最强车强且是能够购买中id最小的）
-	local maxOwnedId = 0
-	for idStr, owned in pairs(localPlayerInfo.vehicleInventory.ownedList) do
-		if owned then
-			local id = tonumber(idStr)
-			if id and id > maxOwnedId then
-				maxOwnedId = id
-			end
-		end
-	end
-
-	local coinAmount = localPlayerInfo.currencies[tostring(GameConfig.CurrencyType.Coin)] or 0
-	local bestAffordableId: number? = nil
-
-	for id, vehicleData in pairs(GameConfig.VehicleDataMap) do
-		if id > maxOwnedId then
-			-- 检查金币是否足够
-			if (vehicleData.costType == GameConfig.CostType.Coin or vehicleData.costType == GameConfig.CostType.CoinOrRb) and coinAmount >= vehicleData.costCoin then
-				if bestAffordableId == nil or id < bestAffordableId then
-					bestAffordableId = id
-				end
-			end
-		end
-	end
-
-	vehicleIdLookAt = bestAffordableId or (tonumber(localPlayerInfo.vehicleInventory.currentId) or 1)
+	local cheapestAffordableVehicleId = GetCheapestAffordableUnownedVehicleId(localPlayerInfo)
+	vehicleIdLookAt = cheapestAffordableVehicleId or (tonumber(localPlayerInfo.vehicleInventory.currentId) or 1)
 	RefreshFrame()
 end
 
