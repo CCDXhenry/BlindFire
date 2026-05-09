@@ -116,6 +116,8 @@ local function OnMatchStateChanged(matchState: GameConfig.MatchState, countdown:
 	phaseEndClock = os.clock() + countdown
 
 	if matchState == GameConfig.MatchState.InLobby or matchState == GameConfig.MatchState.MatchCountdown then
+		-- UnitRemove may not be broadcast on every round transition; proactively clear stale participation flags.
+		isLocalParticipant = false
 		isLocalDead = false
 	end
 end
