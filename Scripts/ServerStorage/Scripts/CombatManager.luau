@@ -85,6 +85,10 @@ type ServerBullet = {
 	visualSpawned: boolean,
 	physicsStarted: boolean,
 	pendingDestroyServerTime: number?,
+	-- Visual self-spin（读模型 RotationAxis / RotationSpeed，弧度/秒；无轴则为 nil）
+	projectileSpinAxis: number?,
+	projectileSpinRadPerSec: number,
+	projectileSpinAngleRad: number,
 }
 
 type ProjectileVisual = {
@@ -164,6 +168,9 @@ local PROJECTILE_POOL_PARK_BASE_POSITION = Vector3.new(100000, UNDERGROUND_Y - 5
 local PROJECTILE_POOL_PARK_OFFSET_STEP = Vector3.new(80, 0, -8)
 local PROJECTILE_BOUNCE_SEPARATION_BIAS = 0.05
 local PROJECTILE_EMBED_CHECK_BIAS = 0.05
+local PROJECTILE_ROTATION_AXIS_ATTR = "RotationAxis"
+local PROJECTILE_ROTATION_SPEED_ATTR = "RotationSpeed"
+local PROJECTILE_SPIN_TWO_PI = math.pi * 2
 
 local serverBulletsFolder: Folder? = nil
 -- 缓存 Models Folder
@@ -2040,6 +2047,98 @@ local function RecycleServerProjectileVisual(
 	})
 end
 
+local function ParseProjectileRotationAxisAttribute(attributeValue: unknown): number?
+	if typeof(attributeValue) ~= "string" then
+		return nil
+	end
+	local trimmedWhitespace = (attributeValue :: string):gsub("^%s*(.-)%s*$", "%1")
+	local token = string.upper(trimmedWhitespace)
+	if token == "X" then
+		return 1
+	elseif token == "Y" then
+		return 2
+	elseif token == "Z" then
+		return 3
+	end
+	return nil
+end
+
+local function ResolveServerProjectileSpinAxis(projectileModel: Model, templateName: string): number?
+	local axis = ParseProjectileRotationAxisAttribute(projectileModel:GetAttribute(PROJECTILE_ROTATION_AXIS_ATTR))
+	if axis ~= nil then
+		return axis
+	end
+	local templateModel = bulletModelsFolder:FindFirstChild(templateName)
+	if templateModel ~= nil and templateModel:IsA("Model") then
+		return ParseProjectileRotationAxisAttribute(templateModel:GetAttribute(PROJECTILE_ROTATION_AXIS_ATTR))
+	end
+	return nil
+end
+
+local function ResolveServerProjectileSpinDegPerSec(projectileModel: Model, templateName: string): number
+	local raw = projectileModel:GetAttribute(PROJECTILE_ROTATION_SPEED_ATTR)
+	if typeof(raw) == "number" and raw == raw then
+		return raw
+	end
+	local templateModel = bulletModelsFolder:FindFirstChild(templateName)
+	if templateModel ~= nil and templateModel:IsA("Model") then
+		local tRaw = templateModel:GetAttribute(PROJECTILE_ROTATION_SPEED_ATTR)
+		if typeof(tRaw) == "number" and tRaw == tRaw then
+			return tRaw
+		end
+	end
+	return GameConfig.ProjectileVisualSelfSpinDegreesPerSecond
+end
+
+local function ResolveServerProjectileSpinFields(projectileModel: Model?, templateName: string): (number?, number)
+	if projectileModel == nil then
+		return nil, 0
+	end
+	local axisIndex = ResolveServerProjectileSpinAxis(projectileModel, templateName)
+	if axisIndex == nil then
+		return nil, 0
+	end
+	local degPerSec = ResolveServerProjectileSpinDegPerSec(projectileModel, templateName)
+	local radPerSec = math.rad(degPerSec)
+	if math.abs(radPerSec) < 1e-12 then
+		return axisIndex, 0
+	end
+	return axisIndex, radPerSec
+end
+
+local function ComposeServerProjectileSpinCFrame(axisIndex: number, angleRad: number): CFrame
+	if axisIndex == 1 then
+		return CFrame.Angles(angleRad, 0, 0)
+	elseif axisIndex == 2 then
+		return CFrame.Angles(0, angleRad, 0)
+	end
+	return CFrame.Angles(0, 0, angleRad)
+end
+
+local function AdvanceServerProjectileVisualSpin(bullet: ServerBullet, dt: number)
+	if bullet.projectileSpinAxis == nil then
+		return
+	end
+	if math.abs(bullet.projectileSpinRadPerSec) < 1e-12 then
+		return
+	end
+	bullet.projectileSpinAngleRad = (bullet.projectileSpinAngleRad + bullet.projectileSpinRadPerSec * dt) % PROJECTILE_SPIN_TWO_PI
+end
+
+local function ApplyServerProjectileVisualWeldC0FromShotDirection(bullet: ServerBullet)
+	local visualWeld = bullet.visualWeld
+	if visualWeld == nil or visualWeld.Parent == nil then
+		return
+	end
+	local look = ToHorizontalDirection(bullet.shotDir)
+	local baseCFrame = CFrame.lookAt(Vector3.zero, look)
+	local spinCFrame = CFrame.new()
+	if bullet.projectileSpinAxis ~= nil and math.abs(bullet.projectileSpinRadPerSec) > 1e-12 then
+		spinCFrame = ComposeServerProjectileSpinCFrame(bullet.projectileSpinAxis :: number, bullet.projectileSpinAngleRad)
+	end
+	visualWeld.C0 = baseCFrame * spinCFrame
+end
+
 local function PivotServerProjectileToBullet(bullet: ServerBullet, displayPos: Vector3, instantSnap: boolean?)
 	local vm = bullet.visualModel
 	if vm == nil or vm.Parent == nil then
@@ -2051,8 +2150,7 @@ local function PivotServerProjectileToBullet(bullet: ServerBullet, displayPos: V
 	if root then
 		local visualWeld = bullet.visualWeld
 		if visualWeld ~= nil and visualWeld.Parent ~= nil then
-			-- Updating C0 bypasses physics interpolation, making the rotation snap instantly on clients
-			visualWeld.C0 = CFrame.lookAt(Vector3.zero, look)
+			ApplyServerProjectileVisualWeldC0FromShotDirection(bullet)
 		end
 		
 		if bullet.physicsStarted then
@@ -2384,12 +2482,17 @@ function CombatManager.OnHeartbeat(dt: number)
 			end
 			continue
 		end
-		-- 激活前：仅在首帧定位 visualModel，然后 continue 跳过物理更新
-		if currentServerTime < bullet.activeTime then
-			if bullet.visualModel ~= nil and bullet.visualModel.Parent ~= nil and not bullet.visualSpawned then
+		-- 视觉自转优先于 activeTime 判定：无论是否进入弹道推演，视觉件都应持续自转
+		AdvanceServerProjectileVisualSpin(bullet, dt)
+		if bullet.visualModel ~= nil and bullet.visualModel.Parent ~= nil then
+			if not bullet.visualSpawned then
 				PivotServerProjectileToBullet(bullet, bullet.spawnPos)
 				bullet.visualSpawned = true
+			else
+				ApplyServerProjectileVisualWeldC0FromShotDirection(bullet)
 			end
+		end
+		if currentServerTime < bullet.activeTime then
 			continue
 		end
 		
@@ -2964,6 +3067,10 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 
 	local visualModel, physicsRoot, visualWeld, linearVelocity =
 		CreateServerProjectileVisual(player.UserId, vehicleId, spawnPos, shotDirection, bulletId, bulletResource)
+	local spinAxis, spinRadPerSec = ResolveServerProjectileSpinFields(if visualModel then visualModel :: Model else nil, bulletResource)
+	local initialSpinAngleRad = if spinAxis ~= nil and math.abs(spinRadPerSec) > 1e-12
+		then (serverTime * spinRadPerSec) % PROJECTILE_SPIN_TWO_PI
+		else 0
 	activeServerBullets[bulletId] = {
 		shooterId = player.UserId,
 		vehicleId = vehicleId,
@@ -2988,7 +3095,14 @@ function CombatManager.OnRequestFire(player: Player, clientTimestamp: number, bu
 		visualSpawned = false,
 		physicsStarted = false,
 		pendingDestroyServerTime = nil,
+		projectileSpinAxis = spinAxis,
+		projectileSpinRadPerSec = spinRadPerSec,
+		projectileSpinAngleRad = initialSpinAngleRad,
 	}
+	local createdBullet = activeServerBullets[bulletId]
+	if createdBullet ~= nil then
+		ApplyServerProjectileVisualWeldC0FromShotDirection(createdBullet)
+	end
 	-- 同步增加计数
 	shooterBulletCountMap[player.UserId] = (shooterBulletCountMap[player.UserId] or 0) + 1
 

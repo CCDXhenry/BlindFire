@@ -328,7 +328,7 @@ GameConfig.RoundStartCountdown = 3
 -- 战斗阶段持续时长（秒）
 GameConfig.RoundFightDuration = 120
 -- 大厅到传送倒计时
-GameConfig.MatchCountdown = 30
+GameConfig.MatchCountdown = 15
 -- 准备入座延迟
 GameConfig.ArenaSeatPrepareDelay = 0.22
 -- 返回大厅解座等待
@@ -363,6 +363,8 @@ GameConfig.ProjectileStepMargin = 0.45
 GameConfig.MaxProjectileDistance = 500
 -- 子弹最大反弹次数
 GameConfig.ProjectileMaxBounces = 1
+-- 炮弹视觉自转：模型未设 RotationSpeed（度/秒）时的默认角速度（服务端 CombatManager 每帧写 VisualWeld.C0）
+GameConfig.ProjectileVisualSelfSpinDegreesPerSecond = 720
 -- 开火后坐力速度倍数
 GameConfig.FireRecoilSpeedMultiplier = 5
 -- 开火前摇时长（秒）
@@ -376,7 +378,7 @@ GameConfig.LeaderboardCategory = {
 }
 
 -- 排行榜更新频率（秒，1小时）
-GameConfig.LeaderboardUpdateInterval = 60
+GameConfig.LeaderboardUpdateInterval = 12 * 60 * 60
 -- 排行榜显示数量
 GameConfig.LeaderboardDisplayCount = 20
 
@@ -602,6 +604,10 @@ GameConfig.VisibleParameters = {
 	{ key = "ProjectileSpeed", alias = "子弹飞行速度" },
 	{ key = "ProjectileLifetime", alias = "子弹生存时间" },
 	{ key = "ProjectileMaxBounces", alias = "子弹最大反弹次数" },
+	{
+		key = "ProjectileVisualSelfSpinDegreesPerSecond",
+		alias = "子弹视觉自转默认角速度(度/秒)",
+	},
 	{ key = "CanHitSelf", alias = "能否击中自己" },
 	{ key = "FireCooldown", alias = "射击冷却时间" },
 	{ key = "WallBounceSpeedMultiplier", alias = "撞墙反弹速度倍数" },
