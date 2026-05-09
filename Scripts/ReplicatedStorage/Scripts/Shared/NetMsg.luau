@@ -36,6 +36,7 @@ local notifyArenaSeatPrepareEvent: RemoteEvent = remoteEventsFolder:FindFirstChi
 local notifyGameConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyGameConfigSync") :: RemoteEvent
 local notifyPendingConfigSyncEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("NotifyPendingConfigSync") :: RemoteEvent
 local requestSyncUnitEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestSyncUnit") :: RemoteEvent
+local requestClientInitReadyEvent: RemoteEvent
 local requestVehicleInputEvent: RemoteEvent? = remoteEventsFolder:FindFirstChild("RequestVehicleInput") :: RemoteEvent?
 local requestSetAfkStateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestSetAfkState") :: RemoteEvent
 local requestSyncAfkStateEvent: RemoteEvent = remoteEventsFolder:FindFirstChild("RequestSyncAfkState") :: RemoteEvent
@@ -70,6 +71,7 @@ end
 local requestGuideProgressEvent: RemoteEvent = EnsureRemoteEvent("RequestGuideProgress")
 local notifyGuideProgressUpdatedEvent: RemoteEvent = EnsureRemoteEvent("NotifyGuideProgressUpdated")
 local requestSyncMatchStateEvent: RemoteEvent = EnsureRemoteEvent("RequestSyncMatchState")
+requestClientInitReadyEvent = EnsureRemoteEvent("RequestClientInitReady")
 notifyBotMetaSyncEvent = EnsureRemoteEvent("NotifyBotMetaSync")
 if notifyVehicleDirectionChangedEvent == nil then
 	notifyVehicleDirectionChangedEvent = EnsureRemoteEvent("NotifyVehicleDirectionChanged")
@@ -173,6 +175,14 @@ end
 
 function NetMsg.ConnectRequestSyncUnit(callback: (player: Player) -> ())
 	requestSyncUnitEvent.OnServerEvent:Connect(callback)
+end
+
+function NetMsg.FireRequestClientInitReady(clientCharacterReady: boolean, clientInitReady: boolean)
+	requestClientInitReadyEvent:FireServer(clientCharacterReady, clientInitReady)
+end
+
+function NetMsg.ConnectRequestClientInitReady(callback: (player: Player, clientCharacterReady: boolean, clientInitReady: boolean) -> ())
+	requestClientInitReadyEvent.OnServerEvent:Connect(callback)
 end
 
 function NetMsg.FireRequestVehicleInput(inputCmd: GameConfig.VehicleInputCmd)

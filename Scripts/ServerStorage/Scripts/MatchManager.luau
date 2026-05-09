@@ -28,6 +28,7 @@ local ARENA_SPAWN_FOLDER_NAME = "ArenaSpawnPoints"
 local LOG_PREFIX = "[MatchManager]"
 local BOT_DEBUG_LOG = true
 local VEHICLE_MODEL_NAME_PREFIX = "Vehicle_"
+local MatchCountdownReadyWindowBufferSec = 3
 -- local MAX_SEAT_RETRY = 30
 -- local SEAT_RETRY_INTERVAL = 0.2
 -- local MAX_FORCE_SIT_RETRY = 20
@@ -267,6 +268,47 @@ local function BuildRoundParticipantIds(realPlayers: { Player }, targetRoundCoun
 	return selectedRealPlayers, participantIds
 end
 
+local function GetMatchCountdownReadyDeadlineClock(): number?
+	if currentMatchState ~= GameConfig.MatchState.MatchCountdown then
+		return nil
+	end
+	local allowReadyDuration = math.max(currentPhaseDuration - MatchCountdownReadyWindowBufferSec, 0)
+	return currentPhaseStartClock + allowReadyDuration
+end
+
+local function CheckRoundJoinEligibility(player: Player, readyDeadlineClock: number?): (boolean, string)
+	if player.Character == nil then
+		return false, "server_character_not_ready"
+	end
+	local clientCharacterReady, clientInitReady, clientReadyTimestamp = PlayerStateManager.GetClientReadyState(player.UserId)
+	if not clientCharacterReady then
+		return false, "client_character_not_ready"
+	end
+	if not clientInitReady then
+		return false, "client_init_not_ready"
+	end
+	if clientReadyTimestamp == nil then
+		return false, "client_ready_timestamp_missing"
+	end
+	if readyDeadlineClock ~= nil and clientReadyTimestamp > readyDeadlineClock then
+		return false, "ready_after_match_countdown_tminus3"
+	end
+	return true, "ok"
+end
+
+local function BuildEligibleRoundPlayers(realPlayers: { Player }, readyDeadlineClock: number?): { Player }
+	local eligiblePlayers: { Player } = {}
+	for _, player in ipairs(realPlayers) do
+		local canJoinRound, reason = CheckRoundJoinEligibility(player, readyDeadlineClock)
+		if canJoinRound then
+			table.insert(eligiblePlayers, player)
+		else
+			LogBotDebug(string.format("RoundJoinBlocked userId=%d reason=%s", player.UserId, reason))
+		end
+	end
+	return eligiblePlayers
+end
+
 local function OnRequestSetAfkState(player: Player, isAfk: boolean)
 	if currentMatchState == GameConfig.MatchState.GameStartCountdown or currentMatchState == GameConfig.MatchState.Fighting then
 		local roundInfo = PlayerStateManager.EnsurePlayerRoundInfo(player)
@@ -290,6 +332,19 @@ local function OnRequestSyncMatchState(player: Player)
 	local remainRaw = currentPhaseDuration - (os.clock() - currentPhaseStartClock)
 	local remainSec = math.ceil(math.max(remainRaw, 0))
 	NetMsg.FireNotifyMatchStateToPlayer(player, currentMatchState, remainSec)
+end
+
+local function OnRequestClientInitReady(player: Player, clientCharacterReady: boolean, clientInitReady: boolean)
+	PlayerStateManager.EnsurePlayerRoundInfo(player)
+	PlayerStateManager.SetClientReadyState(player.UserId, clientCharacterReady == true, clientInitReady == true)
+	local _, _, clientReadyTimestamp = PlayerStateManager.GetClientReadyState(player.UserId)
+	LogBotDebug(string.format(
+		"ClientReadyAck userId=%d clientCharacterReady=%s clientInitReady=%s readyTs=%s",
+		player.UserId,
+		tostring(clientCharacterReady == true),
+		tostring(clientInitReady == true),
+		tostring(clientReadyTimestamp)
+	))
 end
 
 local function LogInfo(message: string)
@@ -821,30 +876,30 @@ local function RunMatchLoop()
 
 		-- MatchCountdown 结束前做最终人数锁定（允许回收多余 bot）
 		local onlinePlayerCountAtLock = GetRealtimeOnlinePlayerCount()
-		local nonAfkPlayerCountAtLock = GetRealtimeNonAfkOnlinePlayerCount()
 		local targetRoundCountAtLock = CalculateTargetRoundCount(onlinePlayerCountAtLock)
 		local roundCapacityAtLock = math.max(GameConfig.MinPlayerToStart, GameConfig.MaxPlayerToStart)
-		local selectedRealCountAtLock = math.min(nonAfkPlayerCountAtLock, roundCapacityAtLock)
-		local currentBotCountAtLock = #CombatManager.GetBotIds()
-		local maxBotAllowedAtLock = math.max(0, roundCapacityAtLock - selectedRealCountAtLock)
-		-- 开局锁定时尽量保留已创建 bot，仅在超过本局容量上限时裁剪
-		lockedBotCountForRound = math.min(currentBotCountAtLock, maxBotAllowedAtLock)
+		local nonAfkPlayersAtLock = _GetNonAfkPlayers()
+		local readyDeadlineClock = GetMatchCountdownReadyDeadlineClock()
+		local eligiblePlayersAtLock = BuildEligibleRoundPlayers(nonAfkPlayersAtLock, readyDeadlineClock)
+		local eligibleRealCountAtLock = math.min(#eligiblePlayersAtLock, roundCapacityAtLock)
+		local targetParticipantCountAtLock = math.min(targetRoundCountAtLock, roundCapacityAtLock)
+		local requiredBotCountAtLock = math.max(0, targetParticipantCountAtLock - eligibleRealCountAtLock)
+		local maxBotAllowedAtLock = math.max(0, roundCapacityAtLock - eligibleRealCountAtLock)
+		lockedBotCountForRound = math.min(requiredBotCountAtLock, maxBotAllowedAtLock)
 		LogBotDebug(string.format(
-			"LockBotCountDecision online=%d nonAfk=%d targetRound=%d roundCap=%d realSelected=%d botCurrent=%d botMaxAllowed=%d botLocked=%d",
+			"LockBotCountDecision online=%d targetRound=%d roundCap=%d eligibleReal=%d botRequired=%d botMaxAllowed=%d botLocked=%d",
 			onlinePlayerCountAtLock,
-			nonAfkPlayerCountAtLock,
 			targetRoundCountAtLock,
 			roundCapacityAtLock,
-			selectedRealCountAtLock,
-			currentBotCountAtLock,
+			eligibleRealCountAtLock,
+			requiredBotCountAtLock,
 			maxBotAllowedAtLock,
 			lockedBotCountForRound
 		))
 		-- 本局 bot 数在这里最终锁定；直到对局结束前不再增删
 		CombatManager.EnsureBotCount(lockedBotCountForRound)
 		RepositionFillBotsToLobbySpawns()
-		local nonAfkPlayersAtLock = _GetNonAfkPlayers()
-		local roundParticipantPlayers, participantIds = BuildRoundParticipantIds(nonAfkPlayersAtLock, roundCapacityAtLock)
+		local roundParticipantPlayers, participantIds = BuildRoundParticipantIds(eligiblePlayersAtLock, roundCapacityAtLock)
 		if #participantIds < GameConfig.MinPlayerToStart then
 			LogInfo("Match start aborted: non-afk player count below minimum")
 			LogBotDebug(string.format("MatchStart aborted participants=%d minStart=%d", #participantIds, GameConfig.MinPlayerToStart))
@@ -973,6 +1028,7 @@ function MatchManager.Init(onRoundStart: OnRoundStartCallback)
 	NetMsg.ConnectRequestSetAfkState(OnRequestSetAfkState)
 	NetMsg.ConnectRequestSyncAfkState(OnRequestSyncAfkState)
 	NetMsg.ConnectRequestSyncMatchState(OnRequestSyncMatchState)
+	NetMsg.ConnectRequestClientInitReady(OnRequestClientInitReady)
 	if roundWorkerThread ~= nil then
 		LogInfo("Init skipped reason=already_initialized")
 		return
@@ -989,6 +1045,7 @@ function MatchManager.OnPlayerAdded(player: Player)
 	task.spawn(function()
 		LogInfo(string.format("OnPlayerAdded userId=%d state=%s", player.UserId, currentMatchState))
 		PlayerStateManager.EnsurePlayerRoundInfo(player)
+		PlayerStateManager.SetClientReadyState(player.UserId, false, false)
 		PlayerStateManager.SetPlayerAfk(player.UserId, false)
 		NetMsg.FireNotifyAfkState(player.UserId, false)
 		-- 无论当前处于什么阶段，新加入的玩家都先传送到大厅

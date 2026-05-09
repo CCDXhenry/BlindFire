@@ -13,6 +13,9 @@ export type PlayerRoundInfo = {
 	isAlive: boolean,
 	isParticipant: boolean,
 	isAfk: boolean,
+	clientCharacterReady: boolean,
+	clientInitReady: boolean,
+	clientReadyTimestamp: number?,
 	hitCount: number,
 	roundDealtHitCount: number,
 	roundKillCount: number,
@@ -30,6 +33,9 @@ local function CreateDefaultPlayerRoundInfoByUserId(userId: number): PlayerRound
 		isAlive = true,
 		isParticipant = false,
 		isAfk = false,
+		clientCharacterReady = false,
+		clientInitReady = false,
+		clientReadyTimestamp = nil,
 		hitCount = 0,
 		roundDealtHitCount = 0,
 		roundKillCount = 0,
@@ -105,6 +111,30 @@ function PlayerStateManager.IsPlayerAfk(playerId: number): boolean
 		return false
 	end
 	return playerRoundInfo.isAfk == true
+end
+
+function PlayerStateManager.SetClientReadyState(playerId: number, clientCharacterReady: boolean, clientInitReady: boolean)
+	local playerRoundInfo = playerRoundInfoMap[playerId]
+	if playerRoundInfo == nil then
+		return
+	end
+	playerRoundInfo.clientCharacterReady = clientCharacterReady == true
+	playerRoundInfo.clientInitReady = clientInitReady == true
+	if playerRoundInfo.clientCharacterReady and playerRoundInfo.clientInitReady then
+		if playerRoundInfo.clientReadyTimestamp == nil then
+			playerRoundInfo.clientReadyTimestamp = os.clock()
+		end
+	else
+		playerRoundInfo.clientReadyTimestamp = nil
+	end
+end
+
+function PlayerStateManager.GetClientReadyState(playerId: number): (boolean, boolean, number?)
+	local playerRoundInfo = playerRoundInfoMap[playerId]
+	if playerRoundInfo == nil then
+		return false, false, nil
+	end
+	return playerRoundInfo.clientCharacterReady, playerRoundInfo.clientInitReady, playerRoundInfo.clientReadyTimestamp
 end
 
 function PlayerStateManager.GetNonAfkOnlinePlayerCount(): number

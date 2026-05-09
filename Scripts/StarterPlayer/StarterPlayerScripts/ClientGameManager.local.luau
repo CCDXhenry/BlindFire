@@ -35,6 +35,20 @@ local DesignScreenSize: Vector2 = Vector2.new(1920, 1080)
 
 local soundsFolder: Folder = workspace:FindFirstChild("Sounds")
 local bgmSound: Sound = soundsFolder:FindFirstChild("BGM") :: Sound
+local localCharacterReady = false
+local localDataInitReady = false
+
+local function TryReportClientInitReady()
+	if not localCharacterReady or not localDataInitReady then
+		return
+	end
+	NetMsg.FireRequestClientInitReady(localCharacterReady, localDataInitReady)
+end
+
+local function OnLocalCharacterAdded()
+	localCharacterReady = true
+	TryReportClientInitReady()
+end
 
 local function InitUI()
 	local playerGui: PlayerGui = players.LocalPlayer:WaitForChild("PlayerGui")
@@ -61,6 +75,8 @@ local function OnNotifyPlayerInfoInit(
 	playerConfigInfo: GameConfig.PlayerConfigInfo
 )
 	ClientGameInfo.InitPlayerInfo(localPlayerSaveInfo, otherPlayerSaveInfoMap, playerConfigInfo)
+	localDataInitReady = true
+	TryReportClientInitReady()
 	local localPlayerInfo: GameConfig.ClientLocalPlayerInfo? = ClientGameInfo.GetLocalPlayerInfo()
 	if localPlayerInfo ~= nil then
 		SoundTool.SetBGMVolumn(localPlayerInfo.settingInfo.bgmVolume)
@@ -105,6 +121,10 @@ NetMsg.ConnectNotifyPlayersOtherPlayerInfoInit(OnNotifyPlayersOtherPlayerInfoIni
 NetMsg.ConnectNotifyPlayerAcquiredGamePass(OnNotifyPlayerAcquiredGamePass)
 NetMsg.ConnectNotifyPlayerCurrencyUpdate(OnNotifyPlayerCurrencyUpdate)
 NetMsg.ConnectNotifyPlayerVehicleInventoryUpdate(OnNotifyPlayerVehicleInventoryUpdate)
+players.LocalPlayer.CharacterAdded:Connect(OnLocalCharacterAdded)
+if players.LocalPlayer.Character ~= nil then
+	OnLocalCharacterAdded()
+end
 
 local function PreloadAssets()
 	local preloadStartTime = os.clock()
